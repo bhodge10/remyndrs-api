@@ -45,18 +45,29 @@ def create_or_update_user(phone_number, **kwargs):
 
         if exists:
             # Update existing user
-            update_fields = []
-            values = []
-            for key, value in kwargs.items():
-                update_fields.append(f"{key} = %s")
-                values.append(value)
-            values.append(phone_number)
+            if kwargs:
+                update_fields = []
+                values = []
+                for key, value in kwargs.items():
+                    update_fields.append(f"{key} = %s")
+                    values.append(value)
+                values.append(phone_number)
 
-            query = f"UPDATE users SET {', '.join(update_fields)} WHERE phone_number = %s"
-            c.execute(query, values)
+                query = f"UPDATE users SET {', '.join(update_fields)} WHERE phone_number = %s"
+                c.execute(query, values)
         else:
-            # Insert new user
-            c.execute('INSERT INTO users (phone_number) VALUES (%s)', (phone_number,))
+            # Insert new user with any provided fields
+            fields = ['phone_number']
+            values = [phone_number]
+            placeholders = ['%s']
+
+            for key, value in kwargs.items():
+                fields.append(key)
+                values.append(value)
+                placeholders.append('%s')
+
+            query = f"INSERT INTO users ({', '.join(fields)}) VALUES ({', '.join(placeholders)})"
+            c.execute(query, values)
 
         conn.commit()
         conn.close()
