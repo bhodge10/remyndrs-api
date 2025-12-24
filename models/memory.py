@@ -13,12 +13,12 @@ def save_memory(phone_number, memory_text, parsed_data):
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
-            'INSERT INTO memories (phone_number, memory_text, parsed_data) VALUES (?, ?, ?)',
+            'INSERT INTO memories (phone_number, memory_text, parsed_data) VALUES (%s, %s, %s)',
             (phone_number, memory_text, json.dumps(parsed_data))
         )
         conn.commit()
         conn.close()
-        logger.info(f"✅ Saved memory for {phone_number}")
+        logger.info(f"Saved memory for {phone_number}")
     except Exception as e:
         logger.error(f"Error saving memory: {e}")
 
@@ -28,7 +28,7 @@ def get_memories(phone_number):
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
-            'SELECT memory_text, parsed_data, created_at FROM memories WHERE phone_number = ? ORDER BY created_at DESC',
+            'SELECT memory_text, parsed_data, created_at FROM memories WHERE phone_number = %s ORDER BY created_at DESC',
             (phone_number,)
         )
         results = c.fetchall()

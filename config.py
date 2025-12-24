@@ -33,9 +33,10 @@ try:
     TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
     TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
     ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
-    
-    if not all([OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
-        logger.error("❌ Missing required environment variables!")
+    DATABASE_URL = os.environ.get("DATABASE_URL")
+
+    if not all([OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, DATABASE_URL]):
+        logger.error("Missing required environment variables!")
         raise ValueError("Missing environment variables")
     
     logger.info("✅ Environment variables loaded")
@@ -48,7 +49,6 @@ except Exception as e:
 # =====================================================
 # APPLICATION CONSTANTS
 # =====================================================
-DATABASE_PATH = 'memories.db'
 LOG_FILE_PATH = 'app.log'
 
 # OpenAI Configuration

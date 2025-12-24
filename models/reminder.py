@@ -13,12 +13,12 @@ def save_reminder(phone_number, reminder_text, reminder_date):
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
-            'INSERT INTO reminders (phone_number, reminder_text, reminder_date) VALUES (?, ?, ?)',
+            'INSERT INTO reminders (phone_number, reminder_text, reminder_date) VALUES (%s, %s, %s)',
             (phone_number, reminder_text, reminder_date)
         )
         conn.commit()
         conn.close()
-        logger.info(f"✅ Saved reminder for {phone_number} at {reminder_date}")
+        logger.info(f"Saved reminder for {phone_number} at {reminder_date}")
     except Exception as e:
         logger.error(f"Error saving reminder: {e}")
 
@@ -29,7 +29,7 @@ def get_due_reminders():
         c = conn.cursor()
         now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         c.execute(
-            'SELECT id, phone_number, reminder_text FROM reminders WHERE reminder_date <= ? AND sent = 0',
+            'SELECT id, phone_number, reminder_text FROM reminders WHERE reminder_date <= %s AND sent = FALSE',
             (now,)
         )
         results = c.fetchall()
@@ -44,7 +44,7 @@ def mark_reminder_sent(reminder_id):
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute('UPDATE reminders SET sent = 1 WHERE id = ?', (reminder_id,))
+        c.execute('UPDATE reminders SET sent = TRUE WHERE id = %s', (reminder_id,))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -56,7 +56,7 @@ def get_user_reminders(phone_number):
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
-            'SELECT reminder_text, reminder_date, sent FROM reminders WHERE phone_number = ? ORDER BY reminder_date',
+            'SELECT reminder_text, reminder_date, sent FROM reminders WHERE phone_number = %s ORDER BY reminder_date',
             (phone_number,)
         )
         results = c.fetchall()

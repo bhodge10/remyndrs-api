@@ -1,22 +1,26 @@
 """
 Database Module
-Handles database initialization and connection management
+Handles database initialization and connection management for PostgreSQL
 """
 
-import sqlite3
-from config import DATABASE_PATH, logger
+import psycopg2
+from config import DATABASE_URL, logger
+
+def get_db_connection():
+    """Get a database connection"""
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
     """Initialize all database tables"""
     try:
         logger.info("Initializing database...")
-        conn = sqlite3.connect(DATABASE_PATH)
+        conn = get_db_connection()
         c = conn.cursor()
 
         # Memories table
         c.execute('''
             CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 phone_number TEXT NOT NULL,
                 memory_text TEXT NOT NULL,
                 parsed_data TEXT,
@@ -27,11 +31,11 @@ def init_db():
         # Reminders table
         c.execute('''
             CREATE TABLE IF NOT EXISTS reminders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 phone_number TEXT NOT NULL,
                 reminder_text TEXT NOT NULL,
                 reminder_date TIMESTAMP NOT NULL,
-                sent BOOLEAN DEFAULT 0,
+                sent BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -45,10 +49,10 @@ def init_db():
                 email TEXT,
                 zip_code TEXT,
                 timezone TEXT,
-                onboarding_complete BOOLEAN DEFAULT 0,
+                onboarding_complete BOOLEAN DEFAULT FALSE,
                 onboarding_step INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                pending_delete BOOLEAN DEFAULT 0,
+                pending_delete BOOLEAN DEFAULT FALSE,
                 pending_reminder_text TEXT,
                 pending_reminder_time TEXT
             )
@@ -57,7 +61,7 @@ def init_db():
         # Logs table for monitoring
         c.execute('''
             CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 phone_number TEXT NOT NULL,
                 message_in TEXT NOT NULL,
                 message_out TEXT NOT NULL,
@@ -69,14 +73,10 @@ def init_db():
 
         conn.commit()
         conn.close()
-        logger.info("✅ Database initialized successfully")
+        logger.info("Database initialized successfully")
     except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
+        logger.error(f"Database initialization failed: {e}")
         raise
-
-def get_db_connection():
-    """Get a database connection"""
-    return sqlite3.connect(DATABASE_PATH)
 
 def log_interaction(phone_number, message_in, message_out, intent, success):
     """Log an interaction to the database"""
@@ -84,7 +84,7 @@ def log_interaction(phone_number, message_in, message_out, intent, success):
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
-            'INSERT INTO logs (phone_number, message_in, message_out, intent, success) VALUES (?, ?, ?, ?, ?)',
+            'INSERT INTO logs (phone_number, message_in, message_out, intent, success) VALUES (%s, %s, %s, %s, %s)',
             (phone_number, message_in, message_out, intent, success)
         )
         conn.commit()

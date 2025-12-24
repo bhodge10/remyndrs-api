@@ -152,11 +152,11 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
         if incoming_msg.upper() == "YES":
             user = get_user(phone_number)
             if user and user[9] == 1:  # pending_delete flag
-                import sqlite3
-                conn = sqlite3.connect('memories.db')
+                from database import get_db_connection
+                conn = get_db_connection()
                 c = conn.cursor()
-                c.execute('DELETE FROM memories WHERE phone_number = ?', (phone_number,))
-                c.execute('DELETE FROM reminders WHERE phone_number = ?', (phone_number,))
+                c.execute('DELETE FROM memories WHERE phone_number = %s', (phone_number,))
+                c.execute('DELETE FROM reminders WHERE phone_number = %s', (phone_number,))
                 conn.commit()
                 conn.close()
 
@@ -330,12 +330,12 @@ async def view_reminders(phone_number: str):
 @app.get("/admin/stats")
 async def admin_stats():
     """Admin dashboard showing key metrics"""
-    import sqlite3
-    conn = sqlite3.connect('memories.db')
+    from database import get_db_connection
+    conn = get_db_connection()
     c = conn.cursor()
 
     # Total users
-    c.execute('SELECT COUNT(DISTINCT phone_number) FROM users WHERE onboarding_complete = 1')
+    c.execute('SELECT COUNT(DISTINCT phone_number) FROM users WHERE onboarding_complete = TRUE')
     total_users = c.fetchone()[0]
 
     # Total memories
@@ -347,28 +347,28 @@ async def admin_stats():
     total_reminders = c.fetchone()[0]
 
     # Pending reminders
-    c.execute('SELECT COUNT(*) FROM reminders WHERE sent = 0')
+    c.execute('SELECT COUNT(*) FROM reminders WHERE sent = FALSE')
     pending_reminders = c.fetchone()[0]
 
     # Sent reminders
-    c.execute('SELECT COUNT(*) FROM reminders WHERE sent = 1')
+    c.execute('SELECT COUNT(*) FROM reminders WHERE sent = TRUE')
     sent_reminders = c.fetchone()[0]
 
     # Most active users (top 5)
     c.execute('''
-        SELECT phone_number, COUNT(*) as interaction_count 
-        FROM logs 
-        GROUP BY phone_number 
-        ORDER BY interaction_count DESC 
+        SELECT phone_number, COUNT(*) as interaction_count
+        FROM logs
+        GROUP BY phone_number
+        ORDER BY interaction_count DESC
         LIMIT 5
     ''')
     top_users = c.fetchall()
 
     # Activity last 24 hours
     c.execute('''
-        SELECT COUNT(*) 
-        FROM logs 
-        WHERE created_at >= datetime('now', '-1 day')
+        SELECT COUNT(*)
+        FROM logs
+        WHERE created_at >= NOW() - INTERVAL '1 day'
     ''')
     activity_24h = c.fetchone()[0]
 
