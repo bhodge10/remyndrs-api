@@ -94,24 +94,30 @@ def format_reminders_list(reminders, user_tz):
                 scheduled.append((reminder_text, ""))
 
     # Build response
-    parts = []
+    lines = []
 
     if scheduled:
-        parts.append("SCHEDULED:")
+        lines.append("SCHEDULED:")
+        lines.append("")
         for i, (text, date) in enumerate(scheduled, 1):
             if date:
-                parts.append(f"\n{i}. {text}\n   {date}")
+                lines.append(f"{i}. {text}")
+                lines.append(f"   {date}")
             else:
-                parts.append(f"\n{i}. {text}")
+                lines.append(f"{i}. {text}")
+            lines.append("")  # Empty line between reminders
 
     if completed:
-        if parts:
-            parts.append("\n")
-        parts.append("COMPLETED:")
+        if lines:
+            lines.append("")
+        lines.append("COMPLETED:")
+        lines.append("")
         for i, (text, date) in enumerate(completed[-5:], 1):
             if date:
-                parts.append(f"\n{i}. {text}\n   {date}")
+                lines.append(f"{i}. {text}")
+                lines.append(f"   {date}")
             else:
-                parts.append(f"\n{i}. {text}")
+                lines.append(f"{i}. {text}")
+            lines.append("")  # Empty line between reminders
 
-    return "".join(parts) if parts else "You don't have any reminders set."
+    return "\n".join(lines).strip() if lines else "You don't have any reminders set."
