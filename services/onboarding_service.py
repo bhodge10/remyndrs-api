@@ -72,10 +72,10 @@ What's your first name?""")
 
             # Mark onboarding complete
             create_or_update_user(
-                phone_number, 
-                zip_code=zip_code, 
+                phone_number,
+                zip_code=zip_code,
                 timezone=timezone,
-                onboarding_complete=1,
+                onboarding_complete=True,
                 onboarding_step=5
             )
 

@@ -59,9 +59,9 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
                 email=None,
                 zip_code=None,
                 timezone='America/New_York',
-                onboarding_complete=0,
+                onboarding_complete=False,
                 onboarding_step=1,
-                pending_delete=0,
+                pending_delete=False,
                 pending_reminder_text=None,
                 pending_reminder_time=None
             )
@@ -142,7 +142,7 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
         if incoming_msg.upper() == "DELETE ALL":
             resp = MessagingResponse()
             resp.message("⚠️ WARNING: This will permanently delete ALL your memories and reminders.\n\nReply YES to confirm or anything else to cancel.")
-            create_or_update_user(phone_number, pending_delete=1)
+            create_or_update_user(phone_number, pending_delete=True)
             log_interaction(phone_number, incoming_msg, "Asking for delete confirmation", "delete_request", True)
             return Response(content=str(resp), media_type="application/xml")
 
@@ -151,7 +151,7 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
         # ==========================================
         if incoming_msg.upper() == "YES":
             user = get_user(phone_number)
-            if user and user[9] == 1:  # pending_delete flag
+            if user and user[9]:  # pending_delete flag
                 from database import get_db_connection
                 conn = get_db_connection()
                 c = conn.cursor()
@@ -160,17 +160,17 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
                 conn.commit()
                 conn.close()
 
-                create_or_update_user(phone_number, pending_delete=0)
+                create_or_update_user(phone_number, pending_delete=False)
 
                 resp = MessagingResponse()
-                resp.message("✅ All your data has been permanently deleted.")
+                resp.message("All your data has been permanently deleted.")
                 log_interaction(phone_number, incoming_msg, "All data deleted", "delete_confirmed", True)
                 return Response(content=str(resp), media_type="application/xml")
 
         if incoming_msg.upper() in ["NO", "CANCEL"]:
             user = get_user(phone_number)
-            if user and user[9] == 1:  # pending_delete flag
-                create_or_update_user(phone_number, pending_delete=0)
+            if user and user[9]:  # pending_delete flag
+                create_or_update_user(phone_number, pending_delete=False)
                 resp = MessagingResponse()
                 resp.message("✅ Delete cancelled. Your data is safe!")
                 log_interaction(phone_number, incoming_msg, "Delete cancelled", "delete_cancelled", True)
