@@ -49,7 +49,9 @@ def process_with_ai(message, phone_number, context):
             
             scheduled = []
             completed = []
-            
+            scheduled_num = 0
+            completed_num = 0
+
             for reminder_text, reminder_date_utc, sent in reminders:
                 try:
                     # Handle both datetime objects and strings from PostgreSQL
@@ -61,7 +63,7 @@ def process_with_ai(message, phone_number, context):
                         utc_dt = datetime.strptime(str(reminder_date_utc), '%Y-%m-%d %H:%M:%S')
                         utc_dt = pytz.UTC.localize(utc_dt)
                     user_dt = utc_dt.astimezone(tz)
-                    
+
                     # Smart date formatting
                     if user_dt.date() == user_now.date():
                         date_str = f"Today at {user_dt.strftime('%I:%M %p')}"
@@ -69,29 +71,33 @@ def process_with_ai(message, phone_number, context):
                         date_str = f"Tomorrow at {user_dt.strftime('%I:%M %p')}"
                     else:
                         date_str = user_dt.strftime('%a, %b %d at %I:%M %p')
-                    
+
                     if sent:
-                        completed.append(f"  • {reminder_text}\n    {date_str}")
+                        completed_num += 1
+                        completed.append(f"{completed_num}. {reminder_text}\n   {date_str}")
                     else:
-                        scheduled.append(f"  • {reminder_text}\n    {date_str}")
+                        scheduled_num += 1
+                        scheduled.append(f"{scheduled_num}. {reminder_text}\n   {date_str}")
                 except:
                     if sent:
-                        completed.append(f"  • {reminder_text}")
+                        completed_num += 1
+                        completed.append(f"{completed_num}. {reminder_text}")
                     else:
-                        scheduled.append(f"  • {reminder_text}")
-            
+                        scheduled_num += 1
+                        scheduled.append(f"{scheduled_num}. {reminder_text}")
+
             # Build context - limit completed to last 5
             parts = []
             if scheduled:
-                parts.append("⏰ SCHEDULED:\n" + "\n\n".join(scheduled))
+                parts.append("SCHEDULED:\n\n" + "\n\n".join(scheduled))
             if completed:
                 # Show only last N completed reminders
                 completed_to_show = completed[-MAX_COMPLETED_REMINDERS_DISPLAY:]
                 completed_text = "\n\n".join(completed_to_show)
                 if len(completed) > MAX_COMPLETED_REMINDERS_DISPLAY:
-                    parts.append(f"✅ COMPLETED (last {MAX_COMPLETED_REMINDERS_DISPLAY} of {len(completed)}):\n" + completed_text)
+                    parts.append(f"COMPLETED (last {MAX_COMPLETED_REMINDERS_DISPLAY} of {len(completed)}):\n\n" + completed_text)
                 else:
-                    parts.append("✅ COMPLETED:\n" + completed_text)
+                    parts.append("COMPLETED:\n\n" + completed_text)
             
             reminders_context = "\n\n".join(parts) if parts else "No reminders set."
         else:
