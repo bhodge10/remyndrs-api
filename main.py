@@ -21,7 +21,7 @@ from services.ai_service import process_with_ai
 from services.onboarding_service import handle_onboarding
 from services.reminder_service import start_reminder_checker
 from utils.timezone import get_user_current_time
-from utils.formatting import get_help_text
+from utils.formatting import get_help_text, format_reminders_list
 
 # Initialize application
 logger.info("🚀 SMS Memory Service starting...")
@@ -224,7 +224,9 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
             log_interaction(phone_number, incoming_msg, reply_text, "retrieve", True)
 
         elif ai_response["action"] == "list_reminders":
-            reply_text = ai_response.get("response", "You don't have any reminders set.")
+            reminders = get_user_reminders(phone_number)
+            user_tz = get_user_timezone(phone_number)
+            reply_text = format_reminders_list(reminders, user_tz)
             log_interaction(phone_number, incoming_msg, reply_text, "list_reminders", True)
 
         elif ai_response["action"] == "show_help":
