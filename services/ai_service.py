@@ -30,7 +30,11 @@ def process_with_ai(message, phone_number, context):
                 memory_text = m[0]
                 created_date = m[2]
                 try:
-                    date_obj = datetime.strptime(created_date, '%Y-%m-%d %H:%M:%S')
+                    # Handle both datetime objects and strings from PostgreSQL
+                    if isinstance(created_date, datetime):
+                        date_obj = created_date
+                    else:
+                        date_obj = datetime.strptime(str(created_date), '%Y-%m-%d %H:%M:%S')
                     readable_date = date_obj.strftime('%B %d, %Y')
                     formatted_memories.append(f"- {memory_text} (recorded on {readable_date})")
                 except:
@@ -51,8 +55,14 @@ def process_with_ai(message, phone_number, context):
             
             for reminder_text, reminder_date_utc, sent in reminders:
                 try:
-                    utc_dt = datetime.strptime(reminder_date_utc, '%Y-%m-%d %H:%M:%S')
-                    utc_dt = pytz.UTC.localize(utc_dt)
+                    # Handle both datetime objects and strings from PostgreSQL
+                    if isinstance(reminder_date_utc, datetime):
+                        utc_dt = reminder_date_utc
+                        if utc_dt.tzinfo is None:
+                            utc_dt = pytz.UTC.localize(utc_dt)
+                    else:
+                        utc_dt = datetime.strptime(str(reminder_date_utc), '%Y-%m-%d %H:%M:%S')
+                        utc_dt = pytz.UTC.localize(utc_dt)
                     user_dt = utc_dt.astimezone(tz)
                     
                     # Smart date formatting
