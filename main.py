@@ -370,7 +370,19 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
             list_name = ai_response.get("list_name")
             item_text = ai_response.get("item_text")
             list_info = get_list_by_name(phone_number, list_name)
-            if list_info:
+
+            # Auto-create list if it doesn't exist
+            if not list_info:
+                list_count = get_list_count(phone_number)
+                if list_count >= MAX_LISTS_PER_USER:
+                    reply_text = f"You've reached the maximum of {MAX_LISTS_PER_USER} lists. Delete a list first."
+                    log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
+                else:
+                    list_id = create_list(phone_number, list_name)
+                    add_list_item(list_id, phone_number, item_text)
+                    reply_text = f"Created your {list_name} and added {item_text}!"
+                    log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
+            else:
                 list_id = list_info[0]
                 item_count = get_item_count(list_id)
                 if item_count >= MAX_ITEMS_PER_LIST:
@@ -378,9 +390,7 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
                 else:
                     add_list_item(list_id, phone_number, item_text)
                     reply_text = ai_response.get("confirmation", f"Added {item_text} to your {list_name}")
-            else:
-                reply_text = f"I couldn't find a list called '{list_name}'. Would you like me to create it?"
-            log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
+                log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
 
         elif ai_response["action"] == "add_item_ask_list":
             item_text = ai_response.get("item_text")
