@@ -45,7 +45,8 @@ def get_onboarding_prompt(step):
         1: "What's your first name?",
         2: "What's your last name?",
         3: "What's your email address?",
-        4: "What's your ZIP code?"
+        4: "What's your ZIP code?",
+        5: "How did you hear about us? (Reply: Reddit, Facebook, Google, Friend, Ad, or skip)"
     }
     return prompts.get(step, "Let's continue your setup!")
 

@@ -20,12 +20,17 @@ from services.sms_service import send_sms
 from services.ai_service import process_with_ai
 from services.onboarding_service import handle_onboarding
 from services.reminder_service import start_reminder_checker
+from services.metrics_service import track_user_activity, increment_message_count
 from utils.timezone import get_user_current_time
 from utils.formatting import get_help_text, format_reminders_list
+from admin_dashboard import router as dashboard_router
 
 # Initialize application
 logger.info("🚀 SMS Memory Service starting...")
 app = FastAPI()
+
+# Include admin dashboard router
+app.include_router(dashboard_router)
 
 # Initialize database
 init_db()
@@ -46,7 +51,11 @@ async def sms_reply(Body: str = Form(...), From: str = Form(...)):
         incoming_msg = Body.strip()
         phone_number = From
 
-        logger.info(f"📱 Received from {phone_number}: {incoming_msg}")
+        logger.info(f"Received from {phone_number}: {incoming_msg}")
+
+        # Track user activity for metrics
+        track_user_activity(phone_number)
+        increment_message_count(phone_number)
 
         # ==========================================
         # RESET ACCOUNT COMMAND (works for everyone)

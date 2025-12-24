@@ -36,7 +36,10 @@ def init_db():
                 reminder_text TEXT NOT NULL,
                 reminder_date TIMESTAMP NOT NULL,
                 sent BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                delivery_status TEXT DEFAULT 'pending',
+                sent_at TIMESTAMP,
+                error_message TEXT
             )
         ''')
 
@@ -54,7 +57,13 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 pending_delete BOOLEAN DEFAULT FALSE,
                 pending_reminder_text TEXT,
-                pending_reminder_time TEXT
+                pending_reminder_time TEXT,
+                referral_source TEXT,
+                premium_status TEXT DEFAULT 'free',
+                premium_since TIMESTAMP,
+                last_active_at TIMESTAMP,
+                signup_source TEXT,
+                total_messages INTEGER DEFAULT 0
             )
         ''')
 
@@ -70,6 +79,26 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # Add new columns to existing tables (migrations)
+        # These will silently fail if columns already exist
+        migrations = [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_source TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_status TEXT DEFAULT 'free'",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_since TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_source TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_messages INTEGER DEFAULT 0",
+            "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS delivery_status TEXT DEFAULT 'pending'",
+            "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP",
+            "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS error_message TEXT",
+        ]
+
+        for migration in migrations:
+            try:
+                c.execute(migration)
+            except Exception:
+                pass  # Column likely already exists
 
         conn.commit()
         conn.close()

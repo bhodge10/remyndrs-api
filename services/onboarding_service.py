@@ -10,6 +10,7 @@ from config import logger
 from models.user import get_user, get_onboarding_step, create_or_update_user
 from utils.timezone import get_timezone_from_zip, get_user_current_time
 from utils.formatting import get_onboarding_prompt
+from services.metrics_service import set_referral_source
 
 def handle_onboarding(phone_number, message):
     """Handle onboarding flow for new users"""
@@ -59,7 +60,7 @@ What's your first name?""")
             resp.message("Perfect! What's your ZIP code? (I'll use this to set your timezone for reminders)")
 
         elif step == 4:
-            # Store zip code, calculate timezone, complete onboarding
+            # Store zip code, calculate timezone, ask for referral source
             zip_code = message.strip()
 
             # Validate zip code (basic validation)
@@ -70,21 +71,59 @@ What's your first name?""")
             # Get timezone from zip code
             timezone = get_timezone_from_zip(zip_code)
 
-            # Mark onboarding complete
+            # Save zip and timezone, move to referral step
             create_or_update_user(
                 phone_number,
                 zip_code=zip_code,
                 timezone=timezone,
-                onboarding_complete=True,
                 onboarding_step=5
+            )
+
+            resp.message("""Almost done! One quick question:
+
+How did you hear about us?
+
+Reply: Reddit, Facebook, Google, Friend, Ad, or skip""")
+
+        elif step == 5:
+            # Handle referral source (optional)
+            response_lower = message.lower().strip()
+
+            # Map common responses to standardized sources
+            source_map = {
+                'reddit': 'reddit',
+                'facebook': 'facebook',
+                'fb': 'facebook',
+                'google': 'google',
+                'friend': 'friend',
+                'ad': 'ad',
+                'ads': 'ad',
+                'tiktok': 'tiktok',
+                'twitter': 'twitter',
+                'x': 'twitter',
+                'other': 'other',
+                'skip': None
+            }
+
+            # Get the source or default to 'other'
+            referral = source_map.get(response_lower, 'other')
+            if referral:
+                set_referral_source(phone_number, referral)
+
+            # Mark onboarding complete
+            create_or_update_user(
+                phone_number,
+                onboarding_complete=True,
+                onboarding_step=6
             )
 
             # Get user's name for personalized message
             user = get_user(phone_number)
             first_name = user[1]
             user_time = get_user_current_time(phone_number)
+            timezone = user[5]
 
-            resp.message(f"""All set, {first_name}! 🎉
+            resp.message(f"""All set, {first_name}!
 
 Your timezone: {timezone}
 Your current time: {user_time.strftime('%I:%M %p')}
