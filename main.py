@@ -13,7 +13,9 @@ from twilio.request_validator import RequestValidator
 
 # Local imports
 import secrets
-from config import logger, ENVIRONMENT, MAX_LISTS_PER_USER, MAX_ITEMS_PER_LIST, TWILIO_AUTH_TOKEN, ADMIN_USERNAME, ADMIN_PASSWORD
+from config import logger, ENVIRONMENT, MAX_LISTS_PER_USER, MAX_ITEMS_PER_LIST, TWILIO_AUTH_TOKEN, ADMIN_USERNAME, ADMIN_PASSWORD, RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW
+from collections import defaultdict
+import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import Depends
 from database import init_db, log_interaction
@@ -38,6 +40,28 @@ from admin_dashboard import router as dashboard_router
 # Initialize application
 logger.info("🚀 SMS Memory Service starting...")
 app = FastAPI()
+
+# Rate limiting storage: {phone_number: [timestamp1, timestamp2, ...]}
+rate_limit_store = defaultdict(list)
+
+def check_rate_limit(phone_number: str) -> bool:
+    """Check if phone number has exceeded rate limit. Returns True if allowed."""
+    current_time = time.time()
+    window_start = current_time - RATE_LIMIT_WINDOW
+
+    # Clean old timestamps and keep only those within the window
+    rate_limit_store[phone_number] = [
+        ts for ts in rate_limit_store[phone_number] if ts > window_start
+    ]
+
+    # Check if under limit
+    if len(rate_limit_store[phone_number]) >= RATE_LIMIT_MESSAGES:
+        logger.warning(f"Rate limit exceeded for {phone_number}")
+        return False
+
+    # Add current timestamp
+    rate_limit_store[phone_number].append(current_time)
+    return True
 
 # HTTP Basic Auth for admin endpoints
 security = HTTPBasic()
@@ -100,6 +124,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
         incoming_msg = Body.strip()
         phone_number = From
+
+        # Check rate limit
+        if not check_rate_limit(phone_number):
+            resp = MessagingResponse()
+            resp.message("You're sending messages too quickly. Please wait a moment and try again.")
+            return Response(content=str(resp), media_type="application/xml")
 
         logger.info(f"Received from {phone_number}: {incoming_msg}")
 

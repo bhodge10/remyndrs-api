@@ -73,3 +73,7 @@ MAX_ITEMS_PER_LIST = 15
 # Admin Authentication
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+
+# Rate Limiting
+RATE_LIMIT_MESSAGES = 15  # Max messages per window
+RATE_LIMIT_WINDOW = 60    # Window in seconds (1 minute)
