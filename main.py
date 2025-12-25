@@ -35,6 +35,7 @@ from services.reminder_service import start_reminder_checker
 from services.metrics_service import track_user_activity, increment_message_count
 from utils.timezone import get_user_current_time
 from utils.formatting import get_help_text, format_reminders_list
+from utils.validation import mask_phone_number, validate_list_name, validate_item_text, validate_message, log_security_event
 from admin_dashboard import router as dashboard_router
 
 # Initialize application
@@ -56,7 +57,7 @@ def check_rate_limit(phone_number: str) -> bool:
 
     # Check if under limit
     if len(rate_limit_store[phone_number]) >= RATE_LIMIT_MESSAGES:
-        logger.warning(f"Rate limit exceeded for {phone_number}")
+        log_security_event("RATE_LIMIT", {"phone": phone_number, "count": len(rate_limit_store[phone_number])})
         return False
 
     # Add current timestamp
@@ -75,7 +76,7 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
 
     if not (correct_username and correct_password):
-        logger.warning(f"Failed admin login attempt: {credentials.username}")
+        log_security_event("AUTH_FAILURE", {"username": credentials.username, "endpoint": "admin"})
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",
@@ -119,7 +120,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             params = {key: form_data[key] for key in form_data}
 
             if not validator.validate(url, params, signature):
-                logger.warning(f"Invalid Twilio signature from {request.client.host}")
+                log_security_event("INVALID_SIGNATURE", {"ip": request.client.host, "url": url[:50]})
                 raise HTTPException(status_code=403, detail="Invalid signature")
 
         incoming_msg = Body.strip()
@@ -131,7 +132,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             resp.message("You're sending messages too quickly. Please wait a moment and try again.")
             return Response(content=str(resp), media_type="application/xml")
 
-        logger.info(f"Received from {phone_number}: {incoming_msg}")
+        logger.info(f"Received from {mask_phone_number(phone_number)}: {incoming_msg[:50]}...")
 
         # Track user activity for metrics
         track_user_activity(phone_number)
@@ -457,41 +458,59 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         elif ai_response["action"] == "create_list":
             list_name = ai_response.get("list_name")
-            # Check list limit
-            list_count = get_list_count(phone_number)
-            if list_count >= MAX_LISTS_PER_USER:
-                reply_text = f"You've reached the maximum of {MAX_LISTS_PER_USER} lists. Delete a list to create a new one."
-            elif get_list_by_name(phone_number, list_name):
-                reply_text = f"You already have a list called '{list_name}'."
+            # Validate list name
+            is_valid, result = validate_list_name(list_name)
+            if not is_valid:
+                reply_text = result
             else:
-                create_list(phone_number, list_name)
-                reply_text = ai_response.get("confirmation", f"Created your {list_name}!")
+                list_name = result  # Use sanitized name
+                # Check list limit
+                list_count = get_list_count(phone_number)
+                if list_count >= MAX_LISTS_PER_USER:
+                    reply_text = f"You've reached the maximum of {MAX_LISTS_PER_USER} lists. Delete a list to create a new one."
+                elif get_list_by_name(phone_number, list_name):
+                    reply_text = f"You already have a list called '{list_name}'."
+                else:
+                    create_list(phone_number, list_name)
+                    reply_text = ai_response.get("confirmation", f"Created your {list_name}!")
             log_interaction(phone_number, incoming_msg, reply_text, "create_list", True)
 
         elif ai_response["action"] == "add_to_list":
             list_name = ai_response.get("list_name")
             item_text = ai_response.get("item_text")
-            list_info = get_list_by_name(phone_number, list_name)
 
-            # Auto-create list if it doesn't exist
-            if not list_info:
-                list_count = get_list_count(phone_number)
-                if list_count >= MAX_LISTS_PER_USER:
-                    reply_text = f"You've reached the maximum of {MAX_LISTS_PER_USER} lists. Delete a list first."
-                    log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
-                else:
-                    list_id = create_list(phone_number, list_name)
-                    add_list_item(list_id, phone_number, item_text)
-                    reply_text = f"Created your {list_name} and added {item_text}!"
-                    log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
+            # Validate inputs
+            name_valid, name_result = validate_list_name(list_name)
+            item_valid, item_result = validate_item_text(item_text)
+
+            if not name_valid:
+                reply_text = name_result
+                log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", False)
+            elif not item_valid:
+                reply_text = item_result
+                log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", False)
             else:
-                list_id = list_info[0]
-                item_count = get_item_count(list_id)
-                if item_count >= MAX_ITEMS_PER_LIST:
-                    reply_text = f"Your {list_name} is full ({MAX_ITEMS_PER_LIST} items max). Remove some items first."
+                list_name = name_result  # Sanitized
+                item_text = item_result  # Sanitized
+                list_info = get_list_by_name(phone_number, list_name)
+
+                # Auto-create list if it doesn't exist
+                if not list_info:
+                    list_count = get_list_count(phone_number)
+                    if list_count >= MAX_LISTS_PER_USER:
+                        reply_text = f"You've reached the maximum of {MAX_LISTS_PER_USER} lists. Delete a list first."
+                    else:
+                        list_id = create_list(phone_number, list_name)
+                        add_list_item(list_id, phone_number, item_text)
+                        reply_text = f"Created your {list_name} and added {item_text}!"
                 else:
-                    add_list_item(list_id, phone_number, item_text)
-                    reply_text = ai_response.get("confirmation", f"Added {item_text} to your {list_name}")
+                    list_id = list_info[0]
+                    item_count = get_item_count(list_id)
+                    if item_count >= MAX_ITEMS_PER_LIST:
+                        reply_text = f"Your {list_name} is full ({MAX_ITEMS_PER_LIST} items max). Remove some items first."
+                    else:
+                        add_list_item(list_id, phone_number, item_text)
+                        reply_text = ai_response.get("confirmation", f"Added {item_text} to your {list_name}")
                 log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
 
         elif ai_response["action"] == "add_item_ask_list":

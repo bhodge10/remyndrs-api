@@ -77,3 +77,8 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 # Rate Limiting
 RATE_LIMIT_MESSAGES = 15  # Max messages per window
 RATE_LIMIT_WINDOW = 60    # Window in seconds (1 minute)
+
+# Input Validation Limits
+MAX_LIST_NAME_LENGTH = 50
+MAX_ITEM_TEXT_LENGTH = 200
+MAX_MESSAGE_LENGTH = 500

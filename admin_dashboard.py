@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from services.metrics_service import get_all_metrics
 from config import ADMIN_USERNAME, ADMIN_PASSWORD, logger
+from utils.validation import log_security_event
 
 router = APIRouter()
 security = HTTPBasic()
@@ -23,7 +24,7 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
 
     if not (correct_username and correct_password):
-        logger.warning(f"Failed admin login attempt: {credentials.username}")
+        log_security_event("AUTH_FAILURE", {"username": credentials.username, "endpoint": "dashboard"})
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",
