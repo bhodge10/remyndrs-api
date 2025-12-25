@@ -4,7 +4,7 @@ Handles user activity tracking and metrics aggregation
 """
 
 from datetime import datetime
-from database import get_db_connection
+from database import get_db_connection, return_db_connection
 from config import logger
 
 
@@ -14,6 +14,7 @@ from config import logger
 
 def track_user_activity(phone_number):
     """Update user's last active timestamp"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -22,13 +23,16 @@ def track_user_activity(phone_number):
             (datetime.utcnow(), phone_number)
         )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Error tracking user activity: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def increment_message_count(phone_number):
     """Increment user's total message count"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -37,13 +41,16 @@ def increment_message_count(phone_number):
             (phone_number,)
         )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Error incrementing message count: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def track_reminder_delivery(reminder_id, status, error=None):
     """Track reminder delivery status"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -58,13 +65,16 @@ def track_reminder_delivery(reminder_id, status, error=None):
                 (status, error, reminder_id)
             )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Error tracking reminder delivery: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def set_referral_source(phone_number, source):
     """Set user's referral source"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -73,9 +83,11 @@ def set_referral_source(phone_number, source):
             (source, phone_number)
         )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Error setting referral source: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 # =============================================================================
@@ -84,6 +96,7 @@ def set_referral_source(phone_number, source):
 
 def get_active_users(days=7):
     """Get count of users active in last N days"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -93,15 +106,18 @@ def get_active_users(days=7):
             AND onboarding_complete = TRUE
         ''', (days,))
         result = c.fetchone()[0]
-        conn.close()
         return result
     except Exception as e:
         logger.error(f"Error getting active users: {e}")
         return 0
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def get_daily_signups(days=30):
     """Get daily signup counts for last N days"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -114,15 +130,18 @@ def get_daily_signups(days=30):
             ORDER BY signup_date DESC
         ''', (days,))
         results = c.fetchall()
-        conn.close()
         return results
     except Exception as e:
         logger.error(f"Error getting daily signups: {e}")
         return []
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def get_premium_stats():
     """Get premium vs free user counts"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -135,7 +154,6 @@ def get_premium_stats():
             GROUP BY COALESCE(premium_status, 'free')
         ''')
         results = c.fetchall()
-        conn.close()
 
         stats = {'free': 0, 'premium': 0, 'churned': 0}
         for status, count in results:
@@ -145,10 +163,14 @@ def get_premium_stats():
     except Exception as e:
         logger.error(f"Error getting premium stats: {e}")
         return {'free': 0, 'premium': 0, 'churned': 0}
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def get_reminder_completion_rate():
     """Get reminder delivery statistics"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -160,7 +182,6 @@ def get_reminder_completion_rate():
             GROUP BY COALESCE(delivery_status, 'pending')
         ''')
         results = c.fetchall()
-        conn.close()
 
         stats = {'pending': 0, 'sent': 0, 'failed': 0}
         for status, count in results:
@@ -177,10 +198,14 @@ def get_reminder_completion_rate():
     except Exception as e:
         logger.error(f"Error getting reminder completion rate: {e}")
         return {'pending': 0, 'sent': 0, 'failed': 0, 'completion_rate': 0}
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def get_engagement_stats():
     """Get average engagement metrics per user"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -201,8 +226,6 @@ def get_engagement_stats():
         c.execute('SELECT SUM(COALESCE(total_messages, 0)) FROM users')
         total_messages = c.fetchone()[0] or 0
 
-        conn.close()
-
         return {
             'avg_memories_per_user': round(total_memories / total_users, 2),
             'avg_reminders_per_user': round(total_reminders / total_users, 2),
@@ -221,10 +244,14 @@ def get_engagement_stats():
             'total_reminders': 0,
             'total_messages': 0
         }
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def get_referral_breakdown():
     """Get user counts by referral source"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -238,15 +265,18 @@ def get_referral_breakdown():
             ORDER BY count DESC
         ''')
         results = c.fetchall()
-        conn.close()
         return results
     except Exception as e:
         logger.error(f"Error getting referral breakdown: {e}")
         return []
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 def get_all_metrics():
     """Get all metrics for dashboard"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -254,8 +284,6 @@ def get_all_metrics():
         # Total users
         c.execute('SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE')
         total_users = c.fetchone()[0]
-
-        conn.close()
 
         return {
             'total_users': total_users,
@@ -270,3 +298,6 @@ def get_all_metrics():
     except Exception as e:
         logger.error(f"Error getting all metrics: {e}")
         return {}
+    finally:
+        if conn:
+            return_db_connection(conn)
