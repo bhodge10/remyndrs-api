@@ -82,3 +82,17 @@ RATE_LIMIT_WINDOW = 60    # Window in seconds (1 minute)
 MAX_LIST_NAME_LENGTH = 50
 MAX_ITEM_TEXT_LENGTH = 200
 MAX_MESSAGE_LENGTH = 500
+
+# Request Timeout Configuration (in seconds)
+OPENAI_TIMEOUT = 30  # OpenAI API call timeout
+REQUEST_TIMEOUT = 60  # Overall request timeout
+
+# Encryption Configuration
+ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")
+HASH_KEY = os.environ.get("HASH_KEY")
+ENCRYPTION_ENABLED = bool(ENCRYPTION_KEY and HASH_KEY)
+
+if ENCRYPTION_ENABLED:
+    logger.info("Field-level encryption enabled")
+else:
+    logger.warning("ENCRYPTION_KEY or HASH_KEY not set - field encryption disabled")

@@ -92,7 +92,7 @@ def log_security_event(event_type: str, details: dict):
     log_message = f"[SECURITY] {event_type} | {safe_details}"
 
     # Use warning level for security events to ensure visibility
-    if event_type in ['AUTH_FAILURE', 'RATE_LIMIT', 'INVALID_SIGNATURE', 'VALIDATION_FAILURE']:
+    if event_type in ['AUTH_FAILURE', 'RATE_LIMIT', 'INVALID_SIGNATURE', 'VALIDATION_FAILURE', 'REQUEST_TIMEOUT']:
         logger.warning(log_message)
     else:
         logger.info(log_message)

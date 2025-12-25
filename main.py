@@ -5,15 +5,17 @@ Entry point for the FastAPI application
 
 import re
 import pytz
+import asyncio
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.request_validator import RequestValidator
 
 # Local imports
 import secrets
-from config import logger, ENVIRONMENT, MAX_LISTS_PER_USER, MAX_ITEMS_PER_LIST, TWILIO_AUTH_TOKEN, ADMIN_USERNAME, ADMIN_PASSWORD, RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW
+from config import logger, ENVIRONMENT, MAX_LISTS_PER_USER, MAX_ITEMS_PER_LIST, TWILIO_AUTH_TOKEN, ADMIN_USERNAME, ADMIN_PASSWORD, RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW, REQUEST_TIMEOUT
 from collections import defaultdict
 import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -41,6 +43,49 @@ from admin_dashboard import router as dashboard_router
 # Initialize application
 logger.info("🚀 SMS Memory Service starting...")
 app = FastAPI()
+
+
+# Request timeout middleware
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    """Middleware to enforce request timeout limits"""
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await asyncio.wait_for(
+                call_next(request),
+                timeout=REQUEST_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            log_security_event("REQUEST_TIMEOUT", {
+                "path": str(request.url.path),
+                "method": request.method
+            })
+            return Response(
+                content='{"error": "Request timed out. Please try again."}',
+                status_code=504,
+                media_type="application/json"
+            )
+
+app.add_middleware(TimeoutMiddleware)
+
+
+# Global exception handler - sanitize all error responses
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch unhandled exceptions and return safe error messages"""
+    # Log full error details internally
+    log_security_event("UNHANDLED_ERROR", {
+        "path": str(request.url.path),
+        "method": request.method,
+        "error_type": type(exc).__name__
+    })
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+
+    # Return sanitized response - never expose internal details
+    return Response(
+        content='{"error": "An unexpected error occurred. Please try again."}',
+        status_code=500,
+        media_type="application/json"
+    )
 
 # Rate limiting storage: {phone_number: [timestamp1, timestamp2, ...]}
 rate_limit_store = defaultdict(list)

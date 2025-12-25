@@ -8,7 +8,7 @@ from openai import OpenAI
 from datetime import datetime, timedelta
 import pytz
 
-from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TEMPERATURE, OPENAI_MAX_TOKENS, logger, MAX_MEMORIES_IN_CONTEXT, MAX_COMPLETED_REMINDERS_DISPLAY
+from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TEMPERATURE, OPENAI_MAX_TOKENS, OPENAI_TIMEOUT, logger, MAX_MEMORIES_IN_CONTEXT, MAX_COMPLETED_REMINDERS_DISPLAY
 from models.memory import get_memories
 from models.reminder import get_user_reminders
 from models.user import get_user_timezone
@@ -335,8 +335,8 @@ CRITICAL RULES:
 - When retrieving information, ONLY use the memories listed above
 - Always include the day of the week in reminder confirmations (e.g., "Saturday, December 21st at 8:00 AM")"""
 
-        # Call OpenAI API
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        # Call OpenAI API with timeout
+        client = OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT)
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[

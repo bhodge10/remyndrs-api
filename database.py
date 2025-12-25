@@ -4,11 +4,64 @@ Handles database initialization and connection management for PostgreSQL
 """
 
 import psycopg2
-from config import DATABASE_URL, logger
+from psycopg2 import pool
+from contextlib import contextmanager
+from config import DATABASE_URL, ENCRYPTION_ENABLED, logger
+
+# Connection pool settings
+MIN_CONNECTIONS = 2
+MAX_CONNECTIONS = 10
+
+# Initialize connection pool
+_connection_pool = None
+
+
+def init_connection_pool():
+    """Initialize the database connection pool"""
+    global _connection_pool
+    try:
+        _connection_pool = pool.ThreadedConnectionPool(
+            MIN_CONNECTIONS,
+            MAX_CONNECTIONS,
+            DATABASE_URL
+        )
+        logger.info(f"Database connection pool initialized (min={MIN_CONNECTIONS}, max={MAX_CONNECTIONS})")
+    except Exception as e:
+        logger.error(f"Failed to initialize connection pool: {e}")
+        raise
+
 
 def get_db_connection():
-    """Get a database connection"""
-    return psycopg2.connect(DATABASE_URL)
+    """Get a database connection from the pool"""
+    global _connection_pool
+    if _connection_pool is None:
+        init_connection_pool()
+    return _connection_pool.getconn()
+
+
+def return_db_connection(conn):
+    """Return a connection to the pool"""
+    global _connection_pool
+    if _connection_pool and conn:
+        _connection_pool.putconn(conn)
+
+
+@contextmanager
+def get_db_cursor():
+    """Context manager for database operations - handles connection lifecycle"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        yield cursor
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 def init_db():
     """Initialize all database tables"""
@@ -116,6 +169,32 @@ def init_db():
             "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP",
             "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS error_message TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_list_item TEXT",
+            # Encryption: Add phone_hash columns for secure lookups
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_hash TEXT",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS phone_hash TEXT",
+            "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS phone_hash TEXT",
+            "ALTER TABLE logs ADD COLUMN IF NOT EXISTS phone_hash TEXT",
+            "ALTER TABLE lists ADD COLUMN IF NOT EXISTS phone_hash TEXT",
+            "ALTER TABLE list_items ADD COLUMN IF NOT EXISTS phone_hash TEXT",
+            # Encryption: Add encrypted field columns
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name_encrypted TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name_encrypted TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_encrypted TEXT",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS memory_text_encrypted TEXT",
+            "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS reminder_text_encrypted TEXT",
+            "ALTER TABLE logs ADD COLUMN IF NOT EXISTS message_in_encrypted TEXT",
+            "ALTER TABLE logs ADD COLUMN IF NOT EXISTS message_out_encrypted TEXT",
+            "ALTER TABLE list_items ADD COLUMN IF NOT EXISTS item_text_encrypted TEXT",
+        ]
+
+        # Create indexes on phone_hash columns for efficient lookups
+        index_migrations = [
+            "CREATE INDEX IF NOT EXISTS idx_users_phone_hash ON users(phone_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_memories_phone_hash ON memories(phone_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_reminders_phone_hash ON reminders(phone_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_logs_phone_hash ON logs(phone_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_lists_phone_hash ON lists(phone_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_list_items_phone_hash ON list_items(phone_hash)",
         ]
 
         for migration in migrations:
@@ -124,23 +203,46 @@ def init_db():
             except Exception:
                 pass  # Column likely already exists
 
+        for index_migration in index_migrations:
+            try:
+                c.execute(index_migration)
+            except Exception:
+                pass  # Index likely already exists
+
         conn.commit()
-        conn.close()
+        return_db_connection(conn)
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
 
 def log_interaction(phone_number, message_in, message_out, intent, success):
-    """Log an interaction to the database"""
+    """Log an interaction to the database with optional encryption"""
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute(
-            'INSERT INTO logs (phone_number, message_in, message_out, intent, success) VALUES (%s, %s, %s, %s, %s)',
-            (phone_number, message_in, message_out, intent, success)
-        )
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import encrypt_field, hash_phone
+            phone_hash = hash_phone(phone_number)
+            msg_in_encrypted = encrypt_field(message_in)
+            msg_out_encrypted = encrypt_field(message_out)
+            c.execute(
+                '''INSERT INTO logs (phone_number, phone_hash, message_in, message_out,
+                   message_in_encrypted, message_out_encrypted, intent, success)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
+                (phone_number, phone_hash, message_in, message_out,
+                 msg_in_encrypted, msg_out_encrypted, intent, success)
+            )
+        else:
+            c.execute(
+                'INSERT INTO logs (phone_number, message_in, message_out, intent, success) VALUES (%s, %s, %s, %s, %s)',
+                (phone_number, message_in, message_out, intent, success)
+            )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Error logging interaction: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
