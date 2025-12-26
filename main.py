@@ -432,11 +432,27 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         if incoming_msg.upper() in ["MY LISTS", "SHOW LISTS", "LIST LISTS", "LISTS"]:
             lists = get_lists(phone_number)
-            if lists:
+            if len(lists) == 1:
+                # Only one list, show it directly
+                list_id = lists[0][0]
+                list_name = lists[0][1]
+                create_or_update_user(phone_number, last_active_list=list_name)
+                items = get_list_items(list_id)
+                if items:
+                    item_lines = []
+                    for i, (item_id, item_text, completed) in enumerate(items, 1):
+                        if completed:
+                            item_lines.append(f"{i}. [x] {item_text}")
+                        else:
+                            item_lines.append(f"{i}. {item_text}")
+                    reply = f"{list_name}:\n\n" + "\n".join(item_lines)
+                else:
+                    reply = f"Your {list_name} is empty."
+            elif lists:
                 list_lines = []
                 for i, (list_id, list_name, item_count, completed_count) in enumerate(lists, 1):
                     list_lines.append(f"{i}. {list_name} ({item_count} items)")
-                reply = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list:"
+                reply = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
             else:
                 reply = "You don't have any lists yet. Try saying 'Create a grocery list'!"
 
