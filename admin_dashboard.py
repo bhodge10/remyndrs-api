@@ -343,6 +343,78 @@ async def send_broadcast(request: BroadcastRequest, background_tasks: Background
 
 
 # =====================================================
+# FEEDBACK API ENDPOINTS
+# =====================================================
+
+@router.get("/admin/feedback")
+async def get_feedback(admin: str = Depends(verify_admin)):
+    """Get all feedback entries, sorted by most recent first"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute('''
+            SELECT id, user_phone, message, created_at, resolved
+            FROM feedback
+            ORDER BY created_at DESC
+        ''')
+        results = c.fetchall()
+
+        feedback_list = []
+        for row in results:
+            feedback_list.append({
+                "id": row[0],
+                "user_phone": row[1],
+                "message": row[2],
+                "created_at": row[3].isoformat() if row[3] else None,
+                "resolved": row[4]
+            })
+
+        return JSONResponse(content=feedback_list)
+    except Exception as e:
+        logger.error(f"Error getting feedback: {e}")
+        raise HTTPException(status_code=500, detail="Error getting feedback")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/admin/feedback/{feedback_id}/toggle")
+async def toggle_feedback_resolved(feedback_id: int, admin: str = Depends(verify_admin)):
+    """Toggle the resolved status of a feedback entry"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get current status
+        c.execute('SELECT resolved FROM feedback WHERE id = %s', (feedback_id,))
+        result = c.fetchone()
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Feedback not found")
+
+        # Toggle the status
+        new_status = not result[0]
+        c.execute(
+            'UPDATE feedback SET resolved = %s WHERE id = %s',
+            (new_status, feedback_id)
+        )
+        conn.commit()
+
+        return JSONResponse(content={"id": feedback_id, "resolved": new_status})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error toggling feedback status: {e}")
+        raise HTTPException(status_code=500, detail="Error updating feedback")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
 # DASHBOARD UI
 # =====================================================
 
@@ -653,6 +725,33 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         .progress-info.active {{
             display: block;
         }}
+
+        /* Feedback table styles */
+        .feedback-table {{
+            font-size: 0.9em;
+        }}
+        .feedback-table td {{
+            vertical-align: middle;
+        }}
+        .feedback-table .unresolved {{
+            background: #fff3cd;
+            font-weight: 600;
+        }}
+        .feedback-table .unresolved td {{
+            border-left: 3px solid #f39c12;
+        }}
+        .feedback-table .unresolved td:first-child {{
+            border-left: 3px solid #f39c12;
+        }}
+        .feedback-message {{
+            max-width: 400px;
+            word-wrap: break-word;
+        }}
+        .resolve-checkbox {{
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }}
     </style>
 </head>
 <body>
@@ -792,6 +891,22 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </table>
     </div>
 
+    <!-- User Feedback Section -->
+    <div class="section">
+        <h2>User Feedback</h2>
+        <table class="feedback-table" id="feedbackTable">
+            <tr>
+                <th>Date</th>
+                <th>Phone</th>
+                <th>Message</th>
+                <th style="width: 80px; text-align: center;">Resolved</th>
+            </tr>
+            <tr id="feedbackLoading">
+                <td colspan="4" style="color: #95a5a6; text-align: center;">Loading feedback...</td>
+            </tr>
+        </table>
+    </div>
+
     <!-- Confirmation Modal -->
     <div class="modal" id="confirmModal">
         <div class="modal-content">
@@ -857,6 +972,74 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 }});
             }} catch (e) {{
                 console.error('Error loading history:', e);
+            }}
+        }}
+
+        // Load user feedback
+        async function loadFeedback() {{
+            try {{
+                const response = await fetch('/admin/feedback');
+                const feedback = await response.json();
+
+                const table = document.getElementById('feedbackTable');
+                const loadingRow = document.getElementById('feedbackLoading');
+                if (loadingRow) loadingRow.remove();
+
+                if (feedback.length === 0) {{
+                    const row = table.insertRow(-1);
+                    row.innerHTML = '<td colspan="4" style="color: #95a5a6; text-align: center;">No feedback yet</td>';
+                    return;
+                }}
+
+                feedback.forEach(f => {{
+                    const row = table.insertRow(-1);
+                    const date = new Date(f.created_at).toLocaleString();
+                    const resolvedClass = f.resolved ? '' : 'unresolved';
+                    const checkedAttr = f.resolved ? 'checked' : '';
+                    row.className = resolvedClass;
+                    row.id = `feedback-row-${{f.id}}`;
+                    row.innerHTML = `
+                        <td>${{date}}</td>
+                        <td>${{f.user_phone}}</td>
+                        <td class="feedback-message">${{f.message}}</td>
+                        <td style="text-align: center;">
+                            <input type="checkbox" class="resolve-checkbox" ${{checkedAttr}}
+                                   onchange="toggleResolved(${{f.id}}, this.checked)"
+                                   title="${{f.resolved ? 'Mark as unresolved' : 'Mark as resolved'}}">
+                        </td>
+                    `;
+                }});
+            }} catch (e) {{
+                console.error('Error loading feedback:', e);
+            }}
+        }}
+
+        // Toggle feedback resolved status
+        async function toggleResolved(feedbackId, isChecked) {{
+            try {{
+                const response = await fetch(`/admin/feedback/${{feedbackId}}/toggle`, {{
+                    method: 'POST'
+                }});
+
+                if (response.ok) {{
+                    const result = await response.json();
+                    const row = document.getElementById(`feedback-row-${{feedbackId}}`);
+                    if (result.resolved) {{
+                        row.classList.remove('unresolved');
+                    }} else {{
+                        row.classList.add('unresolved');
+                    }}
+                }} else {{
+                    // Revert checkbox on error
+                    const checkbox = document.querySelector(`#feedback-row-${{feedbackId}} .resolve-checkbox`);
+                    checkbox.checked = !isChecked;
+                    alert('Error updating feedback status');
+                }}
+            }} catch (e) {{
+                console.error('Error toggling feedback:', e);
+                // Revert checkbox on error
+                const checkbox = document.querySelector(`#feedback-row-${{feedbackId}} .resolve-checkbox`);
+                checkbox.checked = !isChecked;
             }}
         }}
 
@@ -997,6 +1180,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         // Initialize
         loadStats();
         loadHistory();
+        loadFeedback();
     </script>
 </body>
 </html>

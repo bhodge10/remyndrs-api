@@ -457,6 +457,39 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # FEEDBACK HANDLING
+        # ==========================================
+        if incoming_msg.upper().startswith("FEEDBACK:"):
+            feedback_message = incoming_msg[9:].strip()  # Extract everything after "feedback:"
+            if feedback_message:
+                # Save feedback to database
+                conn = None
+                try:
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute(
+                        'INSERT INTO feedback (user_phone, message) VALUES (%s, %s)',
+                        (phone_number, feedback_message)
+                    )
+                    conn.commit()
+                    resp = MessagingResponse()
+                    resp.message("Thank you for your feedback! We appreciate you taking the time to share your thoughts with us.")
+                    log_interaction(phone_number, incoming_msg, "Feedback received", "feedback", True)
+                    return Response(content=str(resp), media_type="application/xml")
+                except Exception as e:
+                    logger.error(f"Error saving feedback: {e}")
+                    resp = MessagingResponse()
+                    resp.message("Sorry, there was an error saving your feedback. Please try again later.")
+                    return Response(content=str(resp), media_type="application/xml")
+                finally:
+                    if conn:
+                        return_db_connection(conn)
+            else:
+                resp = MessagingResponse()
+                resp.message("Please include your feedback after 'Feedback:'. For example: 'Feedback: I love this app!'")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # DELETE ALL COMMANDS (separated by type)
         # ==========================================
         msg_upper = incoming_msg.upper()

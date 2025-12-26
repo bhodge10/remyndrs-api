@@ -172,6 +172,17 @@ def init_db():
             )
         ''')
 
+        # User feedback table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS feedback (
+                id SERIAL PRIMARY KEY,
+                user_phone TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved BOOLEAN DEFAULT FALSE
+            )
+        ''')
+
         # Add new columns to existing tables (migrations)
         # These will silently fail if columns already exist
         migrations = [
