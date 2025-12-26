@@ -388,11 +388,18 @@ def delete_list(phone_number, list_name):
         if ENCRYPTION_ENABLED:
             from utils.encryption import hash_phone
             phone_hash = hash_phone(phone_number)
-            logger.info(f"Using phone_hash for delete")
+            # Try phone_hash first
             c.execute(
                 'DELETE FROM lists WHERE phone_hash = %s AND LOWER(list_name) = LOWER(%s)',
                 (phone_hash, list_name)
             )
+            if c.rowcount == 0:
+                # Fallback to phone_number for lists created before encryption
+                logger.info(f"No rows deleted with phone_hash, trying phone_number fallback")
+                c.execute(
+                    'DELETE FROM lists WHERE phone_number = %s AND LOWER(list_name) = LOWER(%s)',
+                    (phone_number, list_name)
+                )
         else:
             c.execute(
                 'DELETE FROM lists WHERE phone_number = %s AND LOWER(list_name) = LOWER(%s)',
