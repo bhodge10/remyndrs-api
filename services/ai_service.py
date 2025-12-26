@@ -267,18 +267,26 @@ For ADDING ITEM BUT NO LIST SPECIFIED (user has lists but didn't say which):
 Note: Only use add_item_ask_list if user has multiple lists and didn't specify which one. If user specifies a list name like "grocery list", use add_to_list instead.
 IMPORTANT: Keep ALL items in item_text exactly as the user said them. Do NOT extract just one item.
 
-For SHOWING A SPECIFIC LIST:
+For SHOWING A SPECIFIC LIST (user specifies which list):
 {{
     "action": "show_list",
     "list_name": "the name of the list",
     "response": "Format the list contents from USER'S LISTS above"
 }}
 
-For SHOWING ALL LISTS:
+For SHOWING THE CURRENT/LAST ACTIVE LIST (user says "show list" without specifying which):
+{{
+    "action": "show_current_list",
+    "response": "Showing your current list"
+}}
+Note: Use show_current_list when user says "show list", "show my list", "what's on my list", "view list" (singular) WITHOUT specifying a list name. The system will show their last active list automatically.
+
+For SHOWING ALL LISTS (user says "show lists", "my lists", "all lists"):
 {{
     "action": "show_all_lists",
     "response": "List all the user's lists with item counts"
 }}
+Note: Use show_all_lists when user says "lists" (plural), "all lists", "my lists", or "show all lists".
 
 For CHECKING OFF AN ITEM:
 {{

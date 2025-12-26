@@ -307,7 +307,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             add_list_item(list_id, phone_number, item)
                             added_items.append(item)
 
-                    create_or_update_user(phone_number, pending_list_item=None)
+                    # Clear pending item and track last active list
+                    create_or_update_user(phone_number, pending_list_item=None, last_active_list=list_name)
 
                     resp = MessagingResponse()
                     if len(added_items) == 1:
@@ -572,12 +573,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             if len(added_items) < MAX_ITEMS_PER_LIST:
                                 add_list_item(list_id, phone_number, item)
                                 added_items.append(item)
+                        # Track last active list
+                        create_or_update_user(phone_number, last_active_list=list_name)
                         if len(added_items) == 1:
                             reply_text = f"Created your {list_name} and added {added_items[0]}!"
                         else:
                             reply_text = f"Created your {list_name} and added {len(added_items)} items: {', '.join(added_items)}"
                 else:
                     list_id = list_info[0]
+                    list_name = list_info[1]  # Use actual list name from DB
                     item_count = get_item_count(list_id)
                     available_slots = MAX_ITEMS_PER_LIST - item_count
 
@@ -590,6 +594,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             if len(added_items) < available_slots:
                                 add_list_item(list_id, phone_number, item)
                                 added_items.append(item)
+
+                        # Track last active list
+                        create_or_update_user(phone_number, last_active_list=list_name)
 
                         if len(added_items) == 1:
                             reply_text = ai_response.get("confirmation", f"Added {added_items[0]} to your {list_name}")
@@ -623,6 +630,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             add_list_item(list_id, phone_number, item)
                             added_items.append(item)
 
+                    # Track last active list
+                    create_or_update_user(phone_number, last_active_list=list_name)
+
                     if len(added_items) == 1:
                         reply_text = f"Added {added_items[0]} to your {list_name}"
                     elif len(added_items) < len(items_to_add):
@@ -642,6 +652,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             list_name = ai_response.get("list_name")
             list_info = get_list_by_name(phone_number, list_name)
             if list_info:
+                # Track last active list
+                create_or_update_user(phone_number, last_active_list=list_info[1])
                 items = get_list_items(list_info[0])
                 if items:
                     item_lines = []
@@ -656,6 +668,41 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             else:
                 reply_text = f"I couldn't find a list called '{list_name}'."
             log_interaction(phone_number, incoming_msg, reply_text, "show_list", True)
+
+        elif ai_response["action"] == "show_current_list":
+            # Show the last active list or fall back to showing all lists
+            last_active = user[19] if user and len(user) > 19 else None
+            if last_active:
+                list_info = get_list_by_name(phone_number, last_active)
+                if list_info:
+                    items = get_list_items(list_info[0])
+                    if items:
+                        item_lines = []
+                        for i, (item_id, item_text, completed) in enumerate(items, 1):
+                            if completed:
+                                item_lines.append(f"{i}. [x] {item_text}")
+                            else:
+                                item_lines.append(f"{i}. {item_text}")
+                        reply_text = f"{list_info[1]}:\n\n" + "\n".join(item_lines)
+                    else:
+                        reply_text = f"Your {list_info[1]} is empty."
+                else:
+                    # Last active list was deleted, show all lists
+                    lists = get_lists(phone_number)
+                    if lists:
+                        list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
+                        reply_text = "Your lists:\n\n" + "\n".join(list_lines)
+                    else:
+                        reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
+            else:
+                # No last active list, show all lists
+                lists = get_lists(phone_number)
+                if lists:
+                    list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
+                    reply_text = "Your lists:\n\n" + "\n".join(list_lines)
+                else:
+                    reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
+            log_interaction(phone_number, incoming_msg, reply_text, "show_current_list", True)
 
         elif ai_response["action"] == "show_all_lists":
             lists = get_lists(phone_number)

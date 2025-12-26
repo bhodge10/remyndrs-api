@@ -169,6 +169,7 @@ def init_db():
             "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP",
             "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS error_message TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_list_item TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_list TEXT",
             # Encryption: Add phone_hash columns for secure lookups
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_hash TEXT",
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS phone_hash TEXT",
