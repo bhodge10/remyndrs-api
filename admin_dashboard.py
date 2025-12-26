@@ -641,9 +641,12 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <tr><td>Avg Messages / User</td><td>{engagement.get('avg_messages_per_user', 0)}</td></tr>
                 <tr><td>Avg Memories / User</td><td>{engagement.get('avg_memories_per_user', 0)}</td></tr>
                 <tr><td>Avg Reminders / User</td><td>{engagement.get('avg_reminders_per_user', 0)}</td></tr>
+                <tr><td>Avg Lists / User</td><td>{engagement.get('avg_lists_per_user', 0)}</td></tr>
+                <tr><td>Avg Items / List</td><td>{engagement.get('avg_items_per_list', 0)}</td></tr>
                 <tr><td>Total Messages</td><td>{engagement.get('total_messages', 0)}</td></tr>
                 <tr><td>Total Memories</td><td>{engagement.get('total_memories', 0)}</td></tr>
                 <tr><td>Total Reminders</td><td>{engagement.get('total_reminders', 0)}</td></tr>
+                <tr><td>Total Lists</td><td>{engagement.get('total_lists', 0)}</td></tr>
             </table>
         </div>
 

@@ -226,13 +226,27 @@ def get_engagement_stats():
         c.execute('SELECT SUM(COALESCE(total_messages, 0)) FROM users')
         total_messages = c.fetchone()[0] or 0
 
+        # Get total lists
+        c.execute('SELECT COUNT(*) FROM lists')
+        total_lists = c.fetchone()[0]
+
+        # Get total list items
+        c.execute('SELECT COUNT(*) FROM list_items')
+        total_list_items = c.fetchone()[0]
+
+        # Calculate avg items per list
+        avg_items_per_list = round(total_list_items / total_lists, 2) if total_lists > 0 else 0
+
         return {
             'avg_memories_per_user': round(total_memories / total_users, 2),
             'avg_reminders_per_user': round(total_reminders / total_users, 2),
             'avg_messages_per_user': round(total_messages / total_users, 2),
+            'avg_lists_per_user': round(total_lists / total_users, 2),
+            'avg_items_per_list': avg_items_per_list,
             'total_memories': total_memories,
             'total_reminders': total_reminders,
-            'total_messages': total_messages
+            'total_messages': total_messages,
+            'total_lists': total_lists
         }
     except Exception as e:
         logger.error(f"Error getting engagement stats: {e}")
@@ -240,9 +254,12 @@ def get_engagement_stats():
             'avg_memories_per_user': 0,
             'avg_reminders_per_user': 0,
             'avg_messages_per_user': 0,
+            'avg_lists_per_user': 0,
+            'avg_items_per_list': 0,
             'total_memories': 0,
             'total_reminders': 0,
-            'total_messages': 0
+            'total_messages': 0,
+            'total_lists': 0
         }
     finally:
         if conn:
