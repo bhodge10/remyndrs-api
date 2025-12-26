@@ -23,7 +23,7 @@ from fastapi import Depends
 from database import init_db, log_interaction
 from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list, get_pending_list_item, get_pending_reminder_delete, get_pending_memory_delete
 from models.memory import save_memory, get_memories, search_memories, delete_memory
-from models.reminder import save_reminder, get_user_reminders, search_pending_reminders, delete_reminder
+from models.reminder import save_reminder, get_user_reminders, search_pending_reminders, delete_reminder, get_last_sent_reminder, mark_reminder_snoozed
 from models.list_model import (
     create_list, get_lists, get_list_by_name, get_list_items,
     add_list_item, mark_item_complete, mark_item_incomplete,
@@ -39,6 +39,62 @@ from utils.timezone import get_user_current_time
 from utils.formatting import get_help_text, format_reminders_list
 from utils.validation import mask_phone_number, validate_list_name, validate_item_text, validate_message, log_security_event
 from admin_dashboard import router as dashboard_router
+
+# Snooze duration parser
+def parse_snooze_duration(text):
+    """
+    Parse snooze duration from user input.
+    Returns duration in minutes.
+    Max: 24 hours (1440 minutes)
+    Default: 15 minutes
+
+    Examples:
+    - "" or None -> 15 minutes
+    - "30" or "30m" -> 30 minutes
+    - "1h" or "1 hour" -> 60 minutes
+    - "2 hours" -> 120 minutes
+    - "1h30m" -> 90 minutes
+    """
+    import re
+
+    if not text:
+        return 15  # Default
+
+    text = text.strip().lower()
+
+    # Try to parse various formats
+    try:
+        # Just a number (assume minutes)
+        if re.match(r'^\d+$', text):
+            minutes = int(text)
+            return min(minutes, 1440)  # Max 24 hours
+
+        # Minutes: "30m", "30 min", "30 mins", "30 minutes"
+        match = re.match(r'^(\d+)\s*(?:m|min|mins|minutes?)$', text)
+        if match:
+            minutes = int(match.group(1))
+            return min(minutes, 1440)
+
+        # Hours: "1h", "1 hr", "1 hour", "2 hours"
+        match = re.match(r'^(\d+)\s*(?:h|hr|hrs|hours?)$', text)
+        if match:
+            hours = int(match.group(1))
+            return min(hours * 60, 1440)
+
+        # Combined: "1h30m", "1h 30m", "1 hour 30 minutes"
+        match = re.match(r'^(\d+)\s*(?:h|hr|hrs|hours?)\s*(\d+)?\s*(?:m|min|mins|minutes?)?$', text)
+        if match:
+            hours = int(match.group(1))
+            mins = int(match.group(2)) if match.group(2) else 0
+            total = hours * 60 + mins
+            return min(total, 1440)
+
+        # Fallback: default to 15 minutes
+        return 15
+
+    except (ValueError, AttributeError):
+        return 15
+
 
 # Initialize application
 logger.info("🚀 SMS Memory Service starting...")
@@ -488,6 +544,50 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             else:
                 resp = MessagingResponse()
                 resp.message("Please include your feedback after 'Feedback:'. For example: 'Feedback: I love this app!'")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # SNOOZE HANDLING
+        # ==========================================
+        if incoming_msg.upper().startswith("SNOOZE"):
+            # Check if there's a recent reminder to snooze
+            last_reminder = get_last_sent_reminder(phone_number, max_age_minutes=30)
+
+            if last_reminder:
+                # Parse snooze duration
+                snooze_text = incoming_msg[6:].strip().lower()  # Everything after "snooze"
+                snooze_minutes = parse_snooze_duration(snooze_text)
+
+                # Create new reminder with snoozed time
+                from datetime import timedelta
+                user_tz = get_user_timezone(phone_number)
+                new_reminder_time = datetime.utcnow() + timedelta(minutes=snooze_minutes)
+
+                # Save the new reminder
+                save_reminder(phone_number, last_reminder['text'], new_reminder_time)
+
+                # Mark original as snoozed
+                mark_reminder_snoozed(last_reminder['id'])
+
+                # Format confirmation message
+                if snooze_minutes < 60:
+                    time_str = f"{snooze_minutes} minute{'s' if snooze_minutes != 1 else ''}"
+                else:
+                    hours = snooze_minutes // 60
+                    mins = snooze_minutes % 60
+                    if mins > 0:
+                        time_str = f"{hours} hour{'s' if hours != 1 else ''} and {mins} minute{'s' if mins != 1 else ''}"
+                    else:
+                        time_str = f"{hours} hour{'s' if hours != 1 else ''}"
+
+                resp = MessagingResponse()
+                resp.message(f"Snoozed! I'll remind you again in {time_str}.")
+                log_interaction(phone_number, incoming_msg, f"Snoozed for {time_str}", "snooze", True)
+                return Response(content=str(resp), media_type="application/xml")
+            else:
+                resp = MessagingResponse()
+                resp.message("No recent reminder to snooze. You can only snooze within 30 minutes of receiving a reminder.")
+                log_interaction(phone_number, incoming_msg, "No reminder to snooze", "snooze", False)
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================

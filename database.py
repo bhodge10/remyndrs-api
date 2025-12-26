@@ -250,6 +250,11 @@ def init_db():
                 model TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
+            # Snooze feature: track last sent reminder for snooze detection
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_sent_reminder_id INTEGER",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_sent_reminder_at TIMESTAMP",
+            # Track if a reminder was snoozed (to avoid showing duplicates)
+            "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS snoozed BOOLEAN DEFAULT FALSE",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

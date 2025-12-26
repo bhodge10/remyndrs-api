@@ -231,3 +231,83 @@ def delete_reminder(phone_number, reminder_id):
     finally:
         if conn:
             return_db_connection(conn)
+
+
+def update_last_sent_reminder(phone_number, reminder_id):
+    """Update the last sent reminder for a user (for snooze detection)"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            'UPDATE users SET last_sent_reminder_id = %s, last_sent_reminder_at = %s WHERE phone_number = %s',
+            (reminder_id, datetime.utcnow(), phone_number)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Error updating last sent reminder: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_last_sent_reminder(phone_number, max_age_minutes=30):
+    """Get the last sent reminder for a user if within the snooze window"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get the last sent reminder info from users table
+        c.execute(
+            '''SELECT last_sent_reminder_id, last_sent_reminder_at
+               FROM users WHERE phone_number = %s''',
+            (phone_number,)
+        )
+        result = c.fetchone()
+
+        if not result or not result[0] or not result[1]:
+            return None
+
+        reminder_id, sent_at = result
+
+        # Check if within the snooze window
+        if isinstance(sent_at, datetime):
+            age_minutes = (datetime.utcnow() - sent_at).total_seconds() / 60
+            if age_minutes > max_age_minutes:
+                return None
+        else:
+            return None
+
+        # Get the reminder details
+        c.execute(
+            'SELECT id, reminder_text FROM reminders WHERE id = %s',
+            (reminder_id,)
+        )
+        reminder = c.fetchone()
+
+        if reminder:
+            return {'id': reminder[0], 'text': reminder[1], 'sent_at': sent_at}
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting last sent reminder: {e}")
+        return None
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def mark_reminder_snoozed(reminder_id):
+    """Mark a reminder as snoozed"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('UPDATE reminders SET snoozed = TRUE WHERE id = %s', (reminder_id,))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Error marking reminder snoozed: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
