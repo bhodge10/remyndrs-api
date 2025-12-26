@@ -21,7 +21,7 @@ import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import Depends
 from database import init_db, log_interaction
-from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list
+from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list, get_pending_list_item
 from models.memory import save_memory, get_memories
 from models.reminder import save_reminder, get_user_reminders
 from models.list_model import (
@@ -277,8 +277,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # PENDING LIST ITEM SELECTION
         # ==========================================
         # Check if user has a pending list item and sent a number
-        if user and len(user) > 18 and user[18]:  # pending_list_item exists (index 18)
-            pending_item = user[18]
+        pending_item = get_pending_list_item(phone_number)
+        if pending_item:
             if incoming_msg.strip().isdigit():
                 list_num = int(incoming_msg.strip())
                 lists = get_lists(phone_number)
@@ -373,7 +373,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             user = get_user(phone_number)
             if user and user[9]:  # pending_delete flag
                 # Check if this is a list deletion
-                pending_list_name = user[18] if len(user) > 18 else None
+                pending_list_name = get_pending_list_item(phone_number)
                 if pending_list_name:
                     # Delete specific list
                     if delete_list(phone_number, pending_list_name):
@@ -465,7 +465,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # NUMBER RESPONSE TO SHOW LIST
         # ==========================================
         # If user sends just a number and has lists (but no pending item), show that list
-        if incoming_msg.strip().isdigit() and not (user and len(user) > 18 and user[18]):
+        if incoming_msg.strip().isdigit() and not get_pending_list_item(phone_number):
             list_num = int(incoming_msg.strip())
             lists = get_lists(phone_number)
             if lists and 1 <= list_num <= len(lists):
