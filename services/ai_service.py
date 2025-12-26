@@ -216,11 +216,16 @@ For LISTING REMINDERS:
 For DELETING/CANCELING A REMINDER:
 {{
     "action": "delete_reminder",
-    "search_term": "keyword(s) to search for in reminder text (e.g., 'dentist', 'team meeting', '3pm')",
+    "search_term": "keyword(s) to search for in reminder text OR the actual reminder text if user references by number",
     "confirmation": "Deleted your reminder about [topic]"
 }}
-Note: Use this when user says "delete reminder about...", "cancel reminder for...", "remove my ... reminder", etc.
-Extract the key search term(s) from their request. The system will search pending reminders and handle matches.
+WHEN TO USE delete_reminder:
+- "delete reminder about coffee" → search_term: "coffee"
+- "cancel my dentist reminder" → search_term: "dentist"
+- "delete coffee" (when no list has coffee, but there's a reminder about coffee) → search_term: "coffee"
+- "delete 1" or "delete reminder 1" (when they want to delete the first SCHEDULED reminder) → search_term: the actual text of reminder #1 from SCHEDULED section above
+- "remove the break reminder" → search_term: "break"
+IMPORTANT: If user says "delete [keyword]" and the keyword matches something in their SCHEDULED reminders (not lists), use delete_reminder.
 
 For SETTING REMINDERS WITH CLEAR TIME:
 {{
@@ -316,13 +321,18 @@ For UNCHECKING AN ITEM:
     "confirmation": "Unmarked [item] in your [list name]"
 }}
 
-For DELETING AN ITEM FROM A LIST:
+For DELETING AN ITEM FROM A LIST (not a reminder!):
 {{
     "action": "delete_item",
     "list_name": "the list name",
     "item_text": "the item to delete",
     "confirmation": "Removed [item] from your [list name]"
 }}
+IMPORTANT: Only use delete_item when deleting from a SHOPPING/TODO LIST in USER'S LISTS section.
+- "remove milk from grocery list" → delete_item (it's a list item)
+- "delete coffee" when coffee is in a LIST → delete_item
+- "delete coffee" when coffee is in a REMINDER → delete_reminder
+If the item exists in a reminder but NOT in any list, use delete_reminder instead!
 
 For DELETING AN ENTIRE LIST:
 {{
