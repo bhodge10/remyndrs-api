@@ -850,7 +850,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
 
         <div class="preview-box">
             <div><strong>Preview (what users will receive):</strong></div>
-            <div style="margin: 10px 0; padding: 10px; background: white; border-radius: 4px;">
+            <div style="margin: 10px 0; padding: 10px; background: white; border-radius: 4px; white-space: pre-wrap;">
                 <span style="color: #7f8c8d;">[Remyndrs System Message] </span><span id="messagePreview" style="color: #7f8c8d; font-style: italic;">Your message will appear here...</span>
             </div>
             <div>
@@ -912,7 +912,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <div class="modal-content">
             <h3>⚠️ Confirm Broadcast</h3>
             <p>You are about to send the following message to <strong id="modalCount">0</strong> users:</p>
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 15px 0;">
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 15px 0; white-space: pre-wrap;">
                 <em id="modalMessage"></em>
             </div>
             <p style="color: #e74c3c;"><strong>This action cannot be undone.</strong></p>
