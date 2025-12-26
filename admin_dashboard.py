@@ -1,18 +1,29 @@
 """
 Admin Dashboard
-HTML dashboard for viewing metrics
+HTML dashboard for viewing metrics and broadcast messaging
 """
 
 import secrets
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+import asyncio
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from pydantic import BaseModel
+from typing import Optional
 from services.metrics_service import get_all_metrics
+from services.sms_service import send_sms
+from database import get_db_connection, return_db_connection
 from config import ADMIN_USERNAME, ADMIN_PASSWORD, logger
 from utils.validation import log_security_event
 
 router = APIRouter()
 security = HTTPBasic()
+
+
+class BroadcastRequest(BaseModel):
+    message: str
+    audience: str  # "all", "free", "premium"
 
 
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
@@ -32,6 +43,260 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
         )
     return credentials.username
 
+
+# =====================================================
+# BROADCAST API ENDPOINTS
+# =====================================================
+
+@router.get("/admin/broadcast/stats")
+async def get_broadcast_stats(admin: str = Depends(verify_admin)):
+    """Get user counts by plan type for broadcast targeting"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get counts by plan type
+        c.execute('''
+            SELECT
+                COALESCE(premium_status, 'free') as plan,
+                COUNT(*) as count
+            FROM users
+            WHERE onboarding_complete = TRUE
+            GROUP BY COALESCE(premium_status, 'free')
+        ''')
+        results = c.fetchall()
+
+        stats = {"all": 0, "free": 0, "premium": 0}
+        for plan, count in results:
+            if plan == 'free':
+                stats['free'] = count
+            elif plan == 'premium':
+                stats['premium'] = count
+            stats['all'] += count
+
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting broadcast stats: {e}")
+        raise HTTPException(status_code=500, detail="Error getting stats")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/admin/broadcast/history")
+async def get_broadcast_history(admin: str = Depends(verify_admin)):
+    """Get history of past broadcasts"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute('''
+            SELECT id, sender, message, audience, recipient_count,
+                   success_count, fail_count, status, created_at, completed_at
+            FROM broadcast_logs
+            ORDER BY created_at DESC
+            LIMIT 20
+        ''')
+        results = c.fetchall()
+
+        history = []
+        for row in results:
+            history.append({
+                "id": row[0],
+                "sender": row[1],
+                "message": row[2][:100] + "..." if len(row[2]) > 100 else row[2],
+                "audience": row[3],
+                "recipient_count": row[4],
+                "success_count": row[5],
+                "fail_count": row[6],
+                "status": row[7],
+                "created_at": row[8].isoformat() if row[8] else None,
+                "completed_at": row[9].isoformat() if row[9] else None
+            })
+
+        return JSONResponse(content=history)
+    except Exception as e:
+        logger.error(f"Error getting broadcast history: {e}")
+        raise HTTPException(status_code=500, detail="Error getting history")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/admin/broadcast/status/{broadcast_id}")
+async def get_broadcast_status(broadcast_id: int, admin: str = Depends(verify_admin)):
+    """Get status of a specific broadcast"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute('''
+            SELECT id, sender, message, audience, recipient_count,
+                   success_count, fail_count, status, created_at, completed_at
+            FROM broadcast_logs
+            WHERE id = %s
+        ''', (broadcast_id,))
+        row = c.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Broadcast not found")
+
+        return JSONResponse(content={
+            "id": row[0],
+            "sender": row[1],
+            "message": row[2],
+            "audience": row[3],
+            "recipient_count": row[4],
+            "success_count": row[5],
+            "fail_count": row[6],
+            "status": row[7],
+            "created_at": row[8].isoformat() if row[8] else None,
+            "completed_at": row[9].isoformat() if row[9] else None
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting broadcast status: {e}")
+        raise HTTPException(status_code=500, detail="Error getting status")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def send_broadcast_messages(broadcast_id: int, phone_numbers: list, message: str):
+    """Background task to send broadcast messages with rate limiting"""
+    import time
+
+    conn = None
+    success_count = 0
+    fail_count = 0
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Update status to sending
+        c.execute(
+            "UPDATE broadcast_logs SET status = 'sending' WHERE id = %s",
+            (broadcast_id,)
+        )
+        conn.commit()
+
+        for i, phone in enumerate(phone_numbers):
+            try:
+                send_sms(phone, message)
+                success_count += 1
+            except Exception as e:
+                logger.error(f"Failed to send broadcast to {phone}: {e}")
+                fail_count += 1
+
+            # Update progress every 10 messages
+            if (i + 1) % 10 == 0:
+                c.execute(
+                    "UPDATE broadcast_logs SET success_count = %s, fail_count = %s WHERE id = %s",
+                    (success_count, fail_count, broadcast_id)
+                )
+                conn.commit()
+
+            # Rate limit: 100ms delay between messages to avoid Twilio limits
+            time.sleep(0.1)
+
+        # Final update
+        c.execute('''
+            UPDATE broadcast_logs
+            SET success_count = %s, fail_count = %s, status = 'completed', completed_at = NOW()
+            WHERE id = %s
+        ''', (success_count, fail_count, broadcast_id))
+        conn.commit()
+
+        logger.info(f"Broadcast {broadcast_id} completed: {success_count} success, {fail_count} failed")
+
+    except Exception as e:
+        logger.error(f"Broadcast {broadcast_id} error: {e}")
+        if conn:
+            c = conn.cursor()
+            c.execute(
+                "UPDATE broadcast_logs SET status = 'failed', completed_at = NOW() WHERE id = %s",
+                (broadcast_id,)
+            )
+            conn.commit()
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/admin/broadcast/send")
+async def send_broadcast(request: BroadcastRequest, background_tasks: BackgroundTasks, admin: str = Depends(verify_admin)):
+    """Send a broadcast message to selected audience"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Build query based on audience
+        if request.audience == "all":
+            c.execute('''
+                SELECT phone_number FROM users
+                WHERE onboarding_complete = TRUE
+            ''')
+        elif request.audience == "free":
+            c.execute('''
+                SELECT phone_number FROM users
+                WHERE onboarding_complete = TRUE
+                AND (premium_status = 'free' OR premium_status IS NULL)
+            ''')
+        elif request.audience == "premium":
+            c.execute('''
+                SELECT phone_number FROM users
+                WHERE onboarding_complete = TRUE
+                AND premium_status = 'premium'
+            ''')
+        else:
+            raise HTTPException(status_code=400, detail="Invalid audience")
+
+        results = c.fetchall()
+        phone_numbers = [r[0] for r in results]
+
+        if not phone_numbers:
+            raise HTTPException(status_code=400, detail="No recipients found")
+
+        # Create broadcast log entry
+        c.execute('''
+            INSERT INTO broadcast_logs (sender, message, audience, recipient_count, status)
+            VALUES (%s, %s, %s, %s, 'pending')
+            RETURNING id
+        ''', (admin, request.message, request.audience, len(phone_numbers)))
+        broadcast_id = c.fetchone()[0]
+        conn.commit()
+
+        # Start background task to send messages
+        background_tasks.add_task(send_broadcast_messages, broadcast_id, phone_numbers, request.message)
+
+        logger.info(f"Broadcast {broadcast_id} started by {admin}: {len(phone_numbers)} recipients")
+
+        return JSONResponse(content={
+            "broadcast_id": broadcast_id,
+            "recipient_count": len(phone_numbers),
+            "status": "started",
+            "message": f"Sending to {len(phone_numbers)} recipients..."
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting broadcast: {e}")
+        raise HTTPException(status_code=500, detail="Error starting broadcast")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# DASHBOARD UI
+# =====================================================
 
 @router.get("/admin/dashboard", response_class=HTMLResponse)
 async def admin_dashboard(admin: str = Depends(verify_admin)):
@@ -185,6 +450,161 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             font-size: 0.9em;
             margin-top: 30px;
         }}
+
+        /* Broadcast Section Styles */
+        .broadcast-section {{
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }}
+        .broadcast-section h2 {{
+            margin-top: 0;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3498db;
+        }}
+        .form-group {{
+            margin-bottom: 15px;
+        }}
+        .form-group label {{
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #2c3e50;
+        }}
+        .form-group select, .form-group textarea {{
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+        }}
+        .form-group textarea {{
+            min-height: 100px;
+            resize: vertical;
+        }}
+        .preview-box {{
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            border-left: 4px solid #3498db;
+        }}
+        .preview-box .count {{
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #2c3e50;
+        }}
+        .btn {{
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }}
+        .btn-primary {{
+            background: #3498db;
+            color: white;
+        }}
+        .btn-primary:hover {{
+            background: #2980b9;
+        }}
+        .btn-primary:disabled {{
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }}
+        .btn-danger {{
+            background: #e74c3c;
+            color: white;
+        }}
+        .btn-danger:hover {{
+            background: #c0392b;
+        }}
+        .btn-secondary {{
+            background: #95a5a6;
+            color: white;
+        }}
+        .btn-secondary:hover {{
+            background: #7f8c8d;
+        }}
+
+        /* Modal Styles */
+        .modal {{
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }}
+        .modal.active {{
+            display: flex;
+        }}
+        .modal-content {{
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }}
+        .modal-content h3 {{
+            margin-top: 0;
+            color: #e74c3c;
+        }}
+        .modal-buttons {{
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: flex-end;
+        }}
+
+        /* Status Styles */
+        .status-badge {{
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }}
+        .status-pending {{ background: #f39c12; color: white; }}
+        .status-sending {{ background: #3498db; color: white; }}
+        .status-completed {{ background: #27ae60; color: white; }}
+        .status-failed {{ background: #e74c3c; color: white; }}
+
+        .history-table {{
+            font-size: 0.9em;
+        }}
+        .history-table td {{
+            vertical-align: middle;
+        }}
+        .message-preview {{
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+
+        .progress-info {{
+            background: #e8f6ff;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 15px;
+            display: none;
+        }}
+        .progress-info.active {{
+            display: block;
+        }}
     </style>
 </head>
 <body>
@@ -259,7 +679,257 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </table>
     </div>
 
+    <!-- Broadcast Section -->
+    <div class="broadcast-section">
+        <h2>📢 Broadcast Message</h2>
+
+        <div class="form-group">
+            <label for="audience">Select Audience</label>
+            <select id="audience" onchange="updatePreview()">
+                <option value="all">All Users</option>
+                <option value="free">Free Tier Only</option>
+                <option value="premium">Premium Only</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="message">Message Content</label>
+            <textarea id="message" placeholder="Type your broadcast message here..." oninput="updatePreview()"></textarea>
+            <small style="color: #7f8c8d;">Character count: <span id="charCount">0</span>/160 (SMS segment)</small>
+        </div>
+
+        <div class="preview-box">
+            <div><strong>Preview:</strong></div>
+            <div style="margin: 10px 0; padding: 10px; background: white; border-radius: 4px;">
+                <span id="messagePreview" style="color: #7f8c8d; font-style: italic;">Your message will appear here...</span>
+            </div>
+            <div>This will send to <span id="recipientCount" class="count">0</span> users</div>
+        </div>
+
+        <div class="progress-info" id="progressInfo">
+            <strong>Broadcast Status:</strong>
+            <div id="progressText">Sending...</div>
+        </div>
+
+        <button class="btn btn-primary" id="sendBtn" onclick="showConfirmModal()" disabled>
+            Send Broadcast
+        </button>
+    </div>
+
+    <!-- Broadcast History -->
+    <div class="section">
+        <h2>Broadcast History</h2>
+        <table class="history-table" id="historyTable">
+            <tr>
+                <th>Date</th>
+                <th>Audience</th>
+                <th>Message</th>
+                <th>Recipients</th>
+                <th>Success</th>
+                <th>Failed</th>
+                <th>Status</th>
+            </tr>
+            <tr id="historyLoading">
+                <td colspan="7" style="color: #95a5a6; text-align: center;">Loading history...</td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content">
+            <h3>⚠️ Confirm Broadcast</h3>
+            <p>You are about to send the following message to <strong id="modalCount">0</strong> users:</p>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 15px 0;">
+                <em id="modalMessage"></em>
+            </div>
+            <p style="color: #e74c3c;"><strong>This action cannot be undone.</strong></p>
+            <div class="modal-buttons">
+                <button class="btn btn-secondary" onclick="hideConfirmModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="sendBroadcast()">Send Now</button>
+            </div>
+        </div>
+    </div>
+
     <p class="refresh-note">Refresh page to update metrics</p>
+
+    <script>
+        let audienceStats = {{ all: 0, free: 0, premium: 0 }};
+        let currentBroadcastId = null;
+
+        // Load stats on page load
+        async function loadStats() {{
+            try {{
+                const response = await fetch('/admin/broadcast/stats');
+                audienceStats = await response.json();
+                updatePreview();
+            }} catch (e) {{
+                console.error('Error loading stats:', e);
+            }}
+        }}
+
+        // Load broadcast history
+        async function loadHistory() {{
+            try {{
+                const response = await fetch('/admin/broadcast/history');
+                const history = await response.json();
+
+                const table = document.getElementById('historyTable');
+                const loadingRow = document.getElementById('historyLoading');
+                if (loadingRow) loadingRow.remove();
+
+                if (history.length === 0) {{
+                    const row = table.insertRow(-1);
+                    row.innerHTML = '<td colspan="7" style="color: #95a5a6; text-align: center;">No broadcasts yet</td>';
+                    return;
+                }}
+
+                history.forEach(b => {{
+                    const row = table.insertRow(-1);
+                    const date = new Date(b.created_at).toLocaleString();
+                    const statusClass = 'status-' + b.status;
+                    row.innerHTML = `
+                        <td>${{date}}</td>
+                        <td>${{b.audience}}</td>
+                        <td class="message-preview" title="${{b.message}}">${{b.message}}</td>
+                        <td>${{b.recipient_count}}</td>
+                        <td style="color: #27ae60;">${{b.success_count}}</td>
+                        <td style="color: #e74c3c;">${{b.fail_count}}</td>
+                        <td><span class="status-badge ${{statusClass}}">${{b.status}}</span></td>
+                    `;
+                }});
+            }} catch (e) {{
+                console.error('Error loading history:', e);
+            }}
+        }}
+
+        function updatePreview() {{
+            const audience = document.getElementById('audience').value;
+            const message = document.getElementById('message').value;
+
+            // Update character count
+            document.getElementById('charCount').textContent = message.length;
+
+            // Update message preview
+            const preview = document.getElementById('messagePreview');
+            if (message.trim()) {{
+                preview.textContent = message;
+                preview.style.color = '#2c3e50';
+                preview.style.fontStyle = 'normal';
+            }} else {{
+                preview.textContent = 'Your message will appear here...';
+                preview.style.color = '#7f8c8d';
+                preview.style.fontStyle = 'italic';
+            }}
+
+            // Update recipient count
+            const count = audienceStats[audience] || 0;
+            document.getElementById('recipientCount').textContent = count;
+
+            // Enable/disable send button
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = !message.trim() || count === 0;
+        }}
+
+        function showConfirmModal() {{
+            const audience = document.getElementById('audience').value;
+            const message = document.getElementById('message').value;
+            const count = audienceStats[audience] || 0;
+
+            document.getElementById('modalCount').textContent = count;
+            document.getElementById('modalMessage').textContent = message;
+            document.getElementById('confirmModal').classList.add('active');
+        }}
+
+        function hideConfirmModal() {{
+            document.getElementById('confirmModal').classList.remove('active');
+        }}
+
+        async function sendBroadcast() {{
+            hideConfirmModal();
+
+            const audience = document.getElementById('audience').value;
+            const message = document.getElementById('message').value;
+            const sendBtn = document.getElementById('sendBtn');
+            const progressInfo = document.getElementById('progressInfo');
+            const progressText = document.getElementById('progressText');
+
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
+            progressInfo.classList.add('active');
+            progressText.textContent = 'Starting broadcast...';
+
+            try {{
+                const response = await fetch('/admin/broadcast/send', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{ message, audience }})
+                }});
+
+                const result = await response.json();
+
+                if (response.ok) {{
+                    currentBroadcastId = result.broadcast_id;
+                    progressText.textContent = `Broadcast started! Sending to ${{result.recipient_count}} recipients...`;
+
+                    // Poll for status updates
+                    pollBroadcastStatus(result.broadcast_id);
+                }} else {{
+                    progressText.textContent = `Error: ${{result.detail || 'Unknown error'}}`;
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = 'Send Broadcast';
+                }}
+            }} catch (e) {{
+                progressText.textContent = `Error: ${{e.message}}`;
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send Broadcast';
+            }}
+        }}
+
+        async function pollBroadcastStatus(broadcastId) {{
+            const progressText = document.getElementById('progressText');
+            const sendBtn = document.getElementById('sendBtn');
+            const progressInfo = document.getElementById('progressInfo');
+
+            try {{
+                const response = await fetch(`/admin/broadcast/status/${{broadcastId}}`);
+                const status = await response.json();
+
+                progressText.textContent = `Status: ${{status.status}} | Success: ${{status.success_count}} | Failed: ${{status.fail_count}}`;
+
+                if (status.status === 'sending' || status.status === 'pending') {{
+                    // Continue polling
+                    setTimeout(() => pollBroadcastStatus(broadcastId), 2000);
+                }} else {{
+                    // Completed or failed
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = 'Send Broadcast';
+                    document.getElementById('message').value = '';
+                    updatePreview();
+
+                    if (status.status === 'completed') {{
+                        progressText.innerHTML = `<span style="color: #27ae60;">✅ Broadcast completed! ${{status.success_count}} sent, ${{status.fail_count}} failed.</span>`;
+                    }} else {{
+                        progressText.innerHTML = `<span style="color: #e74c3c;">❌ Broadcast failed.</span>`;
+                    }}
+
+                    // Reload history
+                    setTimeout(() => {{
+                        location.reload();
+                    }}, 3000);
+                }}
+            }} catch (e) {{
+                console.error('Error polling status:', e);
+                setTimeout(() => pollBroadcastStatus(broadcastId), 5000);
+            }}
+        }}
+
+        // Initialize
+        loadStats();
+        loadHistory();
+    </script>
 </body>
 </html>
     """

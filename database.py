@@ -156,6 +156,22 @@ def init_db():
             )
         ''')
 
+        # Broadcast logs table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS broadcast_logs (
+                id SERIAL PRIMARY KEY,
+                sender TEXT NOT NULL,
+                message TEXT NOT NULL,
+                audience TEXT NOT NULL,
+                recipient_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                fail_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+        ''')
+
         # Add new columns to existing tables (migrations)
         # These will silently fail if columns already exist
         migrations = [
