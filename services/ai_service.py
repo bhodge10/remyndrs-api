@@ -274,19 +274,21 @@ For SHOWING A SPECIFIC LIST (user specifies which list):
     "response": "Format the list contents from USER'S LISTS above"
 }}
 
-For SHOWING THE CURRENT/LAST ACTIVE LIST (user says "show list" without specifying which):
+For SHOWING THE CURRENT/LAST ACTIVE LIST:
 {{
     "action": "show_current_list",
     "response": "Showing your current list"
 }}
-Note: Use show_current_list when user says "show list", "show my list", "what's on my list", "view list" (singular) WITHOUT specifying a list name. The system will show their last active list automatically.
+IMPORTANT: Use show_current_list when user says "show list" (SINGULAR), "show my list", "what's on my list", "view list", or just "list". This shows their last active list.
 
-For SHOWING ALL LISTS (user says "show lists", "my lists", "all lists"):
+For SHOWING ALL LISTS:
 {{
     "action": "show_all_lists",
     "response": "List all the user's lists with item counts"
 }}
-Note: Use show_all_lists when user says "lists" (plural), "all lists", "my lists", or "show all lists".
+Note: ONLY use show_all_lists when user explicitly says "lists" (PLURAL), "all lists", "all my lists", or "show all lists".
+
+CRITICAL: "show list" = show_current_list, "show lists" = show_all_lists
 
 For CHECKING OFF AN ITEM:
 {{

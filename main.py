@@ -21,7 +21,7 @@ import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import Depends
 from database import init_db, log_interaction
-from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone
+from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list
 from models.memory import save_memory, get_memories
 from models.reminder import save_reminder, get_user_reminders
 from models.list_model import (
@@ -671,7 +671,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
         elif ai_response["action"] == "show_current_list":
             # Show the last active list or fall back to showing all lists
-            last_active = user[19] if user and len(user) > 19 else None
+            last_active = get_last_active_list(phone_number)
             if last_active:
                 list_info = get_list_by_name(phone_number, last_active)
                 if list_info:

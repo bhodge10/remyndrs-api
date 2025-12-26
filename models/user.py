@@ -122,3 +122,33 @@ def get_user_timezone(phone_number):
     if user and user[5]:  # timezone column
         return user[5]
     return 'America/New_York'  # Default
+
+
+def get_last_active_list(phone_number):
+    """Get user's last active list name"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone
+            phone_hash = hash_phone(phone_number)
+            c.execute('SELECT last_active_list FROM users WHERE phone_hash = %s', (phone_hash,))
+            result = c.fetchone()
+            if not result:
+                c.execute('SELECT last_active_list FROM users WHERE phone_number = %s', (phone_number,))
+                result = c.fetchone()
+        else:
+            c.execute('SELECT last_active_list FROM users WHERE phone_number = %s', (phone_number,))
+            result = c.fetchone()
+
+        if result and result[0]:
+            return result[0]
+        return None
+    except Exception as e:
+        logger.error(f"Error getting last active list: {e}")
+        return None
+    finally:
+        if conn:
+            return_db_connection(conn)
