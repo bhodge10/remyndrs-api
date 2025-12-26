@@ -719,17 +719,47 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     else:
                         reply_text = f"Your {list_info[1]} is empty."
                 else:
-                    # Last active list was deleted, show all lists
+                    # Last active list was deleted, show all lists (or single list directly)
                     lists = get_lists(phone_number)
-                    if lists:
+                    if len(lists) == 1:
+                        list_id = lists[0][0]
+                        list_name = lists[0][1]
+                        create_or_update_user(phone_number, last_active_list=list_name)
+                        items = get_list_items(list_id)
+                        if items:
+                            item_lines = []
+                            for i, (item_id, item_text, completed) in enumerate(items, 1):
+                                if completed:
+                                    item_lines.append(f"{i}. [x] {item_text}")
+                                else:
+                                    item_lines.append(f"{i}. {item_text}")
+                            reply_text = f"{list_name}:\n\n" + "\n".join(item_lines)
+                        else:
+                            reply_text = f"Your {list_name} is empty."
+                    elif lists:
                         list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
                         reply_text = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
                     else:
                         reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
             else:
-                # No last active list, show all lists
+                # No last active list, show all lists (or single list directly)
                 lists = get_lists(phone_number)
-                if lists:
+                if len(lists) == 1:
+                    list_id = lists[0][0]
+                    list_name = lists[0][1]
+                    create_or_update_user(phone_number, last_active_list=list_name)
+                    items = get_list_items(list_id)
+                    if items:
+                        item_lines = []
+                        for i, (item_id, item_text, completed) in enumerate(items, 1):
+                            if completed:
+                                item_lines.append(f"{i}. [x] {item_text}")
+                            else:
+                                item_lines.append(f"{i}. {item_text}")
+                        reply_text = f"{list_name}:\n\n" + "\n".join(item_lines)
+                    else:
+                        reply_text = f"Your {list_name} is empty."
+                elif lists:
                     list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
                     reply_text = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
                 else:
@@ -738,7 +768,23 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
         elif ai_response["action"] == "show_all_lists":
             lists = get_lists(phone_number)
-            if lists:
+            if len(lists) == 1:
+                # Only one list, show it directly
+                list_id = lists[0][0]
+                list_name = lists[0][1]
+                create_or_update_user(phone_number, last_active_list=list_name)
+                items = get_list_items(list_id)
+                if items:
+                    item_lines = []
+                    for i, (item_id, item_text, completed) in enumerate(items, 1):
+                        if completed:
+                            item_lines.append(f"{i}. [x] {item_text}")
+                        else:
+                            item_lines.append(f"{i}. {item_text}")
+                    reply_text = f"{list_name}:\n\n" + "\n".join(item_lines)
+                else:
+                    reply_text = f"Your {list_name} is empty."
+            elif lists:
                 list_lines = []
                 for i, (list_id, list_name, item_count, completed_count) in enumerate(lists, 1):
                     list_lines.append(f"{i}. {list_name} ({item_count} items)")
