@@ -139,6 +139,50 @@ def get_daily_signups(days=30):
             return_db_connection(conn)
 
 
+def get_new_user_counts():
+    """Get new user counts for today, this week, and this month"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Today
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE DATE(created_at) = CURRENT_DATE
+            AND onboarding_complete = TRUE
+        ''')
+        today = c.fetchone()[0]
+
+        # This week (last 7 days)
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            AND onboarding_complete = TRUE
+        ''')
+        this_week = c.fetchone()[0]
+
+        # This month (last 30 days)
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE created_at >= NOW() - INTERVAL '30 days'
+            AND onboarding_complete = TRUE
+        ''')
+        this_month = c.fetchone()[0]
+
+        return {
+            'today': today,
+            'this_week': this_week,
+            'this_month': this_month
+        }
+    except Exception as e:
+        logger.error(f"Error getting new user counts: {e}")
+        return {'today': 0, 'this_week': 0, 'this_month': 0}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_premium_stats():
     """Get premium vs free user counts"""
     conn = None
@@ -306,6 +350,7 @@ def get_all_metrics():
             'total_users': total_users,
             'active_7d': get_active_users(7),
             'active_30d': get_active_users(30),
+            'new_users': get_new_user_counts(),
             'premium_stats': get_premium_stats(),
             'reminder_stats': get_reminder_completion_rate(),
             'engagement': get_engagement_stats(),

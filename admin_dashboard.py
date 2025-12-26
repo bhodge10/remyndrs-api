@@ -441,6 +441,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     premium = metrics.get('premium_stats', {})
     reminder_stats = metrics.get('reminder_stats', {})
     engagement = metrics.get('engagement', {})
+    new_users = metrics.get('new_users', {})
 
     html = f"""
 <!DOCTYPE html>
@@ -777,6 +778,25 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             <div class="card-title">Premium Users</div>
             <div class="card-value">{premium.get('premium', 0)}</div>
             <div class="card-subtitle">free: {premium.get('free', 0)}</div>
+        </div>
+    </div>
+
+    <h2>New User Signups</h2>
+    <div class="cards">
+        <div class="card green">
+            <div class="card-title">Today</div>
+            <div class="card-value">{new_users.get('today', 0)}</div>
+            <div class="card-subtitle">new users</div>
+        </div>
+        <div class="card blue">
+            <div class="card-title">This Week</div>
+            <div class="card-value">{new_users.get('this_week', 0)}</div>
+            <div class="card-subtitle">last 7 days</div>
+        </div>
+        <div class="card orange">
+            <div class="card-title">This Month</div>
+            <div class="card-value">{new_users.get('this_month', 0)}</div>
+            <div class="card-subtitle">last 30 days</div>
         </div>
     </div>
 
