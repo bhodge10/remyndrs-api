@@ -461,6 +461,33 @@ async def debug_users(admin: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/admin/users/incomplete")
+async def delete_incomplete_users(admin: str = Depends(verify_admin)):
+    """Delete users who haven't completed onboarding"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # First count how many will be deleted
+        c.execute('SELECT COUNT(*) FROM users WHERE onboarding_complete = FALSE')
+        count = c.fetchone()[0]
+
+        # Delete incomplete users
+        c.execute('DELETE FROM users WHERE onboarding_complete = FALSE')
+        conn.commit()
+        return_db_connection(conn)
+
+        logger.info(f"Deleted {count} incomplete user(s)")
+        return JSONResponse(content={
+            "success": True,
+            "deleted_count": count,
+            "message": f"Deleted {count} incomplete user(s)"
+        })
+    except Exception as e:
+        logger.error(f"Error deleting incomplete users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =====================================================
 # DASHBOARD UI
 # =====================================================
@@ -872,6 +899,19 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             color: white;
             border-color: #27ae60;
         }}
+        .cleanup-btn {{
+            margin-top: 10px;
+            padding: 5px 10px;
+            font-size: 0.75em;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }}
+        .cleanup-btn:hover {{
+            background: #c0392b;
+        }}
     </style>
 </head>
 <body>
@@ -887,6 +927,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             <div class="card-title">Pending Onboarding</div>
             <div class="card-value">{metrics.get('pending_onboarding', 0)}</div>
             <div class="card-subtitle">started but not finished</div>
+            <button class="cleanup-btn" onclick="cleanupIncomplete()">Clean Up</button>
         </div>
         <div class="card green">
             <div class="card-title">Active (7 days)</div>
@@ -1445,6 +1486,22 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         loadHistory();
         loadFeedback();
         loadCostData();
+
+        async function cleanupIncomplete() {{
+            if (!confirm('Delete all users who have not completed onboarding?')) return;
+
+            try {{
+                const response = await fetch('/admin/users/incomplete', {{
+                    method: 'DELETE',
+                    headers: {{ 'Authorization': 'Basic ' + btoa('{ADMIN_USERNAME}:{ADMIN_PASSWORD}') }}
+                }});
+                const data = await response.json();
+                alert(data.message);
+                location.reload();
+            }} catch (err) {{
+                alert('Error: ' + err.message);
+            }}
+        }}
     </script>
 </body>
 </html>
