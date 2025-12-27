@@ -40,6 +40,14 @@ from utils.formatting import get_help_text, format_reminders_list
 from utils.validation import mask_phone_number, validate_list_name, validate_item_text, validate_message, log_security_event
 from admin_dashboard import router as dashboard_router
 
+
+def staging_prefix(message):
+    """Add [STAGING] prefix to messages when in staging environment"""
+    if ENVIRONMENT == "staging":
+        return f"[STAGING] {message}"
+    return message
+
+
 # Snooze duration parser
 def parse_snooze_duration(text):
     """
@@ -239,7 +247,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # Check rate limit
         if not check_rate_limit(phone_number):
             resp = MessagingResponse()
-            resp.message("You're sending messages too quickly. Please wait a moment and try again.")
+            resp.message(staging_prefix("You're sending messages too quickly. Please wait a moment and try again."))
             return Response(content=str(resp), media_type="application/xml")
 
         logger.info(f"Received from {mask_phone_number(phone_number)}: {incoming_msg[:50]}...")
@@ -267,7 +275,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             )
 
             resp = MessagingResponse()
-            resp.message("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?")
+            resp.message(staging_prefix("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?"))
             log_interaction(phone_number, incoming_msg, "Account reset", "reset", True)
             return Response(content=str(resp), media_type="application/xml")
 
@@ -329,13 +337,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
                 log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", True)
                 resp = MessagingResponse()
-                resp.message(reply_text)
+                resp.message(staging_prefix(reply_text))
                 return Response(content=str(resp), media_type="application/xml")
 
             except Exception as e:
                 logger.error(f"Error processing time: {e}")
                 resp = MessagingResponse()
-                resp.message("Sorry, I had trouble setting that reminder. Please try again.")
+                resp.message(staging_prefix("Sorry, I had trouble setting that reminder. Please try again."))
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
@@ -362,12 +370,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     create_or_update_user(phone_number, pending_reminder_delete=None)
 
                     resp = MessagingResponse()
-                    resp.message(reply_msg)
+                    resp.message(staging_prefix(reply_msg))
                     log_interaction(phone_number, incoming_msg, reply_msg, "delete_reminder_selected", True)
                     return Response(content=str(resp), media_type="application/xml")
                 else:
                     resp = MessagingResponse()
-                    resp.message(f"Please reply with a number between 1 and {len(reminder_options)}")
+                    resp.message(staging_prefix(f"Please reply with a number between 1 and {len(reminder_options)}"))
                     return Response(content=str(resp), media_type="application/xml")
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Error parsing pending reminder delete data: {e}")
@@ -1336,13 +1344,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
         # Send response
         resp = MessagingResponse()
-        resp.message(reply_text)
+        resp.message(staging_prefix(reply_text))
         return Response(content=str(resp), media_type="application/xml")
-    
+
     except Exception as e:
         logger.error(f"❌ CRITICAL ERROR in webhook: {e}", exc_info=True)
         resp = MessagingResponse()
-        resp.message("Sorry, something went wrong. Please try again in a moment.")
+        resp.message(staging_prefix("Sorry, something went wrong. Please try again in a moment."))
         return Response(content=str(resp), media_type="application/xml")
 
 # =====================================================
