@@ -429,6 +429,38 @@ async def get_costs(admin: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail="Error getting cost analytics")
 
 
+@router.get("/admin/debug/users")
+async def debug_users(admin: str = Depends(verify_admin)):
+    """Debug endpoint to check user onboarding status"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT phone_number, first_name, onboarding_complete, onboarding_step, created_at
+            FROM users
+            ORDER BY created_at DESC
+            LIMIT 20
+        ''')
+        users = c.fetchall()
+        return_db_connection(conn)
+
+        return JSONResponse(content={
+            "users": [
+                {
+                    "phone": u[0][-4:] if u[0] else "N/A",  # Last 4 digits only
+                    "first_name": u[1],
+                    "onboarding_complete": u[2],
+                    "onboarding_step": u[3],
+                    "created_at": str(u[4]) if u[4] else None
+                }
+                for u in users
+            ]
+        })
+    except Exception as e:
+        logger.error(f"Error in debug users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =====================================================
 # DASHBOARD UI
 # =====================================================
