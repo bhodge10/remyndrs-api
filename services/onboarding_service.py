@@ -39,6 +39,8 @@ Thank you for being part of our beta test!
 
 I help you remember details about your stuff and set reminders.
 
+Note: During beta, you may experience brief periods without replies or delayed reminders as we roll out updates.
+
 Let's get you set up - What's your first name?""")
 
         elif step == 1:
