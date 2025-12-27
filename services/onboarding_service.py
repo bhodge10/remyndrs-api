@@ -33,13 +33,13 @@ You're on step {step} of 4. Let's finish quickly:
         if step == 0:
             # Welcome message - ask for first name
             create_or_update_user(phone_number, onboarding_step=1)
-            resp.message("""Welcome! 👋
+            resp.message("""Welcome to Remyndrs! 👋
+
+Thank you for being part of our beta test!
 
 I help you remember details about your stuff and set reminders.
 
-Let's get you set up!
-
-What's your first name?""")
+Let's get you set up - What's your first name?""")
 
         elif step == 1:
             # Store first name, ask for last name
