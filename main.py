@@ -1035,7 +1035,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
                 # Format the time nicely
                 time_str = reminder_dt_local.strftime('%I:%M %p').lstrip('0')
-                date_str = reminder_dt_local.strftime('%A, %B %d')
+                date_str = reminder_dt_local.strftime('%A, %B %d, %Y')
 
                 reply_text = f"Got it! I'll remind you on {date_str} at {time_str} to {reminder_text}."
                 log_interaction(phone_number, incoming_msg, reply_text, "reminder_relative", True)
