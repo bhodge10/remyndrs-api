@@ -1868,9 +1868,19 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 outsideInfo.textContent = '';
             }}
 
-            // Enable/disable send button (based on in-window count)
+            // Enable/disable send button
+            // For scheduled broadcasts, don't require current in-window count
             const sendBtn = document.getElementById('sendBtn');
-            sendBtn.disabled = !message.trim() || inWindowCount === 0;
+            const isScheduled = document.getElementById('scheduleCheckbox').checked;
+            const hasMessage = message.trim().length > 0;
+
+            if (isScheduled) {{
+                // For scheduled: only need a message
+                sendBtn.disabled = !hasMessage;
+            }} else {{
+                // For immediate: need message AND users in window
+                sendBtn.disabled = !hasMessage || inWindowCount === 0;
+            }}
         }}
 
         function showConfirmModal() {{
@@ -2075,6 +2085,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 dateGroup.style.display = 'none';
                 sendBtn.textContent = 'Send Now';
             }}
+            // Update button enabled state
+            updatePreview();
         }}
 
         async function loadScheduledBroadcasts() {{
