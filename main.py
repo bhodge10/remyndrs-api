@@ -836,6 +836,20 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         normalized_msg = re.sub(r'\b(\d+):?(\d*)\s*(a\.?m\.?)\b', r'\1:\2AM', normalized_msg, flags=re.IGNORECASE)
         normalized_msg = re.sub(r'\b(\d+):?(\d*)\s*(p\.?m\.?)\b', r'\1:\2PM', normalized_msg, flags=re.IGNORECASE)
 
+        # Check for sensitive data BEFORE sending to AI (staging only)
+        if ENVIRONMENT == "staging":
+            sensitive_check = detect_sensitive_data(incoming_msg)
+            if sensitive_check['has_sensitive']:
+                log_security_event('SENSITIVE_DATA_BLOCKED', {
+                    'phone': phone_number,
+                    'action': 'pre_ai_check',
+                    'types': sensitive_check['types']
+                })
+                reply_text = get_sensitive_data_warning()
+                log_interaction(phone_number, incoming_msg, reply_text, "sensitive_blocked", False)
+                resp.message(staging_prefix(reply_text))
+                return Response(content=str(resp), media_type="application/xml")
+
         ai_response = process_with_ai(normalized_msg, phone_number, None)
         logger.info(f"AI response: {ai_response}")
 
