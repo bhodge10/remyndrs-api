@@ -94,13 +94,13 @@ def detect_sensitive_data(text: str) -> dict:
     # Remove common separators for pattern matching
     normalized = re.sub(r'[\s\-\.]', '', text)
 
-    # Credit Card Pattern: 16 consecutive digits
-    # Check formatted patterns in original text, and raw 16-digit sequences in normalized
+    # Credit Card Pattern: 13-19 consecutive digits (covers all card types)
+    # Amex: 15, Visa/MC/Discover: 16, some cards up to 19
     cc_pattern_formatted = r'\b\d{4}[\s\-\.]\d{4}[\s\-\.]\d{4}[\s\-\.]\d{4}\b'
-    # For normalized text, find any 16-digit sequence (not part of longer number)
-    cc_matches = re.findall(r'\d{16,}', normalized)
+    # For normalized text, find any 13-19 digit sequence
+    cc_matches = re.findall(r'\d{13,}', normalized)
 
-    if re.search(cc_pattern_formatted, text) or any(len(m) == 16 for m in cc_matches):
+    if re.search(cc_pattern_formatted, text) or any(13 <= len(m) <= 19 for m in cc_matches):
         detected.append('credit_card')
 
     # SSN Pattern: 9 consecutive digits (but not if part of longer number)
