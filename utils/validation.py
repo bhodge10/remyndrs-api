@@ -131,7 +131,8 @@ def get_sensitive_data_warning() -> str:
     return (
         "I detected what looks like a credit card number or Social Security Number. "
         "For your security, I can't store this type of sensitive financial or personal data. "
-        "Please don't send payment card numbers or SSNs via text."
+        "Please don't send payment card numbers or SSNs via text.\n\n"
+        "If you believe this is an error, please text FEEDBACK: (your message) and we'll review it."
     )
 
 
