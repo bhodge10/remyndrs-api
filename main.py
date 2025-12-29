@@ -1009,9 +1009,15 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     match = re.search(r'(\d+)', str(offset_minutes_raw))
                     offset_minutes = int(match.group(1)) if match else 15
 
-                # Cap at 30 days (43200 minutes)
-                offset_minutes = min(offset_minutes, 43200)
+                # Max 2 years (1,051,200 minutes)
+                MAX_REMINDER_MINUTES = 1051200
                 offset_minutes = max(offset_minutes, 1)  # Minimum 1 minute
+
+                # Check if exceeds 2 year limit
+                if offset_minutes > MAX_REMINDER_MINUTES:
+                    reply_text = "I can only set reminders up to 2 years in advance. Please try a shorter timeframe."
+                    log_interaction(phone_number, incoming_msg, reply_text, "reminder_exceeded_limit", False)
+                    return reply_text
 
                 logger.info(f"reminder_relative: parsed offset_minutes={offset_minutes}")
 
