@@ -32,7 +32,7 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: PYTHON_VERSION
-        value: "3.11"
+        value: "3.11.9"
     healthCheckPath: /
     autoDeploy: true
 
@@ -60,7 +60,7 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: PYTHON_VERSION
-        value: "3.11"
+        value: "3.11.9"
     autoDeploy: true
 
   # Celery Beat - Schedules periodic reminder checks
@@ -87,5 +87,5 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: PYTHON_VERSION
-        value: "3.11"
+        value: "3.11.9"
     autoDeploy: true
