@@ -19,7 +19,7 @@ from services.sms_service import send_sms
 from database import (
     get_db_connection, return_db_connection, get_setting, set_setting,
     get_recent_logs, get_flagged_conversations, mark_analysis_reviewed,
-    manual_flag_conversation
+    manual_flag_conversation, mark_conversation_good, get_good_conversations
 )
 from config import ADMIN_USERNAME, ADMIN_PASSWORD, logger
 from utils.validation import log_security_event
@@ -842,11 +842,12 @@ async def get_conversations(
     offset: int = 0,
     phone: Optional[str] = None,
     intent: Optional[str] = None,
+    hide_reviewed: bool = True,
     admin: str = Depends(verify_admin)
 ):
     """Get recent conversation logs"""
     try:
-        logs = get_recent_logs(limit=limit, offset=offset, phone_filter=phone, intent_filter=intent)
+        logs = get_recent_logs(limit=limit, offset=offset, phone_filter=phone, intent_filter=intent, hide_reviewed=hide_reviewed)
         return JSONResponse(content=logs)
     except Exception as e:
         logger.error(f"Error getting conversations: {e}")
@@ -897,6 +898,43 @@ class ManualFlagRequest(BaseModel):
     phone_number: str
     issue_type: str
     notes: str
+
+
+class MarkGoodRequest(BaseModel):
+    log_id: int
+    phone_number: str
+    notes: Optional[str] = ""
+
+
+@router.post("/admin/conversations/good")
+async def mark_good(request: MarkGoodRequest, admin: str = Depends(verify_admin)):
+    """Mark a conversation as good/accurate"""
+    try:
+        success = mark_conversation_good(
+            log_id=request.log_id,
+            phone_number=request.phone_number,
+            notes=request.notes
+        )
+        if success:
+            return JSONResponse(content={"success": True})
+        else:
+            raise HTTPException(status_code=500, detail="Failed to mark as good")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking conversation as good: {e}")
+        raise HTTPException(status_code=500, detail="Error marking as good")
+
+
+@router.get("/admin/conversations/good")
+async def get_good(admin: str = Depends(verify_admin)):
+    """Get conversations marked as good"""
+    try:
+        good = get_good_conversations(limit=50)
+        return JSONResponse(content=good)
+    except Exception as e:
+        logger.error(f"Error getting good conversations: {e}")
+        raise HTTPException(status_code=500, detail="Error getting good conversations")
 
 
 @router.post("/admin/conversations/flag")
@@ -1811,6 +1849,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <!-- Recent Conversations Tab -->
         <div id="recentTab">
             <div class="conversation-filters">
+                <button class="btn" id="toggleReviewedBtn" style="background: #27ae60; color: white;" onclick="toggleHideReviewed()">Show Reviewed</button>
                 <input type="text" id="phoneFilter" placeholder="Filter by phone (last 4 digits)..." style="width: 180px;">
                 <select id="intentFilter" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
                     <option value="">All Intents</option>
@@ -2668,6 +2707,21 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         // Conversation Viewer Functions
         let currentOffset = 0;
         const PAGE_SIZE = 50;
+        let hideReviewed = true;  // Default to hiding reviewed conversations
+
+        function toggleHideReviewed() {{
+            hideReviewed = !hideReviewed;
+            const btn = document.getElementById('toggleReviewedBtn');
+            if (hideReviewed) {{
+                btn.textContent = 'Show Reviewed';
+                btn.style.background = '#27ae60';
+            }} else {{
+                btn.textContent = 'Hide Reviewed';
+                btn.style.background = '#95a5a6';
+            }}
+            currentOffset = 0;
+            loadConversations();
+        }}
 
         function showConversationTab(tab) {{
             document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
@@ -2696,7 +2750,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
 
             try {{
-                let url = `/admin/conversations?limit=${{PAGE_SIZE}}&offset=${{currentOffset}}`;
+                let url = `/admin/conversations?limit=${{PAGE_SIZE}}&offset=${{currentOffset}}&hide_reviewed=${{hideReviewed}}`;
                 if (phone) {{
                     url += `&phone=${{encodeURIComponent(phone)}}`;
                 }}
@@ -2723,19 +2777,28 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                         const intentBadge = c.intent ? `<span class="intent-badge">${{c.intent}}</span>` : '-';
                         const msgInEscaped = escapeHtml(c.message_in).replace(/'/g, "\\'").replace(/"/g, "&quot;");
                         const msgOutEscaped = escapeHtml(c.message_out).replace(/'/g, "\\'").replace(/"/g, "&quot;");
-                        const isFlagged = c.is_flagged;
+                        const reviewStatus = c.review_status;
 
-                        // Highlight flagged rows
-                        if (isFlagged) {{
-                            row.style.background = '#fef3e2';
+                        // Highlight based on review status
+                        if (reviewStatus === 'good') {{
+                            row.style.background = '#e8f5e9';  // Light green for good
+                        }} else if (reviewStatus) {{
+                            row.style.background = '#fef3e2';  // Light orange for flagged
                         }}
 
-                        const actionButton = isFlagged
-                            ? '<span style="color: #e67e22; font-size: 0.85em;">Flagged</span>'
-                            : `<button class="btn" style="padding: 4px 8px; font-size: 0.8em; background: #e67e22; color: white;"
-                                    onclick="showFlagModal(${{c.id}}, '${{c.phone_number}}', '${{msgInEscaped}}', '${{msgOutEscaped}}')">
-                                    Flag
-                                </button>`;
+                        let actionButtons;
+                        if (reviewStatus === 'good') {{
+                            actionButtons = '<span style="color: #27ae60; font-size: 0.85em;">Good</span>';
+                        }} else if (reviewStatus) {{
+                            actionButtons = '<span style="color: #e67e22; font-size: 0.85em;">Flagged</span>';
+                        }} else {{
+                            actionButtons = `
+                                <button class="btn" style="padding: 3px 6px; font-size: 0.75em; background: #27ae60; color: white; margin-right: 3px;"
+                                    onclick="markAsGood(${{c.id}}, '${{c.phone_number}}')">Good</button>
+                                <button class="btn" style="padding: 3px 6px; font-size: 0.75em; background: #e67e22; color: white;"
+                                    onclick="showFlagModal(${{c.id}}, '${{c.phone_number}}', '${{msgInEscaped}}', '${{msgOutEscaped}}')">Flag</button>
+                            `;
+                        }}
 
                         row.innerHTML = `
                             <td>${{date}}</td>
@@ -2743,7 +2806,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                             <td><div class="msg-in">${{escapeHtml(c.message_in)}}</div></td>
                             <td><div class="msg-out">${{escapeHtml(c.message_out)}}</div></td>
                             <td>${{intentBadge}}</td>
-                            <td>${{actionButton}}</td>
+                            <td>${{actionButtons}}</td>
                         `;
                     }});
                 }}
@@ -2895,32 +2958,52 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         // Store flagged data for export
         let flaggedData = [];
 
-        // Export flagged conversations for sharing with Claude
-        function exportFlagged() {{
-            if (flaggedData.length === 0) {{
-                alert('No flagged conversations to export');
+        // Export flagged and good conversations for sharing with Claude
+        async function exportFlagged() {{
+            // Get flagged items (already in flaggedData)
+            const unreviewedFlagged = flaggedData.filter(f => !f.reviewed && f.issue_type !== 'good');
+
+            // Fetch good conversations
+            let goodConversations = [];
+            try {{
+                const response = await fetch('/admin/conversations/good');
+                if (response.ok) {{
+                    goodConversations = await response.json();
+                }}
+            }} catch (e) {{
+                console.error('Error fetching good conversations:', e);
+            }}
+
+            if (unreviewedFlagged.length === 0 && goodConversations.length === 0) {{
+                alert('No flagged or good conversations to export');
                 return;
             }}
 
-            // Filter to only unreviewed items
-            const unreviewedItems = flaggedData.filter(f => !f.reviewed);
+            let exportText = `## Conversation Review for AI Improvement\\n\\n`;
 
-            if (unreviewedItems.length === 0) {{
-                alert('No unreviewed flagged conversations to export');
-                return;
+            // Add good conversations section
+            if (goodConversations.length > 0) {{
+                exportText += `### Good Conversations (preserve this behavior)\\n\\n`;
+                goodConversations.slice(0, 10).forEach((g, i) => {{
+                    exportText += `**${{i + 1}}. User:** ${{g.message_in}}\\n`;
+                    exportText += `**System:** ${{g.message_out}}\\n`;
+                    if (g.intent) exportText += `*Intent: ${{g.intent}}*\\n`;
+                    exportText += `\\n`;
+                }});
             }}
 
-            let exportText = `## Flagged Conversations for Review\\n\\n`;
-            exportText += `I have ${{unreviewedItems.length}} flagged conversation(s) that need improvement:\\n\\n`;
+            // Add flagged conversations section
+            if (unreviewedFlagged.length > 0) {{
+                exportText += `### Flagged Conversations (need improvement)\\n\\n`;
+                unreviewedFlagged.forEach((f, i) => {{
+                    exportText += `**${{i + 1}}. Issue:** ${{f.issue_type.replace(/_/g, ' ')}} (${{f.severity}})\\n`;
+                    exportText += `**User:** ${{f.message_in}}\\n`;
+                    exportText += `**System:** ${{f.message_out}}\\n`;
+                    exportText += `**Problem:** ${{f.ai_explanation}}\\n\\n`;
+                }});
+            }}
 
-            unreviewedItems.forEach((f, i) => {{
-                exportText += `### Issue ${{i + 1}}: ${{f.issue_type.replace(/_/g, ' ')}} (${{f.severity}})\\n`;
-                exportText += `**User said:** ${{f.message_in}}\\n`;
-                exportText += `**System replied:** ${{f.message_out}}\\n`;
-                exportText += `**Problem:** ${{f.ai_explanation}}\\n\\n`;
-            }});
-
-            exportText += `---\\nCan you help improve the AI to handle these cases better?`;
+            exportText += `---\\nPlease help improve the AI to handle the flagged cases better while preserving the good behavior.`;
 
             // Copy to clipboard
             navigator.clipboard.writeText(exportText).then(() => {{
@@ -2944,6 +3027,30 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 alert('Copy the text from the textarea, then click anywhere to close it.');
                 textarea.addEventListener('blur', () => textarea.remove());
             }});
+        }}
+
+        // Mark as Good Function
+        async function markAsGood(logId, phone) {{
+            try {{
+                const response = await fetch('/admin/conversations/good', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        log_id: logId,
+                        phone_number: phone,
+                        notes: ''
+                    }})
+                }});
+
+                if (response.ok) {{
+                    loadConversations();  // Refresh to update status
+                }} else {{
+                    alert('Error marking as good');
+                }}
+            }} catch (e) {{
+                console.error('Error:', e);
+                alert('Error marking as good');
+            }}
         }}
 
         // Manual Flag Functions

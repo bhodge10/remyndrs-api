@@ -435,7 +435,7 @@ def set_setting(key, value):
             return_db_connection(conn)
 
 
-def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None):
+def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None, hide_reviewed=False):
     """Get recent conversation logs for viewing"""
     conn = None
     try:
@@ -443,10 +443,10 @@ def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None):
         c = conn.cursor()
 
         # Build query dynamically based on filters
-        # Include subquery to check if log is already flagged
+        # Include subquery to check review status (flagged or marked good)
         query = '''
             SELECT l.id, l.phone_number, l.message_in, l.message_out, l.intent, l.success, l.created_at, l.analyzed,
-                   EXISTS(SELECT 1 FROM conversation_analysis ca WHERE ca.log_id = l.id) as is_flagged
+                   (SELECT ca.issue_type FROM conversation_analysis ca WHERE ca.log_id = l.id LIMIT 1) as review_status
             FROM logs l
             WHERE 1=1
         '''
@@ -459,6 +459,9 @@ def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None):
         if intent_filter:
             query += ' AND l.intent = %s'
             params.append(intent_filter)
+
+        if hide_reviewed:
+            query += ' AND NOT EXISTS(SELECT 1 FROM conversation_analysis ca WHERE ca.log_id = l.id)'
 
         query += ' ORDER BY l.created_at DESC LIMIT %s OFFSET %s'
         params.extend([limit, offset])
@@ -475,7 +478,7 @@ def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None):
                 'success': row[5],
                 'created_at': row[6].isoformat() if row[6] else None,
                 'analyzed': row[7] if len(row) > 7 else False,
-                'is_flagged': row[8] if len(row) > 8 else False
+                'review_status': row[8] if len(row) > 8 else None  # 'good', issue_type, or None
             }
             for row in rows
         ]
@@ -647,6 +650,63 @@ def manual_flag_conversation(log_id, phone_number, issue_type, notes):
     except Exception as e:
         logger.error(f"Error manually flagging conversation: {e}")
         return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def mark_conversation_good(log_id, phone_number, notes=""):
+    """Mark a conversation as good/accurate"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO conversation_analysis (log_id, phone_number, issue_type, severity, ai_explanation, source)
+            VALUES (%s, %s, 'good', 'none', %s, 'manual')
+        ''', (log_id, phone_number, notes or 'Marked as good'))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error marking conversation as good: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_good_conversations(limit=50):
+    """Get conversations marked as good"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT ca.id, ca.log_id, ca.phone_number, ca.ai_explanation, ca.created_at,
+                   l.message_in, l.message_out, l.intent
+            FROM conversation_analysis ca
+            LEFT JOIN logs l ON ca.log_id = l.id
+            WHERE ca.issue_type = 'good'
+            ORDER BY ca.created_at DESC
+            LIMIT %s
+        ''', (limit,))
+        rows = c.fetchall()
+        return [
+            {
+                'id': row[0],
+                'log_id': row[1],
+                'phone_number': row[2],
+                'notes': row[3],
+                'created_at': row[4].isoformat() if row[4] else None,
+                'message_in': row[5],
+                'message_out': row[6],
+                'intent': row[7]
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"Error getting good conversations: {e}")
+        return []
     finally:
         if conn:
             return_db_connection(conn)
