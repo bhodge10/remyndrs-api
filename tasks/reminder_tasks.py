@@ -73,15 +73,21 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
 
     Uses exponential backoff for retries (30s, 60s, 120s, max 300s).
     IMPORTANT: Once SMS is sent, we do NOT retry even if subsequent operations fail.
+
+    CRITICAL: We hold the FOR UPDATE lock throughout the entire send+mark operation
+    to prevent race conditions where mark_reminder_sent fails and the reminder
+    gets picked up again.
     """
     from database import get_db_connection, return_db_connection
 
-    # Safety check: verify reminder hasn't already been sent (use FOR UPDATE to lock row)
     conn = get_db_connection()
     try:
         c = conn.cursor()
+
+        # Lock the row for the entire operation - prevents race conditions
         c.execute('SELECT sent FROM reminders WHERE id = %s FOR UPDATE', (reminder_id,))
         result = c.fetchone()
+
         if result and result[0]:
             logger.warning(f"Reminder {reminder_id} already sent, skipping duplicate")
             conn.commit()
@@ -89,33 +95,45 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
                 "reminder_id": reminder_id,
                 "status": "already_sent",
             }
-        conn.commit()
+
+        # Try to send SMS - if this fails, we CAN retry (rollback releases lock)
+        try:
+            logger.info(f"Sending reminder {reminder_id} to {phone_number}")
+
+            # Format message with snooze option
+            message = f"Reminder: {reminder_text}\n\n(Reply SNOOZE to snooze)"
+
+            # Send SMS via Twilio
+            send_sms(phone_number, message)
+
+        except Exception as exc:
+            # SMS failed - rollback to release lock, then retry
+            conn.rollback()
+            logger.exception(f"Error sending SMS for reminder {reminder_id}")
+            track_reminder_delivery(reminder_id, "failed", str(exc))
+            raise self.retry(exc=exc)
+
+        # SMS sent successfully - mark as sent IN THE SAME TRANSACTION
+        # This ensures the update happens while we still hold the lock
+        try:
+            c.execute('UPDATE reminders SET sent = TRUE WHERE id = %s', (reminder_id,))
+            conn.commit()
+            logger.info(f"Marked reminder {reminder_id} as sent")
+        except Exception as e:
+            # Even if commit fails, try again with a fresh connection
+            logger.error(f"Failed to mark reminder {reminder_id} as sent in transaction: {e}")
+            conn.rollback()
+            # Last-ditch effort with new connection
+            try:
+                mark_reminder_sent(reminder_id)
+            except Exception as e2:
+                logger.error(f"Also failed with separate connection: {e2}")
+                # At this point, SMS was sent but we couldn't mark it
+                # The stale claim release will eventually re-trigger it
+                # But at least we tried everything
+
     finally:
         return_db_connection(conn)
-
-    # Try to send SMS - if this fails, we CAN retry
-    try:
-        logger.info(f"Sending reminder {reminder_id} to {phone_number}")
-
-        # Format message with snooze option
-        message = f"Reminder: {reminder_text}\n\n(Reply SNOOZE to snooze)"
-
-        # Send SMS via Twilio
-        send_sms(phone_number, message)
-
-    except Exception as exc:
-        # SMS failed - safe to retry
-        logger.exception(f"Error sending SMS for reminder {reminder_id}")
-        track_reminder_delivery(reminder_id, "failed", str(exc))
-        raise self.retry(exc=exc)
-
-    # SMS sent successfully - mark as sent IMMEDIATELY
-    # After this point, we do NOT retry even if subsequent operations fail
-    try:
-        mark_reminder_sent(reminder_id)
-    except Exception as e:
-        # Log but don't retry - SMS was already sent!
-        logger.error(f"Failed to mark reminder {reminder_id} as sent (SMS was delivered): {e}")
 
     # These are nice-to-have, don't retry if they fail
     try:

@@ -1052,6 +1052,33 @@ async def get_user_reminders_admin(phone: str, admin: str = Depends(verify_admin
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/admin/reminder/{reminder_id}/mark-sent")
+async def mark_reminder_as_sent(reminder_id: int, admin: str = Depends(verify_admin)):
+    """Manually mark a reminder as sent (for fixing stuck reminders)"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            "UPDATE reminders SET sent = TRUE, claimed_at = NULL WHERE id = %s RETURNING id",
+            (reminder_id,)
+        )
+        result = c.fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        conn.commit()
+        logger.info(f"Admin manually marked reminder {reminder_id} as sent")
+        return {"success": True, "reminder_id": reminder_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking reminder as sent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 # =====================================================
 # PUBLIC CHANGELOG / UPDATES PAGE
 # =====================================================
