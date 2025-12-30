@@ -432,27 +432,33 @@ def set_setting(key, value):
             return_db_connection(conn)
 
 
-def get_recent_logs(limit=100, offset=0, phone_filter=None):
+def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None):
     """Get recent conversation logs for viewing"""
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
+
+        # Build query dynamically based on filters
+        query = '''
+            SELECT id, phone_number, message_in, message_out, intent, success, created_at, analyzed
+            FROM logs
+            WHERE 1=1
+        '''
+        params = []
+
         if phone_filter:
-            c.execute('''
-                SELECT id, phone_number, message_in, message_out, intent, success, created_at, analyzed
-                FROM logs
-                WHERE phone_number LIKE %s
-                ORDER BY created_at DESC
-                LIMIT %s OFFSET %s
-            ''', (f'%{phone_filter}%', limit, offset))
-        else:
-            c.execute('''
-                SELECT id, phone_number, message_in, message_out, intent, success, created_at, analyzed
-                FROM logs
-                ORDER BY created_at DESC
-                LIMIT %s OFFSET %s
-            ''', (limit, offset))
+            query += ' AND phone_number LIKE %s'
+            params.append(f'%{phone_filter}%')
+
+        if intent_filter:
+            query += ' AND intent = %s'
+            params.append(intent_filter)
+
+        query += ' ORDER BY created_at DESC LIMIT %s OFFSET %s'
+        params.extend([limit, offset])
+
+        c.execute(query, params)
         rows = c.fetchall()
         return [
             {

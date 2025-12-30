@@ -841,11 +841,12 @@ async def get_conversations(
     limit: int = 100,
     offset: int = 0,
     phone: Optional[str] = None,
+    intent: Optional[str] = None,
     admin: str = Depends(verify_admin)
 ):
     """Get recent conversation logs"""
     try:
-        logs = get_recent_logs(limit=limit, offset=offset, phone_filter=phone)
+        logs = get_recent_logs(limit=limit, offset=offset, phone_filter=phone, intent_filter=intent)
         return JSONResponse(content=logs)
     except Exception as e:
         logger.error(f"Error getting conversations: {e}")
@@ -1810,10 +1811,29 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <!-- Recent Conversations Tab -->
         <div id="recentTab">
             <div class="conversation-filters">
-                <input type="text" id="phoneFilter" placeholder="Filter by phone (last 4 digits)..." style="width: 200px;">
+                <input type="text" id="phoneFilter" placeholder="Filter by phone (last 4 digits)..." style="width: 180px;">
+                <select id="intentFilter" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <option value="">All Intents</option>
+                    <option value="store">Store</option>
+                    <option value="retrieve">Retrieve</option>
+                    <option value="reminder">Reminder</option>
+                    <option value="reminder_relative">Reminder (Relative)</option>
+                    <option value="list_reminders">List Reminders</option>
+                    <option value="delete_reminder">Delete Reminder</option>
+                    <option value="delete_memory">Delete Memory</option>
+                    <option value="create_list">Create List</option>
+                    <option value="add_to_list">Add to List</option>
+                    <option value="show_list">Show List</option>
+                    <option value="show_all_lists">Show All Lists</option>
+                    <option value="complete_item">Complete Item</option>
+                    <option value="delete_item">Delete Item</option>
+                    <option value="help">Help</option>
+                    <option value="clarify_time">Clarify Time</option>
+                    <option value="error">Error</option>
+                </select>
                 <button class="btn btn-primary" onclick="loadConversations()">Search</button>
                 <button class="btn btn-secondary" onclick="clearFilter()">Clear</button>
-                <span style="color: #7f8c8d; margin-left: auto;">Showing last <span id="conversationCount">0</span> conversations</span>
+                <span style="color: #7f8c8d; margin-left: auto;">Showing <span id="conversationCount">0</span> conversations</span>
             </div>
 
             <table class="conversation-table" id="conversationTable">
@@ -2665,18 +2685,22 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         async function loadConversations(offset = 0) {{
             currentOffset = Math.max(0, offset);
             const phone = document.getElementById('phoneFilter').value.trim();
+            const intent = document.getElementById('intentFilter').value;
             const table = document.getElementById('conversationTable');
             const loadingRow = document.getElementById('conversationLoading');
 
             // Show loading
             if (loadingRow) {{
-                loadingRow.innerHTML = '<td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td>';
+                loadingRow.innerHTML = '<td colspan="6" style="color: #95a5a6; text-align: center;">Loading...</td>';
             }}
 
             try {{
                 let url = `/admin/conversations?limit=${{PAGE_SIZE}}&offset=${{currentOffset}}`;
                 if (phone) {{
                     url += `&phone=${{encodeURIComponent(phone)}}`;
+                }}
+                if (intent) {{
+                    url += `&intent=${{encodeURIComponent(intent)}}`;
                 }}
 
                 const response = await fetch(url);
@@ -2730,6 +2754,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
 
         function clearFilter() {{
             document.getElementById('phoneFilter').value = '';
+            document.getElementById('intentFilter').value = '';
             currentOffset = 0;
             loadConversations();
         }}
