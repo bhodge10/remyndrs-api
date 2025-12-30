@@ -240,6 +240,29 @@ def init_db():
             )
         ''')
 
+        # Support tickets for premium users
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id SERIAL PRIMARY KEY,
+                phone_number TEXT NOT NULL,
+                status TEXT DEFAULT 'open',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Support messages (thread of messages for each ticket)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS support_messages (
+                id SERIAL PRIMARY KEY,
+                ticket_id INTEGER REFERENCES support_tickets(id) ON DELETE CASCADE,
+                phone_number TEXT NOT NULL,
+                message TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Add new columns to existing tables (migrations)
         # These will silently fail if columns already exist
         migrations = [

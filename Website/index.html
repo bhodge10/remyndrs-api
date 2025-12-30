@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Remyndrs - Never Forget Anything Again</title>
+    <meta name="description" content="Your personal memory assistant via SMS. Just text it, and we'll remember it for you.">
+    
+    <style>
+        :root {
+            --primary-blue: #4A90A4;
+            --success-green: #50B688;
+            --text-dark: #3D4F5C;
+            --bg-light: #f8f9fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            color: var(--text-dark);
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Header */
+        header {
+            background: white;
+            padding: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--primary-blue);
+        }
+        
+        nav a {
+            margin-left: 30px;
+            text-decoration: none;
+            color: var(--text-dark);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        nav a:hover {
+            color: var(--primary-blue);
+        }
+        
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, var(--primary-blue) 0%, #6BA8BC 100%);
+            color: white;
+            padding: 80px 0;
+            text-align: center;
+        }
+        
+        .hero h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+        
+        .hero p {
+            font-size: 24px;
+            margin-bottom: 40px;
+            opacity: 0.95;
+        }
+        
+        .beta-badge {
+            display: inline-block;
+            background: var(--success-green);
+            color: white;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-weight: 600;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: var(--success-green);
+            color: white;
+            padding: 16px 40px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 18px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(80, 182, 136, 0.4);
+        }
+        
+        .cta-white {
+            background: white;
+            color: var(--primary-blue);
+        }
+        
+        .cta-white:hover {
+            box-shadow: 0 4px 12px rgba(255, 255, 255, 0.3);
+        }
+        
+        /* QR Code Section - NEW */
+        .qr-section {
+            background: var(--bg-light);
+            padding: 60px 0;
+            text-align: center;
+        }
+        
+        .qr-section h2 {
+            font-size: 36px;
+            color: var(--text-dark);
+            margin-bottom: 20px;
+        }
+        
+        .qr-section p {
+            font-size: 18px;
+            color: var(--text-dark);
+            margin-bottom: 40px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .qr-container {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            display: inline-block;
+            max-width: 400px;
+        }
+        
+        .qr-container img {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+        }
+        
+        .qr-info {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid var(--bg-light);
+        }
+        
+        .qr-info p {
+            font-size: 16px;
+            color: var(--text-dark);
+            margin-bottom: 10px;
+        }
+        
+        .phone-number {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary-blue);
+            margin: 10px 0;
+        }
+        
+        /* How It Works */
+        .how-it-works {
+            padding: 80px 0;
+            background: white;
+        }
+        
+        .how-it-works h2 {
+            text-align: center;
+            font-size: 42px;
+            margin-bottom: 60px;
+            color: var(--text-dark);
+        }
+        
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px;
+        }
+        
+        .step {
+            text-align: center;
+        }
+        
+        .step-number {
+            width: 60px;
+            height: 60px;
+            background: var(--primary-blue);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 auto 20px;
+        }
+        
+        .step h3 {
+            font-size: 24px;
+            margin-bottom: 15px;
+            color: var(--text-dark);
+        }
+        
+        .step p {
+            font-size: 16px;
+            color: #666;
+        }
+        
+        /* SMS Example */
+        .sms-example {
+            background: var(--bg-light);
+            padding: 60px 0;
+        }
+        
+        .sms-example h2 {
+            text-align: center;
+            font-size: 36px;
+            margin-bottom: 40px;
+        }
+        
+        .conversation {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .message {
+            margin-bottom: 20px;
+            padding: 15px 20px;
+            border-radius: 18px;
+            max-width: 80%;
+        }
+        
+        .user-message {
+            background: var(--primary-blue);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+        
+        .bot-message {
+            background: #e9ecef;
+            color: var(--text-dark);
+        }
+        
+        /* Use Cases */
+        .use-cases {
+            padding: 80px 0;
+        }
+        
+        .use-cases h2 {
+            text-align: center;
+            font-size: 42px;
+            margin-bottom: 60px;
+        }
+        
+        .cases-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+        }
+        
+        .case {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .case:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .case-icon {
+            font-size: 40px;
+            margin-bottom: 20px;
+        }
+        
+        .case h3 {
+            font-size: 22px;
+            margin-bottom: 15px;
+            color: var(--primary-blue);
+        }
+        
+        .case p {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        /* Privacy Section */
+        .privacy {
+            background: var(--bg-light);
+            padding: 80px 0;
+        }
+        
+        .privacy h2 {
+            font-size: 42px;
+            margin-bottom: 40px;
+        }
+        
+        .privacy h3 {
+            font-size: 24px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            color: var(--primary-blue);
+        }
+        
+        .privacy p, .privacy ul {
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #666;
+            line-height: 1.8;
+        }
+        
+        .privacy ul {
+            padding-left: 30px;
+        }
+        
+        .privacy li {
+            margin-bottom: 10px;
+        }
+        
+        /* CTA Section */
+        .cta-section {
+            background: linear-gradient(135deg, var(--success-green) 0%, #6BCFA0 100%);
+            color: white;
+            padding: 80px 0;
+            text-align: center;
+        }
+        
+        .cta-section h2 {
+            font-size: 42px;
+            margin-bottom: 20px;
+        }
+        
+        .cta-section p {
+            font-size: 20px;
+            margin-bottom: 40px;
+            opacity: 0.95;
+        }
+        
+        /* Footer */
+        footer {
+            background: var(--text-dark);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+        }
+        
+        footer p {
+            opacity: 0.8;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 36px;
+            }
+            
+            .hero p {
+                font-size: 18px;
+            }
+            
+            nav {
+                display: none;
+            }
+            
+            .steps, .cases-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .qr-container {
+                max-width: 300px;
+                padding: 30px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">Remyndrs</div>
+                <nav>
+                    <a href="#how-it-works">How It Works</a>
+                    <a href="#use-cases">Use Cases</a>
+                    <a href="#privacy">Privacy</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="beta-badge">🚀 Now in Beta</div>
+            <h1>Never Forget Anything Again</h1>
+            <p>Your personal memory assistant via SMS. Just text it, and we'll remember it for you.</p>
+            <a href="sms:8555521950" class="cta-button">Text Us Now: (855) 552-1950</a>
+        </div>
+    </section>
+
+    <!-- QR Code Section - NEW -->
+    <section class="qr-section" id="qr-code">
+        <div class="container">
+            <h2>Scan to Get Started</h2>
+            <p>Point your phone camera at the QR code below to instantly start texting with Remyndrs</p>
+            
+            <div class="qr-container">
+                <!-- This QR code will automatically open SMS to your number -->
+                <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=sms:8555521950&bgcolor=f8f9fa&color=4A90A4&qzone=2" 
+                     alt="Scan to text Remyndrs"
+                     loading="lazy">
+                
+                <div class="qr-info">
+                    <p><strong>Scan with your phone camera</strong></p>
+                    <p>or text directly:</p>
+                    <div class="phone-number">(855) 552-1950</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works -->
+    <section class="how-it-works" id="how-it-works">
+        <div class="container">
+            <h2>How It Works</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <h3>Text Your Reminder</h3>
+                    <p>Send a message about anything you want to remember: appointments, tasks, or notes.</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <h3>We Process It</h3>
+                    <p>Our AI understands your message and schedules reminders automatically.</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <h3>Get Reminded</h3>
+                    <p>Receive a text at the perfect time. Never miss what matters.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- SMS Example -->
+    <section class="sms-example">
+        <div class="container">
+            <h2>See It In Action</h2>
+            <div class="conversation">
+                <div class="message user-message">
+                    Remind me to change the furnace filter in 3 months
+                </div>
+                <div class="message bot-message">
+                    ✓ Got it! I'll remind you to change the furnace filter on March 30, 2025
+                </div>
+                <div class="message user-message">
+                    What reminders do I have?
+                </div>
+                <div class="message bot-message">
+                    Here are your upcoming reminders:<br><br>
+                    • Change furnace filter - March 30<br>
+                    • Oil change for Honda - Jan 15<br>
+                    • Mom's birthday - Feb 8
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Use Cases -->
+    <section class="use-cases" id="use-cases">
+        <div class="container">
+            <h2>Perfect For...</h2>
+            <div class="cases-grid">
+                <div class="case">
+                    <div class="case-icon">🏠</div>
+                    <h3>Home Maintenance</h3>
+                    <p>HVAC filters, lawn care schedules, seasonal tasks</p>
+                </div>
+                <div class="case">
+                    <div class="case-icon">🚗</div>
+                    <h3>Vehicle Care</h3>
+                    <p>Oil changes, tire rotations, registration renewals</p>
+                </div>
+                <div class="case">
+                    <div class="case-icon">💊</div>
+                    <h3>Health Tracking</h3>
+                    <p>Medication refills, doctor appointments, prescriptions</p>
+                </div>
+                <div class="case">
+                    <div class="case-icon">🎂</div>
+                    <h3>Special Dates</h3>
+                    <p>Birthdays, anniversaries, important milestones</p>
+                </div>
+                <div class="case">
+                    <div class="case-icon">💼</div>
+                    <h3>Work Tasks</h3>
+                    <p>Follow-ups, deadlines, recurring meetings</p>
+                </div>
+                <div class="case">
+                    <div class="case-icon">📦</div>
+                    <h3>Random Notes</h3>
+                    <p>Where you stored things, product recommendations, random thoughts</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Privacy Policy -->
+    <section class="privacy" id="privacy">
+        <div class="container">
+            <h2>Your Privacy Matters</h2>
+            
+            <h3>What We Collect</h3>
+            <p>We only collect what's necessary to provide the service:</p>
+            <ul>
+                <li>Your phone number (to send/receive messages)</li>
+                <li>Your reminder text and scheduled times</li>
+                <li>Basic usage data to improve the service</li>
+            </ul>
+
+            <h3>How We Use Your Data</h3>
+            <p>Your information is used exclusively to:</p>
+            <ul>
+                <li>Send you the reminders you request</li>
+                <li>Improve our natural language processing</li>
+                <li>Provide customer support if needed</li>
+            </ul>
+
+            <h3>How We Protect Your Data</h3>
+            <ul>
+                <li><strong>Encryption:</strong> All data is encrypted in transit and at rest</li>
+                <li><strong>No Selling:</strong> We never sell your data. Ever.</li>
+                <li><strong>No Ads:</strong> We don't serve ads or share data with advertisers</li>
+                <li><strong>Minimal Retention:</strong> Completed reminders are automatically deleted after 90 days</li>
+            </ul>
+
+            <h3>Your Rights</h3>
+            <p>You have complete control:</p>
+            <ul>
+                <li>View all your data anytime (text "show all")</li>
+                <li>Delete specific reminders (text "delete [reminder]")</li>
+                <li>Delete your entire account (text "delete account")</li>
+                <li>Export your data (contact us at <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="31414358475052487143545c485f5543421f525e5c">[email&#160;protected]</a>)</li>
+            </ul>
+
+            <h3>Questions?</h3>
+            <p>Contact us at <strong>privacy@remyndrs.com</strong> or text "help" to (855) 552-1950</p>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>Ready to Remember Everything?</h2>
+            <p>Join our beta and never forget again</p>
+            <a href="sms:8555521950" class="cta-button cta-white">Text Us Now: (855) 552-1950</a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+   

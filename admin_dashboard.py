@@ -1314,6 +1314,71 @@ async def delete_changelog_entry(entry_id: int, admin: str = Depends(verify_admi
 
 
 # =====================================================
+# SUPPORT TICKET API ENDPOINTS
+# =====================================================
+
+class SupportReplyRequest(BaseModel):
+    message: str
+
+
+@router.get("/admin/support/tickets")
+async def get_support_tickets(include_closed: bool = False, admin: str = Depends(verify_admin)):
+    """Get all support tickets"""
+    from services.support_service import get_all_tickets
+    tickets = get_all_tickets(include_closed)
+    return tickets
+
+
+@router.get("/admin/support/tickets/{ticket_id}/messages")
+async def get_ticket_messages(ticket_id: int, admin: str = Depends(verify_admin)):
+    """Get all messages for a specific ticket"""
+    from services.support_service import get_ticket_messages
+    messages = get_ticket_messages(ticket_id)
+    return messages
+
+
+@router.post("/admin/support/tickets/{ticket_id}/reply")
+async def reply_to_support_ticket(ticket_id: int, request: SupportReplyRequest, admin: str = Depends(verify_admin)):
+    """Send a reply to a support ticket (sends SMS to user)"""
+    from services.support_service import reply_to_ticket
+
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    result = reply_to_ticket(ticket_id, request.message.strip())
+
+    if result['success']:
+        logger.info(f"Support reply sent to ticket #{ticket_id} by {admin}")
+        return {"message": "Reply sent successfully"}
+    else:
+        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to send reply'))
+
+
+@router.post("/admin/support/tickets/{ticket_id}/close")
+async def close_support_ticket(ticket_id: int, admin: str = Depends(verify_admin)):
+    """Close a support ticket"""
+    from services.support_service import close_ticket
+
+    if close_ticket(ticket_id):
+        logger.info(f"Support ticket #{ticket_id} closed by {admin}")
+        return {"message": "Ticket closed successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to close ticket")
+
+
+@router.post("/admin/support/tickets/{ticket_id}/reopen")
+async def reopen_support_ticket(ticket_id: int, admin: str = Depends(verify_admin)):
+    """Reopen a closed support ticket"""
+    from services.support_service import reopen_ticket
+
+    if reopen_ticket(ticket_id):
+        logger.info(f"Support ticket #{ticket_id} reopened by {admin}")
+        return {"message": "Ticket reopened successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to reopen ticket")
+
+
+# =====================================================
 # DASHBOARD UI
 # =====================================================
 
@@ -2221,6 +2286,47 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <h3>Recent Entries</h3>
         <div id="changelogEntries" style="max-height: 400px; overflow-y: auto;">
             <p style="color: #95a5a6;">Loading...</p>
+        </div>
+    </div>
+
+    <!-- Support Tickets Section -->
+    <div id="support" class="section section-anchor">
+        <h2>🎧 Support Tickets <span id="openTicketCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
+        <p style="color: #7f8c8d; margin-bottom: 15px;">
+            Premium users can text "Support: [message]" to create tickets. Replies are sent via SMS.
+        </p>
+
+        <div style="margin-bottom: 15px;">
+            <label style="margin-right: 10px;">
+                <input type="checkbox" id="showClosedTickets" onchange="loadSupportTickets()"> Show closed tickets
+            </label>
+        </div>
+
+        <div id="supportTicketsList" style="margin-bottom: 20px;">
+            <p style="color: #95a5a6;">Loading...</p>
+        </div>
+
+        <!-- Ticket Detail Modal -->
+        <div id="ticketModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+            <div style="background: white; max-width: 600px; margin: 50px auto; border-radius: 8px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
+                <div style="padding: 15px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0;" id="ticketModalTitle">Ticket #</h3>
+                    <button onclick="closeTicketModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
+                </div>
+                <div id="ticketMessages" style="flex: 1; overflow-y: auto; padding: 20px; background: #f5f6fa;">
+                    <!-- Messages will be loaded here -->
+                </div>
+                <div style="padding: 15px 20px; border-top: 1px solid #ddd; background: white;">
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="ticketReplyInput" placeholder="Type your reply..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                        <button onclick="sendTicketReply()" class="btn" style="background: #27ae60;">Send</button>
+                    </div>
+                    <div style="margin-top: 10px; display: flex; gap: 10px;">
+                        <button onclick="closeCurrentTicket()" id="closeTicketBtn" class="btn" style="background: #e74c3c;">Close Ticket</button>
+                        <button onclick="reopenCurrentTicket()" id="reopenTicketBtn" class="btn" style="background: #f39c12; display: none;">Reopen Ticket</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -3614,6 +3720,176 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        // Support ticket functions
+        let currentTicketId = null;
+        let currentTicketStatus = null;
+
+        async function loadSupportTickets() {{
+            try {{
+                const includeClosed = document.getElementById('showClosedTickets').checked;
+                const response = await fetch(`/admin/support/tickets?include_closed=${{includeClosed}}`);
+                const tickets = await response.json();
+
+                const container = document.getElementById('supportTicketsList');
+                const openCount = tickets.filter(t => t.status === 'open').length;
+                document.getElementById('openTicketCount').textContent = openCount > 0 ? `(${{openCount}} open)` : '';
+
+                if (tickets.length === 0) {{
+                    container.innerHTML = '<p style="color: #95a5a6;">No support tickets yet.</p>';
+                    return;
+                }}
+
+                container.innerHTML = tickets.map(t => {{
+                    const statusColor = t.status === 'open' ? '#27ae60' : '#95a5a6';
+                    const date = new Date(t.updated_at).toLocaleString();
+                    return `
+                        <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 10px; cursor: pointer; border-left: 4px solid ${{statusColor}};" onclick="openTicketModal(${{t.id}}, '${{t.status}}')">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <strong>#${{t.id}}</strong> - ${{t.user_name || 'Unknown'}} (...${{t.phone_number.slice(-4)}})
+                                    <span style="background: ${{statusColor}}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; margin-left: 10px;">${{t.status}}</span>
+                                </div>
+                                <span style="color: #7f8c8d; font-size: 0.85em;">${{t.message_count}} messages</span>
+                            </div>
+                            <div style="color: #666; font-size: 0.9em; margin-top: 8px;">${{t.last_message || 'No messages'}}</div>
+                            <div style="color: #95a5a6; font-size: 0.8em; margin-top: 5px;">Last updated: ${{date}}</div>
+                        </div>
+                    `;
+                }}).join('');
+            }} catch (e) {{
+                console.error('Error loading support tickets:', e);
+                document.getElementById('supportTicketsList').innerHTML = '<p style="color: #e74c3c;">Error loading tickets</p>';
+            }}
+        }}
+
+        async function openTicketModal(ticketId, status) {{
+            currentTicketId = ticketId;
+            currentTicketStatus = status;
+            document.getElementById('ticketModalTitle').textContent = `Ticket #${{ticketId}}`;
+            document.getElementById('ticketModal').style.display = 'block';
+
+            // Show/hide close/reopen buttons based on status
+            document.getElementById('closeTicketBtn').style.display = status === 'open' ? 'block' : 'none';
+            document.getElementById('reopenTicketBtn').style.display = status === 'closed' ? 'block' : 'none';
+
+            await loadTicketMessages(ticketId);
+        }}
+
+        function closeTicketModal() {{
+            document.getElementById('ticketModal').style.display = 'none';
+            currentTicketId = null;
+            currentTicketStatus = null;
+            document.getElementById('ticketReplyInput').value = '';
+        }}
+
+        async function loadTicketMessages(ticketId) {{
+            try {{
+                const response = await fetch(`/admin/support/tickets/${{ticketId}}/messages`);
+                const messages = await response.json();
+
+                const container = document.getElementById('ticketMessages');
+
+                if (messages.length === 0) {{
+                    container.innerHTML = '<p style="color: #95a5a6; text-align: center;">No messages yet.</p>';
+                    return;
+                }}
+
+                container.innerHTML = messages.map(m => {{
+                    const isInbound = m.direction === 'inbound';
+                    const align = isInbound ? 'flex-start' : 'flex-end';
+                    const bgColor = isInbound ? 'white' : '#3498db';
+                    const textColor = isInbound ? '#333' : 'white';
+                    const label = isInbound ? 'User' : 'Support';
+                    const time = new Date(m.created_at).toLocaleString();
+
+                    return `
+                        <div style="display: flex; justify-content: ${{align}}; margin-bottom: 10px;">
+                            <div style="max-width: 80%; background: ${{bgColor}}; color: ${{textColor}}; padding: 10px 15px; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
+                                <div style="font-size: 0.75em; opacity: 0.8; margin-bottom: 4px;">${{label}} - ${{time}}</div>
+                                <div>${{m.message}}</div>
+                            </div>
+                        </div>
+                    `;
+                }}).join('');
+
+                // Scroll to bottom
+                container.scrollTop = container.scrollHeight;
+            }} catch (e) {{
+                console.error('Error loading ticket messages:', e);
+            }}
+        }}
+
+        async function sendTicketReply() {{
+            const input = document.getElementById('ticketReplyInput');
+            const message = input.value.trim();
+
+            if (!message || !currentTicketId) return;
+
+            try {{
+                const response = await fetch(`/admin/support/tickets/${{currentTicketId}}/reply`, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ message: message }})
+                }});
+
+                if (response.ok) {{
+                    input.value = '';
+                    await loadTicketMessages(currentTicketId);
+                    loadSupportTickets();
+                }} else {{
+                    const error = await response.json();
+                    alert('Error: ' + (error.detail || 'Failed to send reply'));
+                }}
+            }} catch (e) {{
+                alert('Error: ' + e.message);
+            }}
+        }}
+
+        async function closeCurrentTicket() {{
+            if (!currentTicketId || !confirm('Close this ticket?')) return;
+
+            try {{
+                const response = await fetch(`/admin/support/tickets/${{currentTicketId}}/close`, {{
+                    method: 'POST'
+                }});
+
+                if (response.ok) {{
+                    closeTicketModal();
+                    loadSupportTickets();
+                }} else {{
+                    alert('Error closing ticket');
+                }}
+            }} catch (e) {{
+                alert('Error: ' + e.message);
+            }}
+        }}
+
+        async function reopenCurrentTicket() {{
+            if (!currentTicketId) return;
+
+            try {{
+                const response = await fetch(`/admin/support/tickets/${{currentTicketId}}/reopen`, {{
+                    method: 'POST'
+                }});
+
+                if (response.ok) {{
+                    currentTicketStatus = 'open';
+                    document.getElementById('closeTicketBtn').style.display = 'block';
+                    document.getElementById('reopenTicketBtn').style.display = 'none';
+                    loadSupportTickets();
+                }} else {{
+                    alert('Error reopening ticket');
+                }}
+            }} catch (e) {{
+                alert('Error: ' + e.message);
+            }}
+        }}
+
+        // Allow Enter key to send reply
+        document.getElementById('ticketReplyInput')?.addEventListener('keypress', function(e) {{
+            if (e.key === 'Enter') sendTicketReply();
+        }});
+
         // Initialize
         loadStats();
         loadHistory();
@@ -3624,6 +3900,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         loadConversations();
         loadFlaggedConversations();
         loadChangelog();
+        loadSupportTickets();
 
         async function cleanupIncomplete() {{
             if (!confirm('Delete all users who have not completed onboarding?')) return;

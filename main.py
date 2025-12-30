@@ -662,6 +662,41 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SUPPORT HANDLING (Premium users only)
+        # ==========================================
+        if incoming_msg.upper().startswith("SUPPORT:") or incoming_msg.upper().startswith("SUPPORT "):
+            from services.support_service import is_premium_user, add_support_message
+
+            # Check if user is premium
+            if not is_premium_user(phone_number):
+                resp = MessagingResponse()
+                resp.message("Support chat is available for premium members. Use 'Feedback: [message]' to send us feedback, or upgrade to premium for direct support.")
+                log_interaction(phone_number, incoming_msg, "Support denied - not premium", "support_denied", False)
+                return Response(content=str(resp), media_type="application/xml")
+
+            # Extract message after "support:" or "support "
+            if incoming_msg.upper().startswith("SUPPORT:"):
+                support_message = incoming_msg[8:].strip()
+            else:
+                support_message = incoming_msg[8:].strip()
+
+            if support_message:
+                result = add_support_message(phone_number, support_message, 'inbound')
+                if result['success']:
+                    resp = MessagingResponse()
+                    resp.message(f"Your message has been sent to our support team (Ticket #{result['ticket_id']}). We'll reply as soon as possible!")
+                    log_interaction(phone_number, incoming_msg, f"Support ticket #{result['ticket_id']}", "support", True)
+                    return Response(content=str(resp), media_type="application/xml")
+                else:
+                    resp = MessagingResponse()
+                    resp.message("Sorry, there was an error sending your message. Please try again.")
+                    return Response(content=str(resp), media_type="application/xml")
+            else:
+                resp = MessagingResponse()
+                resp.message("Please include your message after 'Support:'. For example: 'Support: I need help with reminders'")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # SNOOZE HANDLING
         # ==========================================
         if incoming_msg.upper().startswith("SNOOZE"):

@@ -99,3 +99,17 @@ if ENCRYPTION_ENABLED:
     logger.info("Field-level encryption enabled")
 else:
     logger.warning("ENCRYPTION_KEY or HASH_KEY not set - field encryption disabled")
+
+# SMTP Configuration (SMTP2GO)
+SMTP_HOST = os.environ.get("SMTP_HOST", "mail.smtp2go.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "2525"))
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", "support@remyndrs.com")
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL")  # Where support tickets are sent
+
+SMTP_ENABLED = bool(SMTP_USERNAME and SMTP_PASSWORD and SUPPORT_EMAIL)
+if SMTP_ENABLED:
+    logger.info(f"SMTP enabled - support emails will be sent to {SUPPORT_EMAIL}")
+else:
+    logger.warning("SMTP not fully configured - support email notifications disabled")
