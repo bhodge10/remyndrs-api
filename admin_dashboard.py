@@ -1846,7 +1846,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                         Show reviewed items
                     </label>
                 </div>
-                <button class="btn btn-primary" onclick="runAnalysis()">Run AI Analysis Now</button>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn" style="background: #9b59b6; color: white;" onclick="exportFlagged()">Export for Claude</button>
+                    <button class="btn btn-primary" onclick="runAnalysis()">Run AI Analysis Now</button>
+                </div>
             </div>
 
             <div id="analysisStatus" style="display: none; padding: 10px; background: #d4edda; border-radius: 4px; margin-bottom: 15px;"></div>
@@ -2751,6 +2754,9 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 const response = await fetch(`/admin/conversations/flagged?include_reviewed=${{includeReviewed}}`);
                 const flagged = await response.json();
 
+                // Store for export
+                flaggedData = flagged;
+
                 // Clear existing rows except header
                 while (table.rows.length > 1) {{
                     table.deleteRow(1);
@@ -2846,6 +2852,60 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 statusDiv.innerHTML = '❌ Error: ' + e.message;
                 statusDiv.style.background = '#f8d7da';
             }}
+        }}
+
+        // Store flagged data for export
+        let flaggedData = [];
+
+        // Export flagged conversations for sharing with Claude
+        function exportFlagged() {{
+            if (flaggedData.length === 0) {{
+                alert('No flagged conversations to export');
+                return;
+            }}
+
+            // Filter to only unreviewed items
+            const unreviewedItems = flaggedData.filter(f => !f.reviewed);
+
+            if (unreviewedItems.length === 0) {{
+                alert('No unreviewed flagged conversations to export');
+                return;
+            }}
+
+            let exportText = `## Flagged Conversations for Review\\n\\n`;
+            exportText += `I have ${{unreviewedItems.length}} flagged conversation(s) that need improvement:\\n\\n`;
+
+            unreviewedItems.forEach((f, i) => {{
+                exportText += `### Issue ${{i + 1}}: ${{f.issue_type.replace(/_/g, ' ')}} (${{f.severity}})\\n`;
+                exportText += `**User said:** ${{f.message_in}}\\n`;
+                exportText += `**System replied:** ${{f.message_out}}\\n`;
+                exportText += `**Problem:** ${{f.ai_explanation}}\\n\\n`;
+            }});
+
+            exportText += `---\\nCan you help improve the AI to handle these cases better?`;
+
+            // Copy to clipboard
+            navigator.clipboard.writeText(exportText).then(() => {{
+                alert('Copied to clipboard! Paste this into your conversation with Claude.');
+            }}).catch(err => {{
+                // Fallback: show in a textarea
+                const textarea = document.createElement('textarea');
+                textarea.value = exportText;
+                textarea.style.position = 'fixed';
+                textarea.style.top = '50%';
+                textarea.style.left = '50%';
+                textarea.style.transform = 'translate(-50%, -50%)';
+                textarea.style.width = '80%';
+                textarea.style.height = '400px';
+                textarea.style.zIndex = '10000';
+                textarea.style.padding = '20px';
+                textarea.style.border = '2px solid #3498db';
+                textarea.style.borderRadius = '8px';
+                document.body.appendChild(textarea);
+                textarea.select();
+                alert('Copy the text from the textarea, then click anywhere to close it.');
+                textarea.addEventListener('blur', () => textarea.remove());
+            }});
         }}
 
         // Manual Flag Functions
