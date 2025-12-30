@@ -317,6 +317,46 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SUPPORT MODE CHECK
+        # ==========================================
+        # Check if user is in an active support conversation
+        from services.support_service import (
+            get_active_support_ticket, add_support_message,
+            exit_support_mode, close_ticket_by_phone
+        )
+
+        active_ticket = get_active_support_ticket(phone_number)
+
+        if active_ticket:
+            ticket_id = active_ticket['ticket_id']
+            msg_upper = incoming_msg.strip().upper()
+
+            # Handle EXIT command - leave support mode but keep ticket open
+            if msg_upper == "EXIT":
+                exit_support_mode(phone_number)
+                resp = MessagingResponse()
+                resp.message(staging_prefix(f"You've exited support mode. Your ticket #{ticket_id} is still open - text 'SUPPORT: message' anytime to continue the conversation."))
+                log_interaction(phone_number, incoming_msg, f"Exited support mode (ticket #{ticket_id})", "support_exit", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            # Handle CLOSE TICKET command - close the ticket
+            if msg_upper in ["CLOSE TICKET", "CLOSE"]:
+                result = close_ticket_by_phone(phone_number)
+                if result['success']:
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(f"Your support ticket #{ticket_id} has been closed. Thank you for contacting us! Text 'SUPPORT: message' anytime to open a new ticket."))
+                    log_interaction(phone_number, incoming_msg, f"Closed support ticket #{ticket_id}", "support_close", True)
+                    return Response(content=str(resp), media_type="application/xml")
+
+            # Route message to support ticket
+            result = add_support_message(phone_number, incoming_msg, 'inbound')
+            if result['success']:
+                resp = MessagingResponse()
+                resp.message(staging_prefix(f"[Support Ticket #{ticket_id}] Message received. We'll respond shortly.\n\n(Text EXIT to leave support, or CLOSE to close ticket)"))
+                log_interaction(phone_number, incoming_msg, f"Support message (ticket #{ticket_id})", "support", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # ONBOARDING CHECK
         # ==========================================
         if not is_user_onboarded(phone_number):
@@ -685,7 +725,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 result = add_support_message(phone_number, support_message, 'inbound')
                 if result['success']:
                     resp = MessagingResponse()
-                    resp.message(f"Your message has been sent to our support team (Ticket #{result['ticket_id']}). We'll reply as soon as possible!")
+                    resp.message(staging_prefix(f"[Support Ticket #{result['ticket_id']}] Your message has been sent to our support team. We'll reply as soon as possible!\n\n(You're now in support mode - replies go to support. Text EXIT to leave or CLOSE to close ticket)"))
                     log_interaction(phone_number, incoming_msg, f"Support ticket #{result['ticket_id']}", "support", True)
                     return Response(content=str(resp), media_type="application/xml")
                 else:

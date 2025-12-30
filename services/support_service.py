@@ -1,12 +1,23 @@
 """
 Support Service
 Handles support ticket creation and management for premium users
+
+Support Mode:
+- When a user has an open ticket that was active in the last 30 minutes,
+  they are considered "in support mode"
+- Messages are automatically routed to their support ticket
+- User can text "EXIT" to leave support mode (keeps ticket open)
+- User can text "CLOSE TICKET" to close the ticket and exit support mode
 """
 
+from datetime import datetime, timedelta
 from database import get_db_connection, return_db_connection
 from config import logger
 from services.email_service import send_support_notification
 from services.sms_service import send_sms
+
+# How long after last activity to keep user in support mode (minutes)
+SUPPORT_MODE_TIMEOUT = 30
 
 
 def is_premium_user(phone_number: str) -> bool:
@@ -164,8 +175,9 @@ def reply_to_ticket(ticket_id: int, message: str) -> dict:
 
         phone_number = result[0]
 
-        # Send SMS to user
-        sms_message = f"[Remyndrs Support] {message}"
+        # Send SMS to user with ticket number (so they stay in support mode context)
+        # Include instructions for exiting support mode
+        sms_message = f"[Support Ticket #{ticket_id}] {message}\n\n(Reply to continue, or text EXIT to leave support)"
         send_sms(phone_number, sms_message)
 
         # Record outbound message
@@ -311,6 +323,146 @@ def get_ticket_messages(ticket_id: int) -> list:
     except Exception as e:
         logger.error(f"Error getting ticket messages: {e}")
         return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_active_support_ticket(phone_number: str) -> dict:
+    """
+    Check if user has an active support session.
+
+    A user is in support mode if they have an open ticket that was
+    updated within the last SUPPORT_MODE_TIMEOUT minutes.
+
+    Returns:
+        dict with ticket_id if in support mode, None otherwise
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, updated_at
+            FROM support_tickets
+            WHERE phone_number = %s AND status = 'open'
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """, (phone_number,))
+
+        result = c.fetchone()
+
+        if not result:
+            return None
+
+        ticket_id, updated_at = result
+
+        # Check if ticket was active recently
+        if updated_at:
+            # Handle timezone-naive comparison
+            now = datetime.utcnow()
+            if updated_at.tzinfo:
+                from datetime import timezone
+                now = datetime.now(timezone.utc)
+
+            age_minutes = (now - updated_at).total_seconds() / 60
+            if age_minutes <= SUPPORT_MODE_TIMEOUT:
+                return {'ticket_id': ticket_id}
+
+        return None
+
+    except Exception as e:
+        logger.error(f"Error checking active support ticket: {e}")
+        return None
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def exit_support_mode(phone_number: str) -> dict:
+    """
+    Exit support mode without closing the ticket.
+    Updates the ticket timestamp to an old time so user exits support mode.
+
+    Returns:
+        dict with success status and ticket_id
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get the open ticket
+        c.execute("""
+            SELECT id FROM support_tickets
+            WHERE phone_number = %s AND status = 'open'
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """, (phone_number,))
+
+        result = c.fetchone()
+        if not result:
+            return {'success': False, 'error': 'No open ticket found'}
+
+        ticket_id = result[0]
+
+        # Set updated_at to an old time to exit support mode
+        # (ticket stays open, but user exits the conversation mode)
+        old_time = datetime.utcnow() - timedelta(minutes=SUPPORT_MODE_TIMEOUT + 10)
+        c.execute("""
+            UPDATE support_tickets
+            SET updated_at = %s
+            WHERE id = %s
+        """, (old_time, ticket_id))
+
+        conn.commit()
+        logger.info(f"User exited support mode for ticket #{ticket_id}")
+
+        return {'success': True, 'ticket_id': ticket_id}
+
+    except Exception as e:
+        logger.error(f"Error exiting support mode: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def close_ticket_by_phone(phone_number: str) -> dict:
+    """
+    Close the user's open support ticket.
+
+    Returns:
+        dict with success status and ticket_id
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get and close the open ticket
+        c.execute("""
+            UPDATE support_tickets
+            SET status = 'closed', updated_at = CURRENT_TIMESTAMP
+            WHERE phone_number = %s AND status = 'open'
+            RETURNING id
+        """, (phone_number,))
+
+        result = c.fetchone()
+        conn.commit()
+
+        if not result:
+            return {'success': False, 'error': 'No open ticket found'}
+
+        ticket_id = result[0]
+        logger.info(f"Closed support ticket #{ticket_id} by user request")
+
+        return {'success': True, 'ticket_id': ticket_id}
+
+    except Exception as e:
+        logger.error(f"Error closing ticket by phone: {e}")
+        return {'success': False, 'error': str(e)}
     finally:
         if conn:
             return_db_connection(conn)
