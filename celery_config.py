@@ -20,6 +20,11 @@ beat_schedule = {
         "task": "tasks.reminder_tasks.release_stale_claims_task",
         "schedule": timedelta(minutes=5),
     },
+    # Analyze conversations every 4 hours
+    "analyze-conversations": {
+        "task": "tasks.reminder_tasks.analyze_conversations_task",
+        "schedule": timedelta(hours=4),
+    },
 }
 
 # Note: All tasks use the default 'celery' queue for simplicity.

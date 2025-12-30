@@ -16,7 +16,10 @@ from pydantic import BaseModel
 from typing import Optional
 from services.metrics_service import get_all_metrics, get_cost_analytics
 from services.sms_service import send_sms
-from database import get_db_connection, return_db_connection, get_setting, set_setting
+from database import (
+    get_db_connection, return_db_connection, get_setting, set_setting,
+    get_recent_logs, get_flagged_conversations, mark_analysis_reviewed
+)
 from config import ADMIN_USERNAME, ADMIN_PASSWORD, logger
 from utils.validation import log_security_event
 
@@ -829,6 +832,65 @@ async def update_maintenance_message(request: Request, admin: str = Depends(veri
 
 
 # =====================================================
+# CONVERSATION LOGS API ENDPOINTS
+# =====================================================
+
+@router.get("/admin/conversations")
+async def get_conversations(
+    limit: int = 100,
+    offset: int = 0,
+    phone: Optional[str] = None,
+    admin: str = Depends(verify_admin)
+):
+    """Get recent conversation logs"""
+    try:
+        logs = get_recent_logs(limit=limit, offset=offset, phone_filter=phone)
+        return JSONResponse(content=logs)
+    except Exception as e:
+        logger.error(f"Error getting conversations: {e}")
+        raise HTTPException(status_code=500, detail="Error getting conversations")
+
+
+@router.get("/admin/conversations/flagged")
+async def get_flagged(include_reviewed: bool = False, admin: str = Depends(verify_admin)):
+    """Get AI-flagged conversations"""
+    try:
+        flagged = get_flagged_conversations(limit=50, include_reviewed=include_reviewed)
+        return JSONResponse(content=flagged)
+    except Exception as e:
+        logger.error(f"Error getting flagged conversations: {e}")
+        raise HTTPException(status_code=500, detail="Error getting flagged conversations")
+
+
+@router.post("/admin/conversations/flagged/{analysis_id}/reviewed")
+async def mark_reviewed(analysis_id: int, admin: str = Depends(verify_admin)):
+    """Mark a flagged conversation as reviewed"""
+    try:
+        success = mark_analysis_reviewed(analysis_id)
+        if success:
+            return JSONResponse(content={"success": True})
+        else:
+            raise HTTPException(status_code=500, detail="Failed to mark as reviewed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking analysis reviewed: {e}")
+        raise HTTPException(status_code=500, detail="Error marking as reviewed")
+
+
+@router.post("/admin/conversations/analyze")
+async def trigger_analysis(background_tasks: BackgroundTasks, admin: str = Depends(verify_admin)):
+    """Manually trigger conversation analysis"""
+    from services.conversation_analyzer import analyze_recent_conversations
+    try:
+        background_tasks.add_task(analyze_recent_conversations)
+        return JSONResponse(content={"success": True, "message": "Analysis started"})
+    except Exception as e:
+        logger.error(f"Error triggering analysis: {e}")
+        raise HTTPException(status_code=500, detail="Error triggering analysis")
+
+
+# =====================================================
 # DASHBOARD UI
 # =====================================================
 
@@ -1252,10 +1314,183 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         .cleanup-btn:hover {{
             background: #c0392b;
         }}
+
+        /* Conversation Viewer Styles */
+        .conversation-section {{
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }}
+        .conversation-section h2 {{
+            margin-top: 0;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #9b59b6;
+        }}
+        .conversation-filters {{
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }}
+        .conversation-filters input {{
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }}
+        .conversation-filters button {{
+            padding: 8px 16px;
+        }}
+        .conversation-table {{
+            font-size: 0.85em;
+        }}
+        .conversation-table th {{
+            background: #34495e;
+        }}
+        .conversation-table td {{
+            vertical-align: top;
+            max-width: 300px;
+        }}
+        .msg-in {{
+            background: #e8f4fd;
+            padding: 8px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            word-wrap: break-word;
+        }}
+        .msg-out {{
+            background: #f0f0f0;
+            padding: 8px;
+            border-radius: 4px;
+            word-wrap: break-word;
+            font-size: 0.9em;
+            max-height: 100px;
+            overflow-y: auto;
+        }}
+        .intent-badge {{
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75em;
+            background: #3498db;
+            color: white;
+        }}
+        .flagged-section {{
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e74c3c;
+        }}
+        .severity-high {{
+            background: #e74c3c;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+        }}
+        .severity-medium {{
+            background: #f39c12;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+        }}
+        .severity-low {{
+            background: #95a5a6;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+        }}
+        .ai-explanation {{
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 5px;
+            font-size: 0.9em;
+            border-left: 3px solid #f39c12;
+        }}
+        .tabs {{
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }}
+        .tab {{
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            background: white;
+        }}
+        .tab:hover {{
+            background: #f8f9fa;
+        }}
+        .tab.active {{
+            background: #9b59b6;
+            color: white;
+            border-color: #9b59b6;
+        }}
+        .pagination {{
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 15px;
+        }}
+
+        /* Navigation Menu */
+        .nav-menu {{
+            position: sticky;
+            top: 0;
+            background: white;
+            padding: 12px 20px;
+            margin: -20px -20px 20px -20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 100;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }}
+        .nav-menu a {{
+            padding: 8px 16px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #2c3e50;
+            font-size: 0.9em;
+            font-weight: 500;
+            transition: all 0.2s;
+            border: 1px solid #e0e0e0;
+        }}
+        .nav-menu a:hover {{
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+        }}
+        .nav-menu .nav-title {{
+            font-weight: bold;
+            color: #2c3e50;
+            margin-right: 10px;
+        }}
+        .section-anchor {{
+            scroll-margin-top: 70px;
+        }}
     </style>
 </head>
 <body>
-    <h1>Remyndrs Dashboard</h1>
+    <div class="nav-menu">
+        <span class="nav-title">Remyndrs Dashboard</span>
+        <a href="#overview">Overview</a>
+        <a href="#broadcast">Broadcast</a>
+        <a href="#feedback">Feedback</a>
+        <a href="#costs">Costs</a>
+        <a href="#conversations">Conversations</a>
+    </div>
+
+    <h2 id="overview" class="section-anchor" style="margin-top: 0;">Overview</h2>
 
     <div class="cards">
         <div class="card">
@@ -1372,7 +1607,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     </div>
 
     <!-- Broadcast Section -->
-    <div class="broadcast-section">
+    <div id="broadcast" class="broadcast-section section-anchor">
         <h2>📢 Broadcast Message</h2>
 
         <div class="form-group">
@@ -1465,7 +1700,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     </div>
 
     <!-- User Feedback Section -->
-    <div class="section">
+    <div id="feedback" class="section section-anchor">
         <h2>User Feedback <span id="feedbackCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
 
         <!-- Open Feedback -->
@@ -1501,7 +1736,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     </div>
 
     <!-- Cost Analytics Section -->
-    <div class="cost-section">
+    <div id="costs" class="cost-section section-anchor">
         <h2>💰 Cost Analytics</h2>
 
         <div class="period-tabs">
@@ -1529,6 +1764,75 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
 
         <div style="margin-top: 15px; font-size: 0.85em; color: #7f8c8d;">
             <em>SMS: $0.0079/message (inbound + outbound) | AI: GPT-4o-mini pricing</em>
+        </div>
+    </div>
+
+    <!-- Conversation Viewer Section -->
+    <div id="conversations" class="conversation-section section-anchor">
+        <h2>💬 Conversation Viewer</h2>
+
+        <div class="tabs">
+            <button class="tab active" onclick="showConversationTab('recent')">Recent Conversations</button>
+            <button class="tab" onclick="showConversationTab('flagged')">
+                AI Flagged <span id="flaggedCount" style="background: #e74c3c; color: white; padding: 2px 6px; border-radius: 10px; font-size: 0.8em; margin-left: 5px;">0</span>
+            </button>
+        </div>
+
+        <!-- Recent Conversations Tab -->
+        <div id="recentTab">
+            <div class="conversation-filters">
+                <input type="text" id="phoneFilter" placeholder="Filter by phone (last 4 digits)..." style="width: 200px;">
+                <button class="btn btn-primary" onclick="loadConversations()">Search</button>
+                <button class="btn btn-secondary" onclick="clearFilter()">Clear</button>
+                <span style="color: #7f8c8d; margin-left: auto;">Showing last <span id="conversationCount">0</span> conversations</span>
+            </div>
+
+            <table class="conversation-table" id="conversationTable">
+                <tr>
+                    <th style="width: 150px;">Time</th>
+                    <th style="width: 100px;">Phone</th>
+                    <th>User Message</th>
+                    <th>System Response</th>
+                    <th style="width: 100px;">Intent</th>
+                </tr>
+                <tr id="conversationLoading">
+                    <td colspan="5" style="color: #95a5a6; text-align: center;">Loading conversations...</td>
+                </tr>
+            </table>
+
+            <div class="pagination">
+                <button class="btn btn-secondary" id="prevBtn" onclick="loadConversations(currentOffset - 50)" disabled>Previous</button>
+                <span id="pageInfo" style="padding: 8px;">Page 1</span>
+                <button class="btn btn-secondary" id="nextBtn" onclick="loadConversations(currentOffset + 50)">Next</button>
+            </div>
+        </div>
+
+        <!-- Flagged Conversations Tab -->
+        <div id="flaggedTab" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <div>
+                    <label style="cursor: pointer;">
+                        <input type="checkbox" id="showReviewedCheckbox" onchange="loadFlaggedConversations()">
+                        Show reviewed items
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="runAnalysis()">Run AI Analysis Now</button>
+            </div>
+
+            <div id="analysisStatus" style="display: none; padding: 10px; background: #d4edda; border-radius: 4px; margin-bottom: 15px;"></div>
+
+            <table class="conversation-table" id="flaggedTable">
+                <tr>
+                    <th style="width: 150px;">Time</th>
+                    <th style="width: 100px;">Phone</th>
+                    <th>Conversation</th>
+                    <th style="width: 120px;">Issue</th>
+                    <th style="width: 80px;">Actions</th>
+                </tr>
+                <tr id="flaggedLoading">
+                    <td colspan="5" style="color: #95a5a6; text-align: center;">Loading flagged conversations...</td>
+                </tr>
+            </table>
         </div>
     </div>
 
@@ -2270,6 +2574,205 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        // Conversation Viewer Functions
+        let currentOffset = 0;
+        const PAGE_SIZE = 50;
+
+        function showConversationTab(tab) {{
+            document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+
+            if (tab === 'recent') {{
+                document.getElementById('recentTab').style.display = 'block';
+                document.getElementById('flaggedTab').style.display = 'none';
+            }} else {{
+                document.getElementById('recentTab').style.display = 'none';
+                document.getElementById('flaggedTab').style.display = 'block';
+                loadFlaggedConversations();
+            }}
+        }}
+
+        async function loadConversations(offset = 0) {{
+            currentOffset = Math.max(0, offset);
+            const phone = document.getElementById('phoneFilter').value.trim();
+            const table = document.getElementById('conversationTable');
+            const loadingRow = document.getElementById('conversationLoading');
+
+            // Show loading
+            if (loadingRow) {{
+                loadingRow.innerHTML = '<td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td>';
+            }}
+
+            try {{
+                let url = `/admin/conversations?limit=${{PAGE_SIZE}}&offset=${{currentOffset}}`;
+                if (phone) {{
+                    url += `&phone=${{encodeURIComponent(phone)}}`;
+                }}
+
+                const response = await fetch(url);
+                const conversations = await response.json();
+
+                // Clear existing rows except header
+                while (table.rows.length > 1) {{
+                    table.deleteRow(1);
+                }}
+
+                if (conversations.length === 0) {{
+                    const row = table.insertRow();
+                    row.innerHTML = '<td colspan="5" style="color: #95a5a6; text-align: center;">No conversations found</td>';
+                }} else {{
+                    conversations.forEach(c => {{
+                        const row = table.insertRow();
+                        const date = new Date(c.created_at).toLocaleString();
+                        const phoneMasked = c.phone_number ? '...' + c.phone_number.slice(-4) : 'N/A';
+                        const intentBadge = c.intent ? `<span class="intent-badge">${{c.intent}}</span>` : '-';
+
+                        row.innerHTML = `
+                            <td>${{date}}</td>
+                            <td>${{phoneMasked}}</td>
+                            <td><div class="msg-in">${{escapeHtml(c.message_in)}}</div></td>
+                            <td><div class="msg-out">${{escapeHtml(c.message_out)}}</div></td>
+                            <td>${{intentBadge}}</td>
+                        `;
+                    }});
+                }}
+
+                // Update UI
+                document.getElementById('conversationCount').textContent = conversations.length;
+                document.getElementById('prevBtn').disabled = currentOffset === 0;
+                document.getElementById('nextBtn').disabled = conversations.length < PAGE_SIZE;
+                document.getElementById('pageInfo').textContent = `Page ${{Math.floor(currentOffset / PAGE_SIZE) + 1}}`;
+
+            }} catch (e) {{
+                console.error('Error loading conversations:', e);
+                const row = table.insertRow();
+                row.innerHTML = '<td colspan="5" style="color: #e74c3c; text-align: center;">Error loading conversations</td>';
+            }}
+        }}
+
+        function clearFilter() {{
+            document.getElementById('phoneFilter').value = '';
+            currentOffset = 0;
+            loadConversations();
+        }}
+
+        function escapeHtml(text) {{
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+
+        async function loadFlaggedConversations() {{
+            const includeReviewed = document.getElementById('showReviewedCheckbox').checked;
+            const table = document.getElementById('flaggedTable');
+            const loadingRow = document.getElementById('flaggedLoading');
+
+            if (loadingRow) {{
+                loadingRow.innerHTML = '<td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td>';
+            }}
+
+            try {{
+                const response = await fetch(`/admin/conversations/flagged?include_reviewed=${{includeReviewed}}`);
+                const flagged = await response.json();
+
+                // Clear existing rows except header
+                while (table.rows.length > 1) {{
+                    table.deleteRow(1);
+                }}
+
+                // Update flagged count badge
+                const unreviewedCount = flagged.filter(f => !f.reviewed).length;
+                document.getElementById('flaggedCount').textContent = unreviewedCount;
+
+                if (flagged.length === 0) {{
+                    const row = table.insertRow();
+                    row.innerHTML = '<td colspan="5" style="color: #95a5a6; text-align: center;">No flagged conversations</td>';
+                }} else {{
+                    flagged.forEach(f => {{
+                        const row = table.insertRow();
+                        if (!f.reviewed) {{
+                            row.style.background = '#fff8e1';
+                        }}
+                        const date = new Date(f.created_at).toLocaleString();
+                        const phoneMasked = f.phone_number ? '...' + f.phone_number.slice(-4) : 'N/A';
+                        const severityClass = `severity-${{f.severity || 'low'}}`;
+
+                        row.innerHTML = `
+                            <td>${{date}}</td>
+                            <td>${{phoneMasked}}</td>
+                            <td>
+                                <div class="msg-in">${{escapeHtml(f.message_in)}}</div>
+                                <div class="msg-out">${{escapeHtml(f.message_out)}}</div>
+                                <div class="ai-explanation">${{escapeHtml(f.ai_explanation)}}</div>
+                            </td>
+                            <td>
+                                <span class="${{severityClass}}">${{f.severity}}</span><br>
+                                <small>${{f.issue_type}}</small>
+                            </td>
+                            <td>
+                                ${{f.reviewed
+                                    ? '<span style="color: #27ae60;">Reviewed</span>'
+                                    : `<button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.8em;" onclick="markAsReviewed(${{f.id}})">Mark Reviewed</button>`
+                                }}
+                            </td>
+                        `;
+                    }});
+                }}
+
+            }} catch (e) {{
+                console.error('Error loading flagged conversations:', e);
+                const row = table.insertRow();
+                row.innerHTML = '<td colspan="5" style="color: #e74c3c; text-align: center;">Error loading flagged conversations</td>';
+            }}
+        }}
+
+        async function markAsReviewed(analysisId) {{
+            try {{
+                const response = await fetch(`/admin/conversations/flagged/${{analysisId}}/reviewed`, {{
+                    method: 'POST'
+                }});
+
+                if (response.ok) {{
+                    loadFlaggedConversations();
+                }} else {{
+                    alert('Error marking as reviewed');
+                }}
+            }} catch (e) {{
+                console.error('Error:', e);
+                alert('Error marking as reviewed');
+            }}
+        }}
+
+        async function runAnalysis() {{
+            const statusDiv = document.getElementById('analysisStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = 'Starting AI analysis...';
+            statusDiv.style.background = '#cce5ff';
+
+            try {{
+                const response = await fetch('/admin/conversations/analyze', {{
+                    method: 'POST'
+                }});
+
+                if (response.ok) {{
+                    statusDiv.innerHTML = '✅ Analysis started! Results will appear shortly. Refresh the page in a minute to see flagged items.';
+                    statusDiv.style.background = '#d4edda';
+
+                    // Reload flagged after a delay
+                    setTimeout(() => {{
+                        loadFlaggedConversations();
+                    }}, 5000);
+                }} else {{
+                    statusDiv.innerHTML = '❌ Error starting analysis';
+                    statusDiv.style.background = '#f8d7da';
+                }}
+            }} catch (e) {{
+                statusDiv.innerHTML = '❌ Error: ' + e.message;
+                statusDiv.style.background = '#f8d7da';
+            }}
+        }}
+
         // Initialize
         loadStats();
         loadHistory();
@@ -2277,6 +2780,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         loadCostData();
         loadMaintenanceMessage();
         loadScheduledBroadcasts();
+        loadConversations();
+        loadFlaggedConversations();
 
         async function cleanupIncomplete() {{
             if (!confirm('Delete all users who have not completed onboarding?')) return;

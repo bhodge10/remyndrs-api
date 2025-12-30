@@ -124,3 +124,19 @@ def release_stale_claims_task():
     except Exception as exc:
         logger.exception("Error releasing stale claims")
         raise
+
+
+@celery_app.task
+def analyze_conversations_task():
+    """
+    Analyze recent conversations for quality issues.
+    Runs every 4 hours via Beat.
+    """
+    try:
+        from services.conversation_analyzer import analyze_recent_conversations
+        result = analyze_recent_conversations(batch_size=50)
+        logger.info(f"Conversation analysis complete: {result}")
+        return result
+    except Exception as exc:
+        logger.exception("Error in conversation analysis task")
+        raise

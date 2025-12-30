@@ -200,6 +200,20 @@ def init_db():
             )
         ''')
 
+        # Conversation analysis table for AI-flagged issues
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS conversation_analysis (
+                id SERIAL PRIMARY KEY,
+                log_id INTEGER REFERENCES logs(id),
+                phone_number TEXT NOT NULL,
+                issue_type TEXT NOT NULL,
+                severity TEXT DEFAULT 'low',
+                ai_explanation TEXT,
+                reviewed BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # API usage tracking table for cost analytics
         c.execute('''
             CREATE TABLE IF NOT EXISTS api_usage (
@@ -280,6 +294,19 @@ def init_db():
                 value TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
+            # Conversation analysis table for AI-flagged issues
+            """CREATE TABLE IF NOT EXISTS conversation_analysis (
+                id SERIAL PRIMARY KEY,
+                log_id INTEGER REFERENCES logs(id),
+                phone_number TEXT NOT NULL,
+                issue_type TEXT NOT NULL,
+                severity TEXT DEFAULT 'low',
+                ai_explanation TEXT,
+                reviewed BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            # Track which logs have been analyzed
+            "ALTER TABLE logs ADD COLUMN IF NOT EXISTS analyzed BOOLEAN DEFAULT FALSE",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
@@ -292,6 +319,9 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_list_items_phone_hash ON list_items(phone_hash)",
             # Celery: Index for efficient querying of due reminders
             "CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(reminder_date, sent, claimed_at) WHERE sent = FALSE",
+            # Index for conversation analysis lookups
+            "CREATE INDEX IF NOT EXISTS idx_logs_analyzed ON logs(analyzed) WHERE analyzed = FALSE",
+            "CREATE INDEX IF NOT EXISTS idx_conversation_analysis_reviewed ON conversation_analysis(reviewed) WHERE reviewed = FALSE",
         ]
 
         for migration in migrations:
@@ -396,6 +426,192 @@ def set_setting(key, value):
         return True
     except Exception as e:
         logger.error(f"Error setting {key}: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_recent_logs(limit=100, offset=0, phone_filter=None):
+    """Get recent conversation logs for viewing"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        if phone_filter:
+            c.execute('''
+                SELECT id, phone_number, message_in, message_out, intent, success, created_at, analyzed
+                FROM logs
+                WHERE phone_number LIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            ''', (f'%{phone_filter}%', limit, offset))
+        else:
+            c.execute('''
+                SELECT id, phone_number, message_in, message_out, intent, success, created_at, analyzed
+                FROM logs
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            ''', (limit, offset))
+        rows = c.fetchall()
+        return [
+            {
+                'id': row[0],
+                'phone_number': row[1],
+                'message_in': row[2],
+                'message_out': row[3],
+                'intent': row[4],
+                'success': row[5],
+                'created_at': row[6].isoformat() if row[6] else None,
+                'analyzed': row[7] if len(row) > 7 else False
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"Error getting recent logs: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_unanalyzed_logs(limit=50):
+    """Get logs that haven't been analyzed yet"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT id, phone_number, message_in, message_out, intent, success, created_at
+            FROM logs
+            WHERE analyzed = FALSE OR analyzed IS NULL
+            ORDER BY created_at DESC
+            LIMIT %s
+        ''', (limit,))
+        rows = c.fetchall()
+        return [
+            {
+                'id': row[0],
+                'phone_number': row[1],
+                'message_in': row[2],
+                'message_out': row[3],
+                'intent': row[4],
+                'success': row[5],
+                'created_at': row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"Error getting unanalyzed logs: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def mark_logs_analyzed(log_ids):
+    """Mark logs as analyzed"""
+    if not log_ids:
+        return
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            UPDATE logs SET analyzed = TRUE WHERE id = ANY(%s)
+        ''', (log_ids,))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Error marking logs as analyzed: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def save_conversation_analysis(log_id, phone_number, issue_type, severity, explanation):
+    """Save an AI analysis result for a conversation"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO conversation_analysis (log_id, phone_number, issue_type, severity, ai_explanation)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (log_id, phone_number, issue_type, severity, explanation))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving conversation analysis: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_flagged_conversations(limit=50, include_reviewed=False):
+    """Get flagged conversations from AI analysis"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        if include_reviewed:
+            c.execute('''
+                SELECT ca.id, ca.log_id, ca.phone_number, ca.issue_type, ca.severity,
+                       ca.ai_explanation, ca.reviewed, ca.created_at,
+                       l.message_in, l.message_out
+                FROM conversation_analysis ca
+                LEFT JOIN logs l ON ca.log_id = l.id
+                ORDER BY ca.created_at DESC
+                LIMIT %s
+            ''', (limit,))
+        else:
+            c.execute('''
+                SELECT ca.id, ca.log_id, ca.phone_number, ca.issue_type, ca.severity,
+                       ca.ai_explanation, ca.reviewed, ca.created_at,
+                       l.message_in, l.message_out
+                FROM conversation_analysis ca
+                LEFT JOIN logs l ON ca.log_id = l.id
+                WHERE ca.reviewed = FALSE
+                ORDER BY ca.created_at DESC
+                LIMIT %s
+            ''', (limit,))
+        rows = c.fetchall()
+        return [
+            {
+                'id': row[0],
+                'log_id': row[1],
+                'phone_number': row[2],
+                'issue_type': row[3],
+                'severity': row[4],
+                'ai_explanation': row[5],
+                'reviewed': row[6],
+                'created_at': row[7].isoformat() if row[7] else None,
+                'message_in': row[8],
+                'message_out': row[9]
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"Error getting flagged conversations: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def mark_analysis_reviewed(analysis_id):
+    """Mark a flagged conversation as reviewed"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            UPDATE conversation_analysis SET reviewed = TRUE WHERE id = %s
+        ''', (analysis_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error marking analysis reviewed: {e}")
         return False
     finally:
         if conn:
