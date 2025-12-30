@@ -982,10 +982,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             log_interaction(phone_number, incoming_msg, reply_text, "reminder", True)
 
         elif ai_response["action"] == "reminder_relative":
-            # Handle relative time reminders (e.g., "in 30 minutes", "in 2 hours")
+            # Handle relative time reminders (e.g., "in 30 minutes", "in 5 months")
             # Server calculates the actual time to avoid AI arithmetic errors
+            from dateutil.relativedelta import relativedelta
+
             reminder_text = ai_response.get("reminder_text", "your reminder")
-            offset_minutes_raw = ai_response.get("offset_minutes", 15)
 
             # Check for sensitive data (staging only)
             if ENVIRONMENT == "staging":
@@ -1000,31 +1001,49 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
                     return reply_text
 
-            logger.info(f"reminder_relative: offset_minutes_raw={offset_minutes_raw}, type={type(offset_minutes_raw)}, reminder_text={reminder_text}")
-
             try:
-                # Parse offset_minutes - handle int, float, and string formats
-                if isinstance(offset_minutes_raw, (int, float)):
-                    offset_minutes = int(offset_minutes_raw)
-                else:
-                    # Try to extract number from string like "30" or "30 minutes"
-                    match = re.search(r'(\d+)', str(offset_minutes_raw))
-                    offset_minutes = int(match.group(1)) if match else 15
+                # Helper to parse numeric value from AI response
+                def parse_offset(raw_value, default=0):
+                    if raw_value is None:
+                        return default
+                    if isinstance(raw_value, (int, float)):
+                        return int(raw_value)
+                    match = re.search(r'(\d+)', str(raw_value))
+                    return int(match.group(1)) if match else default
 
-                # Max 2 years (1,051,200 minutes)
-                MAX_REMINDER_MINUTES = 1051200
-                offset_minutes = max(offset_minutes, 1)  # Minimum 1 minute
+                # Get all possible offset types
+                offset_minutes = parse_offset(ai_response.get("offset_minutes"))
+                offset_days = parse_offset(ai_response.get("offset_days"))
+                offset_weeks = parse_offset(ai_response.get("offset_weeks"))
+                offset_months = parse_offset(ai_response.get("offset_months"))
 
-                # Check if exceeds 2 year limit
-                if offset_minutes > MAX_REMINDER_MINUTES:
+                logger.info(f"reminder_relative: minutes={offset_minutes}, days={offset_days}, weeks={offset_weeks}, months={offset_months}, reminder_text={reminder_text}")
+
+                # Validate at least one offset is provided
+                if offset_minutes == 0 and offset_days == 0 and offset_weeks == 0 and offset_months == 0:
+                    # Default to 15 minutes if nothing specified
+                    offset_minutes = 15
+
+                # Max limits
+                MAX_MONTHS = 24  # 2 years
+                MAX_WEEKS = 104  # 2 years
+                MAX_DAYS = 730   # 2 years
+                MAX_MINUTES = 1051200  # 2 years
+
+                # Check limits
+                if offset_months > MAX_MONTHS or offset_weeks > MAX_WEEKS or offset_days > MAX_DAYS or offset_minutes > MAX_MINUTES:
                     reply_text = "I can only set reminders up to 2 years in advance. Please try a shorter timeframe."
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_exceeded_limit", False)
                     return reply_text
 
-                logger.info(f"reminder_relative: parsed offset_minutes={offset_minutes}")
-
                 # Calculate reminder time from current UTC
-                reminder_dt_utc = datetime.utcnow() + timedelta(minutes=offset_minutes)
+                # Use relativedelta for months (handles variable month lengths correctly)
+                reminder_dt_utc = datetime.utcnow() + relativedelta(
+                    months=offset_months,
+                    weeks=offset_weeks,
+                    days=offset_days,
+                    minutes=offset_minutes
+                )
                 reminder_date_utc = reminder_dt_utc.strftime('%Y-%m-%d %H:%M:%S')
 
                 # Save the reminder

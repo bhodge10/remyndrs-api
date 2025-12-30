@@ -176,7 +176,12 @@ For reminder requests with RELATIVE TIMES (use action "reminder_relative"):
 - "in 2 hours" → Use reminder_relative with offset_minutes: 120
 - "in 1 minute" → Use reminder_relative with offset_minutes: 1
 - "in an hour" → Use reminder_relative with offset_minutes: 60
-IMPORTANT: For ANY "in X minutes/hours" format, you MUST use action "reminder_relative" and provide offset_minutes (total minutes to add).
+- "in 3 days" → Use reminder_relative with offset_days: 3
+- "in 2 weeks" → Use reminder_relative with offset_weeks: 2
+- "in 5 months" → Use reminder_relative with offset_months: 5
+- "5 months from now" → Use reminder_relative with offset_months: 5
+- "a week from now" → Use reminder_relative with offset_weeks: 1
+IMPORTANT: For ANY relative time format ("in X minutes/hours/days/weeks/months" or "X time from now"), you MUST use action "reminder_relative". The server will calculate the exact date.
 
 For SPECIFIC TIME reminders (use action "reminder"):
 - "tomorrow at 9am" = tomorrow's date at 09:00:00
@@ -196,6 +201,10 @@ Examples:
 - "Remind me in 30 minutes" → action: "reminder_relative" with offset_minutes: 30
 - "Remind me in 1 minute" → action: "reminder_relative" with offset_minutes: 1
 - "Remind me in 2 hours" → action: "reminder_relative" with offset_minutes: 120
+- "Remind me in 3 days" → action: "reminder_relative" with offset_days: 3
+- "Remind me in 2 weeks" → action: "reminder_relative" with offset_weeks: 2
+- "Remind me in 5 months" → action: "reminder_relative" with offset_months: 5
+- "5 months from now remind me to wrap presents" → action: "reminder_relative" with offset_months: 5
 - "Remind me tomorrow at 2pm" → action: "reminder" with tomorrow's date at 14:00:00
 
 RESPONSE FORMAT (must be valid JSON):
@@ -269,13 +278,16 @@ For SETTING REMINDERS WITH CLEAR TIME (specific time given):
     "confirmation": "I'll remind you on [readable date/time including day of week] to [action]"
 }}
 
-For SETTING REMINDERS WITH RELATIVE TIME ("in X minutes/hours"):
+For SETTING REMINDERS WITH RELATIVE TIME ("in X minutes/hours/days/weeks/months"):
 {{
     "action": "reminder_relative",
     "reminder_text": "what to remind them about",
-    "offset_minutes": number (total minutes from now - e.g., 30 for "30 minutes", 120 for "2 hours", 1 for "1 minute")
+    "offset_minutes": number (optional - for minutes/hours, e.g., 30 for "30 minutes", 120 for "2 hours"),
+    "offset_days": number (optional - for days, e.g., 3 for "3 days"),
+    "offset_weeks": number (optional - for weeks, e.g., 2 for "2 weeks"),
+    "offset_months": number (optional - for months, e.g., 5 for "5 months")
 }}
-IMPORTANT: Use this action for ANY "in X minutes", "in X hours", "in X minute" request. The server will calculate the exact time.
+IMPORTANT: Use this action for ANY relative time request. Only include ONE offset type. The server will calculate the exact date/time.
 
 For ASKING TIME CLARIFICATION:
 {{
