@@ -21,7 +21,7 @@ import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import Depends
 from database import init_db, log_interaction, get_setting
-from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list, get_pending_list_item, get_pending_reminder_delete, get_pending_memory_delete
+from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list, get_pending_list_item, get_pending_reminder_delete, get_pending_memory_delete, mark_user_opted_out
 from models.memory import save_memory, get_memories, search_memories, delete_memory
 from models.reminder import save_reminder, get_user_reminders, search_pending_reminders, delete_reminder, get_last_sent_reminder, mark_reminder_snoozed
 from models.list_model import (
@@ -285,6 +285,35 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             resp = MessagingResponse()
             resp.message(staging_prefix("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?"))
             log_interaction(phone_number, incoming_msg, "Account reset", "reset", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # STOP/UNSUBSCRIBE COMMAND (Twilio compliance)
+        # ==========================================
+        # Handle all standard Twilio opt-out keywords
+        if incoming_msg.upper() in ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"]:
+            logger.info(f"STOP command received from {mask_phone_number(phone_number)}")
+
+            # Mark user as opted out in our database
+            mark_user_opted_out(phone_number)
+
+            resp = MessagingResponse()
+            resp.message("You have been unsubscribed from Remyndrs and will no longer receive messages. Reply START to resubscribe.")
+            log_interaction(phone_number, incoming_msg, "User opted out", "stop", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # START/RESUBSCRIBE COMMAND (Twilio compliance)
+        # ==========================================
+        if incoming_msg.upper() in ["START", "YES", "UNSTOP"]:
+            logger.info(f"START command received from {mask_phone_number(phone_number)}")
+
+            # Clear the opted_out flag
+            create_or_update_user(phone_number, opted_out=False, opted_out_at=None)
+
+            resp = MessagingResponse()
+            resp.message("Welcome back to Remyndrs! You're now resubscribed and will receive messages again.")
+            log_interaction(phone_number, incoming_msg, "User resubscribed", "start", True)
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================

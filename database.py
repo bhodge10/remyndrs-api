@@ -310,6 +310,9 @@ def init_db():
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS analyzed BOOLEAN DEFAULT FALSE",
             # Add source column for flagging source (ai vs manual)
             "ALTER TABLE conversation_analysis ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'ai'",
+            # Opt-out tracking for STOP command compliance
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS opted_out BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMP",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

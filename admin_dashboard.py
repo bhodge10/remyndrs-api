@@ -280,22 +280,26 @@ async def send_broadcast(request: BroadcastRequest, background_tasks: Background
         c = conn.cursor()
 
         # Build query based on audience - include timezone for filtering
+        # Exclude opted-out users (STOP command compliance)
         if request.audience == "all":
             c.execute('''
                 SELECT phone_number, timezone FROM users
                 WHERE onboarding_complete = TRUE
+                AND (opted_out = FALSE OR opted_out IS NULL)
             ''')
         elif request.audience == "free":
             c.execute('''
                 SELECT phone_number, timezone FROM users
                 WHERE onboarding_complete = TRUE
                 AND (premium_status = 'free' OR premium_status IS NULL)
+                AND (opted_out = FALSE OR opted_out IS NULL)
             ''')
         elif request.audience == "premium":
             c.execute('''
                 SELECT phone_number, timezone FROM users
                 WHERE onboarding_complete = TRUE
                 AND premium_status = 'premium'
+                AND (opted_out = FALSE OR opted_out IS NULL)
             ''')
         else:
             raise HTTPException(status_code=400, detail="Invalid audience")
@@ -521,23 +525,26 @@ def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str):
         )
         conn.commit()
 
-        # Get recipients based on audience
+        # Get recipients based on audience (exclude opted-out users)
         if audience == "all":
             c.execute('''
                 SELECT phone_number, timezone FROM users
                 WHERE onboarding_complete = TRUE
+                AND (opted_out = FALSE OR opted_out IS NULL)
             ''')
         elif audience == "free":
             c.execute('''
                 SELECT phone_number, timezone FROM users
                 WHERE onboarding_complete = TRUE
                 AND (premium_status = 'free' OR premium_status IS NULL)
+                AND (opted_out = FALSE OR opted_out IS NULL)
             ''')
         elif audience == "premium":
             c.execute('''
                 SELECT phone_number, timezone FROM users
                 WHERE onboarding_complete = TRUE
                 AND premium_status = 'premium'
+                AND (opted_out = FALSE OR opted_out IS NULL)
             ''')
         else:
             logger.error(f"Invalid audience for scheduled broadcast {broadcast_id}: {audience}")

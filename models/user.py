@@ -277,3 +277,52 @@ def get_pending_memory_delete(phone_number):
     finally:
         if conn:
             return_db_connection(conn)
+
+
+def mark_user_opted_out(phone_number):
+    """Mark a user as opted out (STOP command compliance)"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            'UPDATE users SET opted_out = TRUE, opted_out_at = CURRENT_TIMESTAMP WHERE phone_number = %s',
+            (phone_number,)
+        )
+        conn.commit()
+        logger.info(f"User opted out: {phone_number[-4:]}")
+        return True
+    except Exception as e:
+        logger.error(f"Error marking user opted out: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def is_user_opted_out(phone_number):
+    """Check if a user has opted out"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone
+            phone_hash = hash_phone(phone_number)
+            c.execute('SELECT opted_out FROM users WHERE phone_hash = %s', (phone_hash,))
+            result = c.fetchone()
+            if not result:
+                c.execute('SELECT opted_out FROM users WHERE phone_number = %s', (phone_number,))
+                result = c.fetchone()
+        else:
+            c.execute('SELECT opted_out FROM users WHERE phone_number = %s', (phone_number,))
+            result = c.fetchone()
+
+        return result and result[0] == True
+    except Exception as e:
+        logger.error(f"Error checking user opt-out status: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
