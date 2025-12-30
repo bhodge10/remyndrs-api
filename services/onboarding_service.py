@@ -40,6 +40,8 @@ Just 4 quick questions to get started (name, email, ZIP), then you're all set!
 
 Note: During beta, you may experience brief periods without replies or delayed reminders as we roll out updates.
 
+Tip: Text ? anytime for help.
+
 What's your first name?""")
 
         elif step == 1:
@@ -93,7 +95,9 @@ What's your first name?""")
 ⏰ "Remind me to call mom tomorrow at 2pm"
 
 Your timezone: {timezone}
-Your current time: {user_time.strftime('%I:%M %p')}""")
+Your current time: {user_time.strftime('%I:%M %p')}
+
+Text ? anytime for help.""")
 
         return Response(content=str(resp), media_type="application/xml")
     
