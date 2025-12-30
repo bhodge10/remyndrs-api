@@ -443,11 +443,13 @@ def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None, 
         c = conn.cursor()
 
         # Build query dynamically based on filters
-        # Include subquery to check review status (flagged or marked good)
+        # Include subquery to check review status and join with users for timezone
         query = '''
             SELECT l.id, l.phone_number, l.message_in, l.message_out, l.intent, l.success, l.created_at, l.analyzed,
-                   (SELECT ca.issue_type FROM conversation_analysis ca WHERE ca.log_id = l.id LIMIT 1) as review_status
+                   (SELECT ca.issue_type FROM conversation_analysis ca WHERE ca.log_id = l.id LIMIT 1) as review_status,
+                   COALESCE(u.timezone, 'America/New_York') as user_timezone
             FROM logs l
+            LEFT JOIN users u ON l.phone_number = u.phone_number
             WHERE 1=1
         '''
         params = []
@@ -478,7 +480,8 @@ def get_recent_logs(limit=100, offset=0, phone_filter=None, intent_filter=None, 
                 'success': row[5],
                 'created_at': row[6].isoformat() if row[6] else None,
                 'analyzed': row[7] if len(row) > 7 else False,
-                'review_status': row[8] if len(row) > 8 else None  # 'good', issue_type, or None
+                'review_status': row[8] if len(row) > 8 else None,
+                'timezone': row[9] if len(row) > 9 else 'America/New_York'
             }
             for row in rows
         ]
@@ -573,9 +576,11 @@ def get_flagged_conversations(limit=50, include_reviewed=False):
             c.execute('''
                 SELECT ca.id, ca.log_id, ca.phone_number, ca.issue_type, ca.severity,
                        ca.ai_explanation, ca.reviewed, ca.created_at,
-                       l.message_in, l.message_out, COALESCE(ca.source, 'ai')
+                       l.message_in, l.message_out, COALESCE(ca.source, 'ai'),
+                       COALESCE(u.timezone, 'America/New_York')
                 FROM conversation_analysis ca
                 LEFT JOIN logs l ON ca.log_id = l.id
+                LEFT JOIN users u ON ca.phone_number = u.phone_number
                 ORDER BY ca.created_at DESC
                 LIMIT %s
             ''', (limit,))
@@ -583,9 +588,11 @@ def get_flagged_conversations(limit=50, include_reviewed=False):
             c.execute('''
                 SELECT ca.id, ca.log_id, ca.phone_number, ca.issue_type, ca.severity,
                        ca.ai_explanation, ca.reviewed, ca.created_at,
-                       l.message_in, l.message_out, COALESCE(ca.source, 'ai')
+                       l.message_in, l.message_out, COALESCE(ca.source, 'ai'),
+                       COALESCE(u.timezone, 'America/New_York')
                 FROM conversation_analysis ca
                 LEFT JOIN logs l ON ca.log_id = l.id
+                LEFT JOIN users u ON ca.phone_number = u.phone_number
                 WHERE ca.reviewed = FALSE
                 ORDER BY ca.created_at DESC
                 LIMIT %s
@@ -603,7 +610,8 @@ def get_flagged_conversations(limit=50, include_reviewed=False):
                 'created_at': row[7].isoformat() if row[7] else None,
                 'message_in': row[8],
                 'message_out': row[9],
-                'source': row[10] if len(row) > 10 else 'ai'
+                'source': row[10] if len(row) > 10 else 'ai',
+                'timezone': row[11] if len(row) > 11 else 'America/New_York'
             }
             for row in rows
         ]

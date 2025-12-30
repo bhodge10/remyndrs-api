@@ -2772,7 +2772,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 }} else {{
                     conversations.forEach(c => {{
                         const row = table.insertRow();
-                        const date = new Date(c.created_at).toLocaleString();
+                        const userTz = c.timezone || 'America/New_York';
+                        const date = new Date(c.created_at).toLocaleString('en-US', {{ timeZone: userTz }});
                         const phoneMasked = c.phone_number ? '...' + c.phone_number.slice(-4) : 'N/A';
                         const intentBadge = c.intent ? `<span class="intent-badge">${{c.intent}}</span>` : '-';
                         const msgInEscaped = escapeHtml(c.message_in).replace(/'/g, "\\'").replace(/"/g, "&quot;");
@@ -2872,7 +2873,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                         if (!f.reviewed) {{
                             row.style.background = '#fff8e1';
                         }}
-                        const date = new Date(f.created_at).toLocaleString();
+                        const userTz = f.timezone || 'America/New_York';
+                        const date = new Date(f.created_at).toLocaleString('en-US', {{ timeZone: userTz }});
                         const phoneMasked = f.phone_number ? '...' + f.phone_number.slice(-4) : 'N/A';
                         const severityClass = `severity-${{f.severity || 'low'}}`;
                         const source = f.source || 'ai';
