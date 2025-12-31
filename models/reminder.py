@@ -622,23 +622,34 @@ def resume_recurring_reminder(recurring_id, phone_number):
 
 
 def delete_recurring_reminder(recurring_id, phone_number):
-    """Delete a recurring reminder"""
+    """Delete a recurring reminder and its pending occurrences"""
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Debug: Check what's in the database first
-        c.execute('SELECT id, phone_number FROM recurring_reminders WHERE id = %s', (recurring_id,))
-        existing = c.fetchone()
-        logger.info(f"Delete attempt: recurring_id={recurring_id}, phone={phone_number[-4:]}, existing={existing}")
+        # First, delete any unsent reminders linked to this recurring reminder
+        c.execute(
+            'DELETE FROM reminders WHERE recurring_id = %s AND sent = FALSE',
+            (recurring_id,)
+        )
+        deleted_pending = c.rowcount
+        logger.info(f"Deleted {deleted_pending} pending reminders for recurring {recurring_id}")
 
+        # Set recurring_id to NULL for sent reminders (keep history)
+        c.execute(
+            'UPDATE reminders SET recurring_id = NULL WHERE recurring_id = %s',
+            (recurring_id,)
+        )
+
+        # Now delete the recurring reminder itself
         c.execute(
             'DELETE FROM recurring_reminders WHERE id = %s AND phone_number = %s',
             (recurring_id, phone_number)
         )
         success = c.rowcount > 0
         conn.commit()
+
         if success:
             logger.info(f"Deleted recurring reminder {recurring_id}")
         else:
