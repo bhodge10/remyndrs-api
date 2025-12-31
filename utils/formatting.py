@@ -100,7 +100,7 @@ def format_reminders_list(reminders, user_tz):
             else:
                 scheduled.append((display_text, ""))
 
-    # Build response
+    # Build response - only show scheduled reminders
     lines = []
 
     if scheduled:
@@ -114,17 +114,15 @@ def format_reminders_list(reminders, user_tz):
                 lines.append(f"{i}. {text}")
             lines.append("")  # Empty line between reminders
 
-    if completed:
-        if lines:
-            lines.append("")
-        lines.append("COMPLETED:")
+        # Add hint about completed reminders if there are any
+        if completed:
+            lines.append("(Text 'SHOW COMPLETED REMINDERS' to see past reminders)")
+    elif completed:
+        # No scheduled but have completed
+        lines.append("You don't have any upcoming reminders.")
         lines.append("")
-        for i, (text, date) in enumerate(completed[-5:], 1):
-            if date:
-                lines.append(f"{i}. {text}")
-                lines.append(f"   {date}")
-            else:
-                lines.append(f"{i}. {text}")
-            lines.append("")  # Empty line between reminders
+        lines.append("(Text 'SHOW COMPLETED REMINDERS' to see past reminders)")
+    else:
+        return "You don't have any reminders set."
 
-    return "\n".join(lines).strip() if lines else "You don't have any reminders set."
+    return "\n".join(lines).strip()

@@ -1041,6 +1041,51 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SHOW COMPLETED REMINDERS
+        # ==========================================
+        if msg_upper in ["SHOW COMPLETED REMINDERS", "SHOW COMPLETED", "COMPLETED REMINDERS", "PAST REMINDERS", "SHOW PAST REMINDERS"]:
+            reminders = get_user_reminders(phone_number)
+            # Filter to only sent/completed reminders
+            completed = [r for r in reminders if r[4]]  # r[4] is sent flag
+
+            if not completed:
+                resp = MessagingResponse()
+                resp.message("You don't have any completed reminders yet.")
+                log_interaction(phone_number, incoming_msg, "No completed reminders", "show_completed", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            # Format completed reminders (show last 10)
+            user_tz = get_user_timezone(phone_number)
+            tz = pytz.timezone(user_tz)
+            lines = ["COMPLETED REMINDERS:\n"]
+
+            for i, reminder in enumerate(completed[-10:], 1):
+                reminder_id, reminder_date_utc, reminder_text, recurring_id, sent = reminder
+                try:
+                    if isinstance(reminder_date_utc, datetime):
+                        utc_dt = reminder_date_utc
+                        if utc_dt.tzinfo is None:
+                            utc_dt = pytz.UTC.localize(utc_dt)
+                    else:
+                        utc_dt = datetime.strptime(str(reminder_date_utc), '%Y-%m-%d %H:%M:%S')
+                        utc_dt = pytz.UTC.localize(utc_dt)
+                    user_dt = utc_dt.astimezone(tz)
+                    date_str = user_dt.strftime('%a, %b %d at %I:%M %p')
+                except:
+                    date_str = ""
+
+                display_text = f"[R] {reminder_text}" if recurring_id else reminder_text
+                lines.append(f"{i}. {display_text}")
+                if date_str:
+                    lines.append(f"   {date_str}")
+                lines.append("")
+
+            resp = MessagingResponse()
+            resp.message("\n".join(lines).strip())
+            log_interaction(phone_number, incoming_msg, f"Listed {len(completed[-10:])} completed reminders", "show_completed", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # RECURRING REMINDER COMMANDS
         # ==========================================
 
@@ -1789,7 +1834,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     next_str = next_local.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')
                     reply_text += f"Next reminder: {next_str}\n\n"
 
-                reply_text += "(Text 'MY RECURRING' to see all, 'DELETE RECURRING [#]' to remove)"
+                reply_text += "(Text 'SHOW RECURRING' to see all, 'DELETE RECURRING [#]' to remove)"
 
                 log_interaction(phone_number, incoming_msg, reply_text, "reminder_recurring", True)
 
