@@ -627,6 +627,41 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # DELETE REMINDER BY NUMBER
+        # ==========================================
+        # Handle "Delete reminder 1", "Cancel reminder 2", etc.
+        delete_reminder_match = re.match(r'^(?:delete|remove|cancel)\s+reminder\s+(\d+)$', incoming_msg.strip(), re.IGNORECASE)
+        if delete_reminder_match:
+            reminder_num = int(delete_reminder_match.group(1))
+            # Get user's reminders (pending only)
+            reminders = get_user_reminders(phone_number)
+            pending = [r for r in reminders if not r[4]]  # r[4] is 'sent' flag
+
+            if not pending:
+                resp = MessagingResponse()
+                resp.message("You don't have any pending reminders to delete.")
+                return Response(content=str(resp), media_type="application/xml")
+
+            if reminder_num < 1 or reminder_num > len(pending):
+                resp = MessagingResponse()
+                resp.message(f"Please enter a number between 1 and {len(pending)}. Text 'MY REMINDERS' to see the list.")
+                return Response(content=str(resp), media_type="application/xml")
+
+            reminder = pending[reminder_num - 1]
+            reminder_id = reminder[0]
+            reminder_text = reminder[2]
+
+            if delete_reminder(phone_number, reminder_id):
+                resp = MessagingResponse()
+                resp.message(f"Deleted reminder: {reminder_text}")
+                log_interaction(phone_number, incoming_msg, f"Deleted reminder {reminder_id}", "delete_reminder", True)
+            else:
+                resp = MessagingResponse()
+                resp.message("Couldn't delete that reminder. Please try again.")
+                log_interaction(phone_number, incoming_msg, "Delete reminder failed", "delete_reminder", False)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # DELETE ITEM BY NUMBER (context-aware)
         # ==========================================
         # Handle "Delete 2", "Remove 3", etc. when user has a last active list
