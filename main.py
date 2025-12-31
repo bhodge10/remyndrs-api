@@ -765,12 +765,29 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     'display': f"Reminder: {display_prefix}{reminder[2][:40]}"
                 })
 
-            # Check for list item at this position (skip if last_active was __RECURRING__)
-            if last_active:
+            # Check for list items at this position
+            # If user has an active list, check that one; otherwise check all lists
+            if last_active and last_active != "__RECURRING__":
+                # Check specific active list
                 list_info = get_list_by_name(phone_number, last_active)
                 if list_info:
                     list_id = list_info[0]
                     list_name = list_info[1]
+                    items = get_list_items(list_id)
+                    if items and 1 <= item_num <= len(items):
+                        item_id, item_text, _ = items[item_num - 1]
+                        delete_options.append({
+                            'type': 'list_item',
+                            'list_name': list_name,
+                            'text': item_text,
+                            'display': f"'{item_text}' from {list_name} list"
+                        })
+            else:
+                # No active list - check all lists for items at this position
+                all_lists = get_lists(phone_number)
+                for lst in all_lists:
+                    list_id = lst[0]
+                    list_name = lst[1]
                     items = get_list_items(list_id)
                     if items and 1 <= item_num <= len(items):
                         item_id, item_text, _ = items[item_num - 1]
