@@ -624,6 +624,32 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # RECURRING REMINDER DELETE BY NUMBER
+        # ==========================================
+        # If user sends just a number and was viewing recurring reminders, delete that one
+        if incoming_msg.strip().isdigit():
+            last_active = get_last_active_list(phone_number)
+            if last_active == "__RECURRING__":
+                item_num = int(incoming_msg.strip())
+                recurring_list = get_recurring_reminders(phone_number, include_inactive=True)
+                if recurring_list and 1 <= item_num <= len(recurring_list):
+                    r = recurring_list[item_num - 1]
+                    if delete_recurring_reminder(r['id'], phone_number):
+                        resp = MessagingResponse()
+                        resp.message(f"Deleted recurring reminder: {r['reminder_text']}")
+                        log_interaction(phone_number, incoming_msg, f"Deleted recurring {r['id']}", "delete_recurring", True)
+                    else:
+                        resp = MessagingResponse()
+                        resp.message("Couldn't delete that recurring reminder.")
+                    # Clear the recurring context
+                    create_or_update_user(phone_number, last_active_list=None)
+                    return Response(content=str(resp), media_type="application/xml")
+                else:
+                    resp = MessagingResponse()
+                    resp.message(f"Please enter a number between 1 and {len(recurring_list)}. Text 'MY RECURRING' to see the list.")
+                    return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # LIST SELECTION BY NUMBER
         # ==========================================
         # If user sends just a number and has lists, show that list
@@ -697,6 +723,29 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         delete_match = re.match(r'^(?:delete|remove)\s+(\d+)$', incoming_msg.strip(), re.IGNORECASE)
         if delete_match:
             item_num = int(delete_match.group(1))
+
+            # Check if user was viewing recurring reminders
+            last_active = get_last_active_list(phone_number)
+            if last_active == "__RECURRING__":
+                # Delete from recurring reminders list
+                recurring_list = get_recurring_reminders(phone_number, include_inactive=True)
+                if recurring_list and 1 <= item_num <= len(recurring_list):
+                    r = recurring_list[item_num - 1]
+                    if delete_recurring_reminder(r['id'], phone_number):
+                        resp = MessagingResponse()
+                        resp.message(f"Deleted recurring reminder: {r['reminder_text']}")
+                        log_interaction(phone_number, incoming_msg, f"Deleted recurring {r['id']}", "delete_recurring", True)
+                    else:
+                        resp = MessagingResponse()
+                        resp.message("Couldn't delete that recurring reminder.")
+                    # Clear the recurring context
+                    create_or_update_user(phone_number, last_active_list=None)
+                    return Response(content=str(resp), media_type="application/xml")
+                else:
+                    resp = MessagingResponse()
+                    resp.message(f"Please enter a number between 1 and {len(recurring_list)}. Text 'MY RECURRING' to see the list.")
+                    return Response(content=str(resp), media_type="application/xml")
+
             delete_options = []
 
             # Check for reminder at this position
@@ -716,8 +765,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     'display': f"Reminder: {display_prefix}{reminder[2][:40]}"
                 })
 
-            # Check for list item at this position
-            last_active = get_last_active_list(phone_number)
+            # Check for list item at this position (skip if last_active was __RECURRING__)
             if last_active:
                 list_info = get_list_by_name(phone_number, last_active)
                 if list_info:
@@ -1042,7 +1090,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
                 lines.append("")  # Blank line between entries
 
-            lines.append("(Text 'DELETE RECURRING [#]' to remove, 'PAUSE RECURRING [#]' to pause)")
+            lines.append("(Reply with number to delete, or 'PAUSE [#]' to pause)")
+
+            # Set context so "Delete #" knows we're in recurring mode
+            create_or_update_user(phone_number, last_active_list="__RECURRING__")
 
             resp = MessagingResponse()
             resp.message("\n".join(lines))
