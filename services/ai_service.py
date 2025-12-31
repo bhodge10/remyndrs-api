@@ -55,9 +55,9 @@ def process_with_ai(message, phone_number, context):
             scheduled_num = 0
             completed_num = 0
 
-            # Tuple format: (id, reminder_date, reminder_text, snoozed_until, sent)
+            # Tuple format: (id, reminder_date, reminder_text, recurring_id, sent)
             for reminder in reminders:
-                reminder_id, reminder_date_utc, reminder_text, snoozed_until, sent = reminder
+                reminder_id, reminder_date_utc, reminder_text, recurring_id, sent = reminder
                 try:
                     # Handle both datetime objects and strings from PostgreSQL
                     if isinstance(reminder_date_utc, datetime):
@@ -77,19 +77,23 @@ def process_with_ai(message, phone_number, context):
                     else:
                         date_str = user_dt.strftime('%a, %b %d at %I:%M %p')
 
+                    # Add [R] prefix for recurring reminders
+                    display_text = f"[R] {reminder_text}" if recurring_id else reminder_text
+
                     if sent:
                         completed_num += 1
-                        completed.append(f"{completed_num}. {reminder_text}\n   {date_str}")
+                        completed.append(f"{completed_num}. {display_text}\n   {date_str}")
                     else:
                         scheduled_num += 1
-                        scheduled.append(f"{scheduled_num}. {reminder_text}\n   {date_str}")
+                        scheduled.append(f"{scheduled_num}. {display_text}\n   {date_str}")
                 except:
+                    display_text = f"[R] {reminder_text}" if recurring_id else reminder_text
                     if sent:
                         completed_num += 1
-                        completed.append(f"{completed_num}. {reminder_text}")
+                        completed.append(f"{completed_num}. {display_text}")
                     else:
                         scheduled_num += 1
-                        scheduled.append(f"{scheduled_num}. {reminder_text}")
+                        scheduled.append(f"{scheduled_num}. {display_text}")
 
             # Build context - limit completed to last 5
             parts = []

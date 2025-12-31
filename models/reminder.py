@@ -76,7 +76,7 @@ def mark_reminder_sent(reminder_id):
 def get_user_reminders(phone_number):
     """Get all reminders for a user (both pending and sent)
 
-    Returns tuples of: (id, reminder_date, reminder_text, snoozed_until, sent)
+    Returns tuples of: (id, reminder_date, reminder_text, recurring_id, sent)
     """
     conn = None
     try:
@@ -87,20 +87,20 @@ def get_user_reminders(phone_number):
             from utils.encryption import hash_phone
             phone_hash = hash_phone(phone_number)
             c.execute(
-                'SELECT id, reminder_date, reminder_text, snoozed_until, sent FROM reminders WHERE phone_hash = %s ORDER BY reminder_date',
+                'SELECT id, reminder_date, reminder_text, recurring_id, sent FROM reminders WHERE phone_hash = %s ORDER BY reminder_date',
                 (phone_hash,)
             )
             results = c.fetchall()
             if not results:
                 # Fallback for reminders created before encryption
                 c.execute(
-                    'SELECT id, reminder_date, reminder_text, snoozed_until, sent FROM reminders WHERE phone_number = %s ORDER BY reminder_date',
+                    'SELECT id, reminder_date, reminder_text, recurring_id, sent FROM reminders WHERE phone_number = %s ORDER BY reminder_date',
                     (phone_number,)
                 )
                 results = c.fetchall()
         else:
             c.execute(
-                'SELECT id, reminder_date, reminder_text, snoozed_until, sent FROM reminders WHERE phone_number = %s ORDER BY reminder_date',
+                'SELECT id, reminder_date, reminder_text, recurring_id, sent FROM reminders WHERE phone_number = %s ORDER BY reminder_date',
                 (phone_number,)
             )
             results = c.fetchall()

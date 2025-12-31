@@ -64,9 +64,9 @@ def format_reminders_list(reminders, user_tz):
     scheduled = []
     completed = []
 
-    # Tuple format: (id, reminder_date, reminder_text, snoozed_until, sent)
+    # Tuple format: (id, reminder_date, reminder_text, recurring_id, sent)
     for reminder in reminders:
-        reminder_id, reminder_date_utc, reminder_text, snoozed_until, sent = reminder
+        reminder_id, reminder_date_utc, reminder_text, recurring_id, sent = reminder
         try:
             # Handle both datetime objects and strings
             if isinstance(reminder_date_utc, datetime):
@@ -86,15 +86,19 @@ def format_reminders_list(reminders, user_tz):
             else:
                 date_str = user_dt.strftime('%a, %b %d at %I:%M %p')
 
+            # Add [R] prefix for recurring reminders
+            display_text = f"[R] {reminder_text}" if recurring_id else reminder_text
+
             if sent:
-                completed.append((reminder_text, date_str))
+                completed.append((display_text, date_str))
             else:
-                scheduled.append((reminder_text, date_str))
+                scheduled.append((display_text, date_str))
         except:
+            display_text = f"[R] {reminder_text}" if recurring_id else reminder_text
             if sent:
-                completed.append((reminder_text, ""))
+                completed.append((display_text, ""))
             else:
-                scheduled.append((reminder_text, ""))
+                scheduled.append((display_text, ""))
 
     # Build response
     lines = []

@@ -2273,7 +2273,7 @@ async def view_memories(phone_number: str, admin: str = Depends(verify_admin)):
 @app.get("/reminders/{phone_number}")
 async def view_reminders(phone_number: str, admin: str = Depends(verify_admin)):
     """View all reminders for a phone number - for testing/admin"""
-    # Tuple format: (id, reminder_date, reminder_text, snoozed_until, sent)
+    # Tuple format: (id, reminder_date, reminder_text, recurring_id, sent)
     reminders = get_user_reminders(phone_number)
     return {
         "phone_number": phone_number,
@@ -2283,7 +2283,7 @@ async def view_reminders(phone_number: str, admin: str = Depends(verify_admin)):
                 "id": r[0],
                 "date": r[1],
                 "text": r[2],
-                "snoozed_until": r[3],
+                "recurring_id": r[3],
                 "sent": bool(r[4])
             } for r in reminders
         ]
