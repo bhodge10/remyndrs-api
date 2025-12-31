@@ -318,6 +318,11 @@ RECURRING PATTERNS:
 - "monthly on the 15th at 3pm" → recurrence_type: "monthly", recurrence_day: 15, time: "15:00"
 IMPORTANT: For recurring reminders, ALWAYS require AM/PM or use 24-hour time. If AM/PM is missing, use "clarify_time" action.
 Days of week for weekly: Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
+NOT SUPPORTED - If user asks for minute or hourly intervals (e.g., "every 5 minutes", "every 2 hours", "every hour"), return:
+{{
+    "action": "help",
+    "response": "I can't set reminders for minute or hourly intervals. I support: every day, weekly (e.g., every Sunday), weekdays, weekends, or monthly. Try something like 'Remind me every day at 7pm to take medicine'."
+}}
 
 For ASKING TIME CLARIFICATION:
 {{
