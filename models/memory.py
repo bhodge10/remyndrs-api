@@ -48,20 +48,20 @@ def get_memories(phone_number):
             from utils.encryption import hash_phone
             phone_hash = hash_phone(phone_number)
             c.execute(
-                'SELECT memory_text, parsed_data, created_at FROM memories WHERE phone_hash = %s ORDER BY created_at DESC',
+                'SELECT id, memory_text, parsed_data, created_at FROM memories WHERE phone_hash = %s ORDER BY created_at DESC',
                 (phone_hash,)
             )
             results = c.fetchall()
             if not results:
                 # Fallback for data created before encryption
                 c.execute(
-                    'SELECT memory_text, parsed_data, created_at FROM memories WHERE phone_number = %s ORDER BY created_at DESC',
+                    'SELECT id, memory_text, parsed_data, created_at FROM memories WHERE phone_number = %s ORDER BY created_at DESC',
                     (phone_number,)
                 )
                 results = c.fetchall()
         else:
             c.execute(
-                'SELECT memory_text, parsed_data, created_at FROM memories WHERE phone_number = %s ORDER BY created_at DESC',
+                'SELECT id, memory_text, parsed_data, created_at FROM memories WHERE phone_number = %s ORDER BY created_at DESC',
                 (phone_number,)
             )
             results = c.fetchall()

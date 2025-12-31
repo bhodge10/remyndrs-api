@@ -64,7 +64,9 @@ def format_reminders_list(reminders, user_tz):
     scheduled = []
     completed = []
 
-    for reminder_text, reminder_date_utc, sent in reminders:
+    # Tuple format: (id, reminder_date, reminder_text, snoozed_until, sent)
+    for reminder in reminders:
+        reminder_id, reminder_date_utc, reminder_text, snoozed_until, sent = reminder
         try:
             # Handle both datetime objects and strings
             if isinstance(reminder_date_utc, datetime):

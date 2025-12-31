@@ -1272,9 +1272,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # LIST ALL COMMAND
         # ==========================================
         if incoming_msg.upper() in ["LIST ALL", "LIST MEMORIES", "SHOW MEMORIES", "MY MEMORIES"]:
+            # Tuple format: (id, memory_text, parsed_data, created_at)
             memories = get_memories(phone_number)
             if memories:
-                memory_list = "\n\n".join([f"{i+1}. {m[0]}" for i, m in enumerate(memories[:20])])
+                memory_list = "\n\n".join([f"{i+1}. {m[1]}" for i, m in enumerate(memories[:20])])
                 reply = f"Your stored memories:\n\n{memory_list}"
             else:
                 reply = "You don't have any memories stored yet."
@@ -2254,15 +2255,17 @@ async def consent_page():
 @app.get("/memories/{phone_number}")
 async def view_memories(phone_number: str, admin: str = Depends(verify_admin)):
     """View all memories for a phone number - for testing/admin"""
+    # Tuple format: (id, memory_text, parsed_data, created_at)
     memories = get_memories(phone_number)
     return {
         "phone_number": phone_number,
         "total_memories": len(memories),
         "memories": [
             {
-                "text": m[0],
-                "data": json.loads(m[1]) if m[1] else {},
-                "created": m[2]
+                "id": m[0],
+                "text": m[1],
+                "data": json.loads(m[2]) if m[2] else {},
+                "created": m[3]
             } for m in memories
         ]
     }
@@ -2270,15 +2273,18 @@ async def view_memories(phone_number: str, admin: str = Depends(verify_admin)):
 @app.get("/reminders/{phone_number}")
 async def view_reminders(phone_number: str, admin: str = Depends(verify_admin)):
     """View all reminders for a phone number - for testing/admin"""
+    # Tuple format: (id, reminder_date, reminder_text, snoozed_until, sent)
     reminders = get_user_reminders(phone_number)
     return {
         "phone_number": phone_number,
         "total_reminders": len(reminders),
         "reminders": [
             {
-                "text": r[0],
+                "id": r[0],
                 "date": r[1],
-                "sent": bool(r[2])
+                "text": r[2],
+                "snoozed_until": r[3],
+                "sent": bool(r[4])
             } for r in reminders
         ]
     }

@@ -22,12 +22,13 @@ def process_with_ai(message, phone_number, context):
         logger.info(f"Processing message with AI for {phone_number}")
         
         # Get and format memories
+        # Tuple format: (id, memory_text, parsed_data, created_at)
         memories = get_memories(phone_number)
         if memories:
             formatted_memories = []
             for m in memories[:MAX_MEMORIES_IN_CONTEXT]:
-                memory_text = m[0]
-                created_date = m[2]
+                memory_text = m[1]
+                created_date = m[3]
                 try:
                     # Handle both datetime objects and strings from PostgreSQL
                     if isinstance(created_date, datetime):
@@ -54,7 +55,9 @@ def process_with_ai(message, phone_number, context):
             scheduled_num = 0
             completed_num = 0
 
-            for reminder_text, reminder_date_utc, sent in reminders:
+            # Tuple format: (id, reminder_date, reminder_text, snoozed_until, sent)
+            for reminder in reminders:
+                reminder_id, reminder_date_utc, reminder_text, snoozed_until, sent = reminder
                 try:
                     # Handle both datetime objects and strings from PostgreSQL
                     if isinstance(reminder_date_utc, datetime):
