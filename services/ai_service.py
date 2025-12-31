@@ -179,9 +179,10 @@ CAPABILITIES:
 10. DELETE ITEMS from lists
 
 For reminder requests with SPECIFIC TIMES:
-- If time includes AM/PM in ANY format (like "9pm", "9 pm", "9PM", "9 PM", "3:30am", "3:30 a.m.", "3:30AM", "3:30 A.M."): Process normally
-- If time does NOT include AM/PM (like "9:00" or "4:35"): Ask for clarification - respond with action "clarify_time"
-- Accept all variations: pm, PM, p.m., P.M., am, AM, a.m., A.M.
+- If time includes AM/PM in ANY format: Process normally with action "reminder"
+  Examples that HAVE AM/PM (use action "reminder"): "9pm", "9 pm", "9PM", "4:00pm", "4:00PM", "4:00 pm", "3:30am", "3:30 a.m.", "3:30AM", "3:30 A.M."
+- ONLY use "clarify_time" when there is NO am/pm anywhere (like "9:00" or "4:35" with nothing after)
+- Accept all variations: pm, PM, p.m., P.M., am, AM, a.m., A.M. (with or without space before)
 
 For reminder requests with RELATIVE TIMES (use action "reminder_relative"):
 - "in 30 minutes" → Use reminder_relative with offset_minutes: 30
@@ -207,9 +208,10 @@ For reminder requests with DAYS OF THE WEEK:
 
 Examples:
 - "Remind me at 9pm to take meds" → action: "reminder" (has PM)
-- "Remind me at 4:22 pm to call wife" → action: "reminder" (has pm in lowercase)
+- "Remind me at 4:00pm to go to store" → action: "reminder" (has pm attached - NO space needed!)
+- "Remind me at 4:22 pm to call wife" → action: "reminder" (has pm with space)
 - "Remind me at 3:30 AM to wake up" → action: "reminder" (has AM)
-- "Remind me at 4:35 to call wife" → action: "clarify_time" (no AM/PM)
+- "Remind me at 4:35 to call wife" → action: "clarify_time" (no AM/PM at all)
 - "Remind me in 30 minutes" → action: "reminder_relative" with offset_minutes: 30
 - "Remind me in 1 minute" → action: "reminder_relative" with offset_minutes: 1
 - "Remind me in 2 hours" → action: "reminder_relative" with offset_minutes: 120
