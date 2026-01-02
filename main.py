@@ -1510,7 +1510,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         logger.info(f"AI response: {ai_response}")
 
         # Check for multi-command response
-        if ai_response.get("multiple") and isinstance(ai_response.get("actions"), list):
+        if ai_response.get("action") == "multiple" and isinstance(ai_response.get("actions"), list):
             actions_to_process = ai_response["actions"]
             logger.info(f"Processing {len(actions_to_process)} actions")
         else:
