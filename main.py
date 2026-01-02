@@ -1568,6 +1568,14 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     log_interaction(phone_number, incoming_msg, reply_text, "store_blocked", False)
                     return reply_text
 
+            # Check tier limit for memories
+            from services.tier_service import can_save_memory
+            allowed, limit_msg = can_save_memory(phone_number)
+            if not allowed:
+                reply_text = limit_msg
+                log_interaction(phone_number, incoming_msg, reply_text, "memory_limit_reached", False)
+                return reply_text
+
             save_memory(phone_number, memory_text, ai_response)
             reply_text = ai_response.get("confirmation", "Got it! I'll remember that.")
             log_interaction(phone_number, incoming_msg, reply_text, "store", True)
@@ -1616,6 +1624,14 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
                     return reply_text
 
+            # Check tier limit for reminders
+            from services.tier_service import can_create_reminder
+            allowed, limit_msg = can_create_reminder(phone_number)
+            if not allowed:
+                reply_text = limit_msg
+                log_interaction(phone_number, incoming_msg, reply_text, "reminder_limit_reached", False)
+                return reply_text
+
             try:
                 user_tz_str = get_user_timezone(phone_number)
                 tz = pytz.timezone(user_tz_str)
@@ -1660,6 +1676,14 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     reply_text = get_sensitive_data_warning()
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
                     return reply_text
+
+            # Check tier limit for reminders
+            from services.tier_service import can_create_reminder
+            allowed, limit_msg = can_create_reminder(phone_number)
+            if not allowed:
+                reply_text = limit_msg
+                log_interaction(phone_number, incoming_msg, reply_text, "reminder_limit_reached", False)
+                return reply_text
 
             try:
                 # Helper to parse numeric value from AI response
@@ -1745,6 +1769,14 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     reply_text = get_sensitive_data_warning()
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
                     return reply_text
+
+            # Check tier limit for recurring reminders (premium feature)
+            from services.tier_service import can_create_recurring_reminder
+            allowed, limit_msg = can_create_recurring_reminder(phone_number)
+            if not allowed:
+                reply_text = limit_msg
+                log_interaction(phone_number, incoming_msg, reply_text, "recurring_not_allowed", False)
+                return reply_text
 
             try:
                 # Validate required fields
@@ -1854,10 +1886,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 reply_text = result
             else:
                 list_name = result  # Use sanitized name
-                # Check list limit
-                list_count = get_list_count(phone_number)
-                if list_count >= MAX_LISTS_PER_USER:
-                    reply_text = f"You've reached the maximum of {MAX_LISTS_PER_USER} lists. Delete a list to create a new one."
+                # Check tier limit for lists
+                from services.tier_service import can_create_list
+                allowed, limit_msg = can_create_list(phone_number)
+                if not allowed:
+                    reply_text = limit_msg
                 elif get_list_by_name(phone_number, list_name):
                     reply_text = f"You already have a list called '{list_name}'."
                 else:
@@ -1903,15 +1936,18 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
                 # Auto-create list if it doesn't exist
                 if not list_info:
-                    list_count = get_list_count(phone_number)
-                    if list_count >= MAX_LISTS_PER_USER:
-                        reply_text = f"You've reached the maximum of {MAX_LISTS_PER_USER} lists. Delete a list first."
+                    from services.tier_service import can_create_list, can_add_list_item, get_tier_limits, get_user_tier
+                    allowed, limit_msg = can_create_list(phone_number)
+                    if not allowed:
+                        reply_text = limit_msg
                     else:
                         list_id = create_list(phone_number, list_name)
-                        # Add all parsed items
+                        # Add all parsed items (check tier item limit)
+                        tier_limits = get_tier_limits(get_user_tier(phone_number))
+                        max_items = tier_limits['max_items_per_list']
                         added_items = []
                         for item in items_to_add:
-                            if len(added_items) < MAX_ITEMS_PER_LIST:
+                            if len(added_items) < max_items:
                                 add_list_item(list_id, phone_number, item)
                                 added_items.append(item)
                         # Track last active list
@@ -1923,12 +1959,17 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 else:
                     list_id = list_info[0]
                     list_name = list_info[1]  # Use actual list name from DB
-                    item_count = get_item_count(list_id)
-                    available_slots = MAX_ITEMS_PER_LIST - item_count
-
-                    if available_slots <= 0:
-                        reply_text = f"Your {list_name} is full ({MAX_ITEMS_PER_LIST} items max). Remove some items first."
+                    # Check tier limit for items per list
+                    from services.tier_service import can_add_list_item, get_tier_limits, get_user_tier
+                    allowed, limit_msg = can_add_list_item(phone_number, list_id)
+                    if not allowed:
+                        reply_text = limit_msg
                     else:
+                        tier_limits = get_tier_limits(get_user_tier(phone_number))
+                        max_items = tier_limits['max_items_per_list']
+                        item_count = get_item_count(list_id)
+                        available_slots = max_items - item_count
+
                         # Add items up to the limit
                         added_items = []
                         for item in items_to_add:
@@ -1958,12 +1999,17 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 # Parse multiple items
                 items_to_add = parse_list_items(item_text, phone_number)
 
-                item_count = get_item_count(list_id)
-                available_slots = MAX_ITEMS_PER_LIST - item_count
-
-                if available_slots <= 0:
-                    reply_text = f"Your {list_name} is full ({MAX_ITEMS_PER_LIST} items max). Remove some items first."
+                # Check tier limit for items per list
+                from services.tier_service import can_add_list_item, get_tier_limits, get_user_tier
+                allowed, limit_msg = can_add_list_item(phone_number, list_id)
+                if not allowed:
+                    reply_text = limit_msg
                 else:
+                    tier_limits = get_tier_limits(get_user_tier(phone_number))
+                    max_items = tier_limits['max_items_per_list']
+                    item_count = get_item_count(list_id)
+                    available_slots = max_items - item_count
+
                     # Add items up to the limit
                     added_items = []
                     for item in items_to_add:
