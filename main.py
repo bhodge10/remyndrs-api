@@ -226,8 +226,10 @@ logger.info(f"✅ Application initialized in {ENVIRONMENT} mode")
 async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(...)):
     """Handle incoming SMS from Twilio"""
     try:
-        # Validate Twilio signature (skip in development for testing)
-        if ENVIRONMENT != "development":
+        # Validate Twilio signature (skip in development and staging)
+        # Note: Staging skips validation because fallback requests have signatures
+        # computed for the production URL, which won't validate against staging URL
+        if ENVIRONMENT not in ("development", "staging"):
             validator = RequestValidator(TWILIO_AUTH_TOKEN)
 
             # Get the full URL and signature
