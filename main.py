@@ -293,6 +293,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         logger.info(f"Checking reset: '{incoming_msg.upper()}' in ['RESET ACCOUNT', 'RESTART'] = {incoming_msg.upper() in ['RESET ACCOUNT', 'RESTART']}")
         if incoming_msg.upper() in ["RESET ACCOUNT", "RESTART"]:
             logger.info("RESET ACCOUNT matched - resetting user")
+
+            # In staging, reset to step 0 to show the actual new user welcome message
+            # In production, reset to step 1 (skips welcome, asks for name directly)
+            reset_step = 0 if ENVIRONMENT == "staging" else 1
+
             create_or_update_user(
                 phone_number,
                 first_name=None,
@@ -301,15 +306,23 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 zip_code=None,
                 timezone='America/New_York',
                 onboarding_complete=False,
-                onboarding_step=1,
+                onboarding_step=reset_step,
                 pending_delete=False,
                 pending_reminder_text=None,
-                pending_reminder_time=None
+                pending_reminder_time=None,
+                trial_end_date=None,
+                premium_status='free'
             )
 
-            resp = MessagingResponse()
-            resp.message(staging_prefix("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?"))
             log_interaction(phone_number, incoming_msg, "Account reset", "reset", True)
+
+            # In staging, trigger the actual onboarding flow to show welcome message
+            if ENVIRONMENT == "staging":
+                return handle_onboarding(phone_number, incoming_msg)
+
+            # In production, show abbreviated reset message
+            resp = MessagingResponse()
+            resp.message("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?")
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
