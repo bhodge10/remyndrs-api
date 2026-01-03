@@ -32,6 +32,8 @@ try:
     TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
     TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
     TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
+    # Public phone number for contact card (may differ from sending number)
+    PUBLIC_PHONE_NUMBER = os.environ.get("PUBLIC_PHONE_NUMBER", "+18555521950")
     ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
     DATABASE_URL = os.environ.get("DATABASE_URL")
 
