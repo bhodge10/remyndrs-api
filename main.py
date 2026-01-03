@@ -2478,15 +2478,25 @@ async def health_check():
 @app.get("/contact.vcf")
 async def get_contact_vcf():
     """Serve Remyndrs contact card (VCF) for saving to phone contacts"""
-    from config import APP_BASE_URL
-    logo_url = f"{APP_BASE_URL}/static/remyndrs-logo.png"
+    import os
+    import base64
+
+    # Load and base64 encode the logo for better phone compatibility
+    logo_path = os.path.join(os.path.dirname(__file__), "static", "remyndrs-logo.png")
+    try:
+        with open(logo_path, "rb") as f:
+            logo_b64 = base64.b64encode(f.read()).decode("utf-8")
+        photo_line = f"PHOTO;ENCODING=b;TYPE=PNG:{logo_b64}"
+    except Exception as e:
+        logger.error(f"Error loading logo for VCF: {e}")
+        photo_line = ""
 
     vcf_content = f"""BEGIN:VCARD
 VERSION:3.0
 FN:Remyndrs
 ORG:Remyndrs
 TEL;TYPE=CELL:{PUBLIC_PHONE_NUMBER}
-PHOTO;VALUE=URI:{logo_url}
+{photo_line}
 NOTE:Your personal SMS assistant for reminders, lists, and memories. Text ? for help.
 END:VCARD"""
 
