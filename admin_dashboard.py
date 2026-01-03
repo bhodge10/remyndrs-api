@@ -1703,7 +1703,7 @@ async def cs_get_customer(phone_number: str, admin: str = Depends(verify_admin))
         c.execute('SELECT COUNT(*) FROM memories WHERE phone_number = %s', (phone_number,))
         memory_count = c.fetchone()[0]
 
-        c.execute('SELECT COUNT(*) FROM recurring_reminders WHERE phone_number = %s AND is_active = TRUE', (phone_number,))
+        c.execute('SELECT COUNT(*) FROM recurring_reminders WHERE phone_number = %s AND active = TRUE', (phone_number,))
         recurring_count = c.fetchone()[0]
 
         # Get recent messages
