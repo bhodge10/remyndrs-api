@@ -245,6 +245,16 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         incoming_msg = Body.strip()
         phone_number = From
 
+        # Staging Fallback: If enabled in production, fail for test numbers to trigger Twilio fallback URL
+        if ENVIRONMENT == "production":
+            staging_fallback_enabled = get_setting("staging_fallback_enabled", "false") == "true"
+            if staging_fallback_enabled:
+                staging_numbers_raw = get_setting("staging_fallback_numbers", "")
+                staging_numbers = [n.strip() for n in staging_numbers_raw.split("\n") if n.strip()]
+                if phone_number in staging_numbers:
+                    logger.info(f"Staging fallback: Triggering fallback for {mask_phone_number(phone_number)}")
+                    raise HTTPException(status_code=503, detail="Routing to staging")
+
         # Staging environment: Only allow specific phone numbers for testing
         if ENVIRONMENT == "staging":
             STAGING_ALLOWED_NUMBERS = ["+18593935374"]  # Add allowed test numbers here

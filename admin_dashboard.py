@@ -814,6 +814,40 @@ async def delete_incomplete_users(admin: str = Depends(verify_admin)):
 
 DEFAULT_MAINTENANCE_MESSAGE = "Remyndrs is undergoing maintenance. The service will be back up soon. You will receive a message when it's back up."
 
+
+# =====================================================
+# STAGING FALLBACK SETTINGS API
+# =====================================================
+
+@router.get("/admin/settings/staging-fallback")
+async def get_staging_fallback(admin: str = Depends(verify_admin)):
+    """Get staging fallback configuration"""
+    enabled = get_setting("staging_fallback_enabled", "false") == "true"
+    numbers = get_setting("staging_fallback_numbers", "")
+    return JSONResponse(content={
+        "enabled": enabled,
+        "numbers": numbers
+    })
+
+
+@router.post("/admin/settings/staging-fallback")
+async def update_staging_fallback(request: Request, admin: str = Depends(verify_admin)):
+    """Update staging fallback configuration"""
+    try:
+        data = await request.json()
+        enabled = data.get("enabled", False)
+        numbers = data.get("numbers", "").strip()
+
+        set_setting("staging_fallback_enabled", "true" if enabled else "false")
+        set_setting("staging_fallback_numbers", numbers)
+
+        logger.info(f"Staging fallback updated: enabled={enabled}, numbers={numbers}")
+        return JSONResponse(content={"success": True, "enabled": enabled, "numbers": numbers})
+    except Exception as e:
+        logger.error(f"Error updating staging fallback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/admin/settings/maintenance-message")
 async def get_maintenance_message(admin: str = Depends(verify_admin)):
     """Get the current maintenance message"""
@@ -2597,6 +2631,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <a href="#conversations">Conversations</a>
         <a href="#recurring">Recurring</a>
         <a href="#customer-service">Customer Service</a>
+        <a href="#settings">Settings</a>
     </div>
 
     <h2 id="overview" class="section-anchor" style="margin-top: 0;">Overview</h2>
@@ -3184,6 +3219,70 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </div>
     </div>
 
+    <!-- Settings Section -->
+    <div id="settings" class="broadcast-section section-anchor">
+        <h2>Settings</h2>
+
+        <!-- Staging Fallback Settings -->
+        <div class="card" style="padding: 20px; margin-bottom: 20px;">
+            <h4 style="margin-bottom: 15px; color: #2c3e50;">Staging Fallback Testing</h4>
+            <p style="color: #7f8c8d; margin-bottom: 15px; font-size: 0.9em;">
+                When enabled, messages from these phone numbers will fail in production,
+                triggering Twilio to use the fallback URL (staging environment).
+                <br><strong>Note:</strong> Configure the fallback URL in your Twilio phone number settings.
+            </p>
+
+            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="stagingFallbackEnabled" onchange="updateStagingFallback()" style="width: 18px; height: 18px;">
+                    <span style="font-weight: 500;">Enable Staging Fallback</span>
+                </label>
+                <span id="stagingFallbackStatus" style="padding: 4px 10px; border-radius: 4px; font-size: 0.85em;"></span>
+            </div>
+
+            <div class="form-group">
+                <label for="stagingFallbackNumbers" style="display: block; margin-bottom: 5px; font-weight: 500; color: #2c3e50;">
+                    Phone Numbers (one per line, include +1)
+                </label>
+                <textarea id="stagingFallbackNumbers"
+                    style="width: 100%; min-height: 80px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;"
+                    placeholder="+15551234567&#10;+15559876543"
+                    onchange="updateStagingFallback()"></textarea>
+            </div>
+
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button class="btn" onclick="updateStagingFallback()" style="background: #27ae60; color: white; padding: 10px 20px;">
+                    Save Settings
+                </button>
+                <span id="stagingFallbackSaveStatus" style="color: #27ae60; font-size: 0.9em;"></span>
+            </div>
+        </div>
+
+        <!-- Maintenance Message Settings -->
+        <div class="card" style="padding: 20px;">
+            <h4 style="margin-bottom: 15px; color: #2c3e50;">Maintenance Message</h4>
+            <p style="color: #7f8c8d; margin-bottom: 15px; font-size: 0.9em;">
+                This message is shown to non-test users when staging environment receives their messages.
+            </p>
+
+            <div class="form-group">
+                <textarea id="maintenanceMessage"
+                    style="width: 100%; min-height: 80px; padding: 10px; border: 1px solid #ddd; border-radius: 4px;"
+                    placeholder="Loading..."></textarea>
+            </div>
+
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button class="btn" onclick="saveMaintenanceMessage()" style="background: #3498db; color: white; padding: 10px 20px;">
+                    Save Message
+                </button>
+                <button class="btn btn-secondary" onclick="resetMaintenanceMessage()" style="padding: 10px 20px;">
+                    Reset to Default
+                </button>
+                <span id="maintenanceSaveStatus" style="color: #27ae60; font-size: 0.9em;"></span>
+            </div>
+        </div>
+    </div>
+
     <!-- Flag Conversation Modal -->
     <div class="modal" id="flagModal">
         <div class="modal-content">
@@ -3763,6 +3862,65 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }} catch (e) {{
                 console.error('Error resetting maintenance message:', e);
                 statusDiv.innerHTML = '<span style="color: #e74c3c;">Error: ' + e.message + '</span>';
+            }}
+        }}
+
+        // =====================================================
+        // STAGING FALLBACK FUNCTIONS
+        // =====================================================
+
+        async function loadStagingFallback() {{
+            try {{
+                const response = await fetch('/admin/settings/staging-fallback');
+                const data = await response.json();
+
+                document.getElementById('stagingFallbackEnabled').checked = data.enabled;
+                document.getElementById('stagingFallbackNumbers').value = data.numbers;
+                updateStagingFallbackStatus(data.enabled);
+            }} catch (e) {{
+                console.error('Error loading staging fallback settings:', e);
+            }}
+        }}
+
+        function updateStagingFallbackStatus(enabled) {{
+            const statusEl = document.getElementById('stagingFallbackStatus');
+            if (enabled) {{
+                statusEl.textContent = 'Active';
+                statusEl.style.background = '#d4edda';
+                statusEl.style.color = '#155724';
+            }} else {{
+                statusEl.textContent = 'Disabled';
+                statusEl.style.background = '#f8d7da';
+                statusEl.style.color = '#721c24';
+            }}
+        }}
+
+        async function updateStagingFallback() {{
+            const enabled = document.getElementById('stagingFallbackEnabled').checked;
+            const numbers = document.getElementById('stagingFallbackNumbers').value.trim();
+            const statusEl = document.getElementById('stagingFallbackSaveStatus');
+
+            try {{
+                const response = await fetch('/admin/settings/staging-fallback', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ enabled, numbers }})
+                }});
+
+                const data = await response.json();
+                if (data.success) {{
+                    updateStagingFallbackStatus(data.enabled);
+                    statusEl.textContent = 'Settings saved!';
+                    statusEl.style.color = '#27ae60';
+                    setTimeout(() => {{ statusEl.textContent = ''; }}, 3000);
+                }} else {{
+                    statusEl.textContent = 'Error saving settings';
+                    statusEl.style.color = '#e74c3c';
+                }}
+            }} catch (e) {{
+                console.error('Error updating staging fallback:', e);
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#e74c3c';
             }}
         }}
 
@@ -4656,6 +4814,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         loadFeedback();
         loadCostData();
         loadMaintenanceMessage();
+        loadStagingFallback();
         loadScheduledBroadcasts();
         loadConversations();
         loadFlaggedConversations();
