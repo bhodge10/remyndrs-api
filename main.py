@@ -143,6 +143,10 @@ app.add_middleware(TimeoutMiddleware)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Catch unhandled exceptions and return safe error messages"""
+    # Let HTTPException pass through (e.g., for staging fallback 503)
+    if isinstance(exc, HTTPException):
+        raise exc
+
     # Log full error details internally
     log_security_event("UNHANDLED_ERROR", {
         "path": str(request.url.path),
@@ -1615,6 +1619,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         resp.message(staging_prefix(reply_text))
         return Response(content=str(resp), media_type="application/xml")
 
+    except HTTPException:
+        # Re-raise HTTPException (e.g., for staging fallback 503)
+        raise
     except Exception as e:
         logger.error(f"❌ CRITICAL ERROR in webhook: {e}", exc_info=True)
         resp = MessagingResponse()
