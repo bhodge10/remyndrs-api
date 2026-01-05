@@ -2967,7 +2967,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <div id="ticketModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
             <div style="background: white; max-width: 600px; margin: 50px auto; border-radius: 8px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
                 <div style="padding: 15px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
-                    <h3 style="margin: 0;" id="ticketModalTitle">Ticket #</h3>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <h3 style="margin: 0;" id="ticketModalTitle">Ticket #</h3>
+                        <button onclick="viewTicketCustomer()" class="btn" style="background: #9b59b6; color: white; font-size: 0.85em; padding: 5px 10px;">Customer Profile</button>
+                    </div>
                     <button onclick="closeTicketModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
                 </div>
                 <div id="ticketMessages" style="flex: 1; overflow-y: auto; padding: 20px; background: #f5f6fa;">
@@ -4662,7 +4665,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     const statusColor = t.status === 'open' ? '#27ae60' : '#95a5a6';
                     const date = new Date(t.updated_at).toLocaleString();
                     return `
-                        <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 10px; cursor: pointer; border-left: 4px solid ${{statusColor}};" onclick="openTicketModal(${{t.id}}, '${{t.status}}')">
+                        <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 10px; cursor: pointer; border-left: 4px solid ${{statusColor}};" onclick="openTicketModal(${{t.id}}, '${{t.status}}', '${{t.user_name || 'Unknown'}}', '${{t.phone_number}}')">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <div>
                                     <strong>#${{t.id}}</strong> - ${{t.user_name || 'Unknown'}} (...${{t.phone_number.slice(-4)}})
@@ -4682,10 +4685,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         }}
 
         let ticketRefreshInterval = null;
+        let currentTicketUserName = null;
+        let currentTicketPhone = null;
 
-        async function openTicketModal(ticketId, status) {{
+        async function openTicketModal(ticketId, status, userName, phoneNumber) {{
             currentTicketId = ticketId;
             currentTicketStatus = status;
+            currentTicketUserName = userName || 'Unknown';
+            currentTicketPhone = phoneNumber;
             document.getElementById('ticketModalTitle').textContent = `Ticket #${{ticketId}}`;
             document.getElementById('ticketModal').style.display = 'block';
 
@@ -4700,6 +4707,16 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             ticketRefreshInterval = setInterval(() => {{
                 if (currentTicketId) loadTicketMessages(currentTicketId);
             }}, 5000);
+        }}
+
+        function viewTicketCustomer() {{
+            if (currentTicketPhone) {{
+                closeTicketModal();
+                // Scroll to customer service section and search for the customer
+                document.getElementById('customer-service').scrollIntoView({{ behavior: 'smooth' }});
+                document.getElementById('csSearchInput').value = currentTicketPhone;
+                csSearch();
+            }}
         }}
 
         function closeTicketModal() {{
@@ -4731,7 +4748,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     const align = isInbound ? 'flex-start' : 'flex-end';
                     const bgColor = isInbound ? 'white' : '#3498db';
                     const textColor = isInbound ? '#333' : 'white';
-                    const label = isInbound ? 'User' : 'Support';
+                    const label = isInbound ? currentTicketUserName : 'Support';
                     const time = new Date(m.created_at).toLocaleString();
 
                     return `
@@ -4837,16 +4854,24 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         loadRecurring();
 
         // Handle URL hash for deep linking to support tickets
-        function handleSupportHash() {{
+        async function handleSupportHash() {{
             const hash = window.location.hash;
             if (hash && hash.startsWith('#support-')) {{
                 const ticketId = hash.replace('#support-', '');
                 if (ticketId && !isNaN(ticketId)) {{
                     // Scroll to support section and open the ticket
                     document.getElementById('support').scrollIntoView({{ behavior: 'smooth' }});
-                    // Wait for tickets to load, then open the specific ticket
-                    setTimeout(() => {{
-                        openTicketModal(parseInt(ticketId), 'open');
+                    // Wait for tickets to load, then find the ticket info and open it
+                    setTimeout(async () => {{
+                        // Try to find ticket info from loaded tickets
+                        const response = await fetch('/admin/support/tickets?include_closed=true');
+                        const data = await response.json();
+                        const ticket = data.tickets.find(t => t.id === parseInt(ticketId));
+                        if (ticket) {{
+                            openTicketModal(parseInt(ticketId), ticket.status, ticket.user_name, ticket.phone_number);
+                        }} else {{
+                            openTicketModal(parseInt(ticketId), 'open', 'Unknown', '');
+                        }}
                     }}, 500);
                 }}
             }}

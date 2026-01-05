@@ -528,7 +528,10 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
     <div id="ticketModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 id="ticketModalTitle">Ticket #</h3>
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <h3 id="ticketModalTitle" style="margin: 0;">Ticket #</h3>
+                    <button class="btn btn-primary" onclick="viewTicketCustomer()" style="font-size: 0.85em; padding: 5px 10px; background: #9b59b6;">Customer Profile</button>
+                </div>
                 <button class="modal-close" onclick="closeTicketModal()">&times;</button>
             </div>
             <div class="modal-body" id="ticketMessages">
@@ -776,7 +779,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                                 <td><span class="status-${{t.status}}">${{t.status.toUpperCase()}}</span></td>
                                 <td>${{t.message_count}}</td>
                                 <td>${{t.updated_at ? new Date(t.updated_at).toLocaleString() : 'N/A'}}</td>
-                                <td><button class="btn btn-primary" onclick="openTicket(${{t.id}}, '${{t.status}}')">View</button></td>
+                                <td><button class="btn btn-primary" onclick="openTicket(${{t.id}}, '${{t.status}}', '${{currentCustomer.name || 'Unknown'}}', '${{currentCustomer.phone}}')">View</button></td>
                             </tr>
                         `).join('')}}
                     </table>
@@ -833,7 +836,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                         <td><span class="status-${{t.status}}">${{t.status.toUpperCase()}}</span></td>
                         <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${{t.last_message || 'No messages'}}</td>
                         <td>${{t.updated_at ? new Date(t.updated_at).toLocaleString() : 'N/A'}}</td>
-                        <td><button class="btn btn-primary" onclick="openTicket(${{t.id}}, '${{t.status}}')">View</button></td>
+                        <td><button class="btn btn-primary" onclick="openTicket(${{t.id}}, '${{t.status}}', '${{t.user_name || 'Unknown'}}', '${{t.phone_number}}')">View</button></td>
                     </tr>
                 `).join('');
             }} catch (e) {{
@@ -841,9 +844,14 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             }}
         }}
 
-        async function openTicket(ticketId, status) {{
+        let currentTicketUserName = null;
+        let currentTicketPhone = null;
+
+        async function openTicket(ticketId, status, userName, phoneNumber) {{
             currentTicketId = ticketId;
             currentTicketStatus = status;
+            currentTicketUserName = userName || 'Unknown';
+            currentTicketPhone = phoneNumber;
 
             document.getElementById('ticketModalTitle').textContent = `Ticket #${{ticketId}}`;
             document.getElementById('ticketModal').style.display = 'block';
@@ -855,6 +863,15 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             // Start auto-refresh
             if (ticketRefreshInterval) clearInterval(ticketRefreshInterval);
             ticketRefreshInterval = setInterval(loadTicketMessages, 5000);
+        }}
+
+        function viewTicketCustomer() {{
+            if (currentTicketPhone) {{
+                closeTicketModal();
+                showView('customers');
+                document.getElementById('searchInput').value = currentTicketPhone;
+                searchCustomers();
+            }}
         }}
 
         async function loadTicketMessages() {{
@@ -874,7 +891,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 container.innerHTML = messages.map(m => `
                     <div class="message ${{m.direction}}">
                         <div class="message-bubble">
-                            <div class="message-meta">${{m.direction === 'inbound' ? 'Customer' : 'Support'}} - ${{new Date(m.created_at).toLocaleString()}}</div>
+                            <div class="message-meta">${{m.direction === 'inbound' ? currentTicketUserName : 'Support'}} - ${{new Date(m.created_at).toLocaleString()}}</div>
                             <div>${{m.message}}</div>
                         </div>
                     </div>
