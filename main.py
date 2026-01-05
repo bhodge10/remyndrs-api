@@ -412,7 +412,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     log_interaction(phone_number, incoming_msg, f"Support message (ticket #{ticket_id}) - active conversation", "support", True)
                 else:
                     # Send acknowledgment when no agent has responded recently
-                    resp.message(staging_prefix(f"[Support Ticket #{ticket_id}]\n\nMessage received. We'll respond shortly.\n\n(All messages go to support until you text EXIT to return to normal use, or CLOSE to end this ticket)"))
+                    resp.message(staging_prefix(f"[Support Ticket #{ticket_id}]\n\nMessage received. We'll respond shortly.\n\nYou'll remain in support mode while we work the ticket. You can resume using the service by texting EXIT. If you'd like to close the ticket, text CLOSE."))
                     log_interaction(phone_number, incoming_msg, f"Support message (ticket #{ticket_id})", "support", True)
                 return Response(content=str(resp), media_type="application/xml")
 
