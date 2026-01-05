@@ -814,7 +814,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             const tbody = document.getElementById('ticketsBody');
 
             try {{
-                const response = await fetch(`/admin/support/tickets?include_closed=${{includeClosed}}`);
+                const response = await fetch(`/cs/support/tickets?include_closed=${{includeClosed}}`);
                 const data = await response.json();
 
                 // Update badge
@@ -861,7 +861,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             if (!currentTicketId) return;
 
             try {{
-                const response = await fetch(`/admin/support/tickets/${{currentTicketId}}/messages`);
+                const response = await fetch(`/cs/support/tickets/${{currentTicketId}}/messages`);
                 const messages = await response.json();
 
                 const container = document.getElementById('ticketMessages');
@@ -903,7 +903,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             if (!message || !currentTicketId) return;
 
             try {{
-                const response = await fetch(`/admin/support/tickets/${{currentTicketId}}/reply`, {{
+                const response = await fetch(`/cs/support/tickets/${{currentTicketId}}/reply`, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ message }})
@@ -926,7 +926,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             if (!confirm('Close this ticket?')) return;
 
             try {{
-                const response = await fetch(`/admin/support/tickets/${{currentTicketId}}/close`, {{
+                const response = await fetch(`/cs/support/tickets/${{currentTicketId}}/close`, {{
                     method: 'POST'
                 }});
 
@@ -944,7 +944,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             if (!currentTicketId) return;
 
             try {{
-                const response = await fetch(`/admin/support/tickets/${{currentTicketId}}/reopen`, {{
+                const response = await fetch(`/cs/support/tickets/${{currentTicketId}}/reopen`, {{
                     method: 'POST'
                 }});
 
@@ -1067,3 +1067,158 @@ async def get_customer_tickets(phone_number: str, user: str = Depends(verify_cs_
     finally:
         if conn:
             return_db_connection(conn)
+
+
+# =====================================================
+# SUPPORT TICKET ENDPOINTS (CS Auth)
+# =====================================================
+
+@router.get("/cs/support/tickets")
+async def cs_get_all_tickets(include_closed: bool = False, user: str = Depends(verify_cs_auth)):
+    """Get all support tickets"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if include_closed:
+            c.execute("""
+                SELECT t.id, t.phone_number, t.status, t.created_at, t.updated_at,
+                       u.first_name,
+                       (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count,
+                       (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
+                FROM support_tickets t
+                LEFT JOIN users u ON t.phone_number = u.phone_number
+                ORDER BY t.updated_at DESC
+            """)
+        else:
+            c.execute("""
+                SELECT t.id, t.phone_number, t.status, t.created_at, t.updated_at,
+                       u.first_name,
+                       (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count,
+                       (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
+                FROM support_tickets t
+                LEFT JOIN users u ON t.phone_number = u.phone_number
+                WHERE t.status = 'open'
+                ORDER BY t.updated_at DESC
+            """)
+
+        tickets = c.fetchall()
+        return {
+            'tickets': [
+                {
+                    'id': t[0],
+                    'phone_number': t[1],
+                    'status': t[2],
+                    'created_at': t[3].isoformat() if t[3] else None,
+                    'updated_at': t[4].isoformat() if t[4] else None,
+                    'user_name': t[5],
+                    'message_count': t[6],
+                    'last_message': t[7][:100] + '...' if t[7] and len(t[7]) > 100 else t[7]
+                }
+                for t in tickets
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting tickets: {e}")
+        return {'tickets': []}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/cs/support/tickets/{ticket_id}/messages")
+async def cs_get_ticket_messages(ticket_id: int, user: str = Depends(verify_cs_auth)):
+    """Get messages for a specific ticket"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, message, direction, created_at
+            FROM support_messages
+            WHERE ticket_id = %s
+            ORDER BY created_at ASC
+        """, (ticket_id,))
+
+        messages = c.fetchall()
+        return [
+            {
+                'id': m[0],
+                'message': m[1],
+                'direction': m[2],
+                'created_at': m[3].isoformat() if m[3] else None
+            }
+            for m in messages
+        ]
+    except Exception as e:
+        logger.error(f"Error getting ticket messages: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/cs/support/tickets/{ticket_id}/reply")
+async def cs_reply_to_ticket(ticket_id: int, request: Request, user: str = Depends(verify_cs_auth)):
+    """Reply to a support ticket"""
+    from services.support_service import reply_to_ticket
+
+    try:
+        body = await request.json()
+        message = body.get('message', '').strip()
+
+        if not message:
+            raise HTTPException(status_code=400, detail="Message is required")
+
+        result = reply_to_ticket(ticket_id, message)
+
+        if result['success']:
+            logger.info(f"Support reply sent to ticket #{ticket_id} by {user}")
+            return {'success': True, 'message': 'Reply sent'}
+        else:
+            raise HTTPException(status_code=400, detail=result.get('error', 'Failed to send reply'))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error replying to ticket: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/cs/support/tickets/{ticket_id}/close")
+async def cs_close_ticket(ticket_id: int, user: str = Depends(verify_cs_auth)):
+    """Close a support ticket"""
+    from services.support_service import close_ticket
+
+    try:
+        success = close_ticket(ticket_id, notify_user=True)
+        if success:
+            logger.info(f"Ticket #{ticket_id} closed by {user}")
+            return {'success': True}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to close ticket")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error closing ticket: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/cs/support/tickets/{ticket_id}/reopen")
+async def cs_reopen_ticket(ticket_id: int, user: str = Depends(verify_cs_auth)):
+    """Reopen a support ticket"""
+    from services.support_service import reopen_ticket
+
+    try:
+        success = reopen_ticket(ticket_id)
+        if success:
+            logger.info(f"Ticket #{ticket_id} reopened by {user}")
+            return {'success': True}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to reopen ticket")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reopening ticket: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
