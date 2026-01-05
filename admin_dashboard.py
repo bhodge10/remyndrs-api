@@ -4822,6 +4822,24 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         loadSupportTickets();
         loadRecurring();
 
+        // Handle URL hash for deep linking to support tickets
+        function handleSupportHash() {{
+            const hash = window.location.hash;
+            if (hash && hash.startsWith('#support-')) {{
+                const ticketId = hash.replace('#support-', '');
+                if (ticketId && !isNaN(ticketId)) {{
+                    // Scroll to support section and open the ticket
+                    document.getElementById('support').scrollIntoView({{ behavior: 'smooth' }});
+                    // Wait for tickets to load, then open the specific ticket
+                    setTimeout(() => {{
+                        openTicketModal(parseInt(ticketId), 'open');
+                    }}, 500);
+                }}
+            }}
+        }}
+        handleSupportHash();
+        window.addEventListener('hashchange', handleSupportHash);
+
         // =====================================================
         // RECURRING REMINDERS FUNCTIONS
         // =====================================================

@@ -8,7 +8,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import (
     SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
-    SMTP_FROM_EMAIL, SUPPORT_EMAIL, SMTP_ENABLED, logger
+    SMTP_FROM_EMAIL, SUPPORT_EMAIL, SMTP_ENABLED, logger,
+    APP_BASE_URL
 )
 
 
@@ -37,7 +38,7 @@ Message:
 {message}
 
 ---
-Reply via admin dashboard: /admin/dashboard#support
+Reply via admin dashboard: {APP_BASE_URL}/admin/dashboard#support-{ticket_id}
         """
 
         # HTML version
@@ -66,7 +67,7 @@ Reply via admin dashboard: /admin/dashboard#support
                 {message}
             </div>
             <p>
-                <a href="#" class="btn">Reply in Dashboard</a>
+                <a href="{APP_BASE_URL}/admin/dashboard#support-{ticket_id}" class="btn">Reply in Dashboard</a>
             </p>
         </div>
         <div class="footer">
