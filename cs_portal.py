@@ -614,7 +614,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             if (!query) return;
 
             try {{
-                const response = await fetch(`/admin/cs/search?q=${{encodeURIComponent(query)}}`);
+                const response = await fetch(`/cs/search?q=${{encodeURIComponent(query)}}`);
                 const data = await response.json();
 
                 const resultsDiv = document.getElementById('searchResults');
@@ -646,7 +646,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         // Customer Profile
         async function viewCustomer(phone) {{
             try {{
-                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(phone)}}`);
+                const response = await fetch(`/cs/customer/${{encodeURIComponent(phone)}}`);
                 const customer = await response.json();
 
                 currentCustomer = customer;
@@ -686,7 +686,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 }} else if (tab === 'notes') {{
                     await loadCustomerNotes();
                 }} else {{
-                    const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/${{tab}}`);
+                    const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/${{tab}}`);
                     const data = await response.json();
 
                     if (tab === 'reminders') {{
@@ -792,7 +792,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         async function loadCustomerNotes() {{
             const container = document.getElementById('tab-notes');
             try {{
-                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}`);
+                const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}`);
                 const customer = await response.json();
 
                 if (!customer.notes || customer.notes.length === 0) {{
@@ -991,7 +991,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             const newTier = document.getElementById('tierSelect').value;
 
             try {{
-                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/tier`, {{
+                const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/tier`, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ tier: newTier }})
@@ -1024,7 +1024,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             if (!note) return;
 
             try {{
-                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/notes`, {{
+                const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/notes`, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ note }})
@@ -1239,3 +1239,262 @@ async def cs_reopen_ticket(ticket_id: int, user: str = Depends(verify_cs_auth)):
     except Exception as e:
         logger.error(f"Error reopening ticket: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =====================================================
+# CUSTOMER SERVICE ENDPOINTS (CS Auth)
+# =====================================================
+
+@router.get("/cs/search")
+async def cs_search_customers(q: str = "", user: str = Depends(verify_cs_auth)):
+    """Search customers by phone number or name"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if not q:
+            return {'results': []}
+
+        search_term = f"%{q}%"
+        c.execute("""
+            SELECT phone_number, first_name, premium_status, active, created_at
+            FROM users
+            WHERE phone_number LIKE %s OR first_name ILIKE %s
+            ORDER BY created_at DESC
+            LIMIT 50
+        """, (search_term, search_term))
+
+        results = c.fetchall()
+        return {
+            'results': [
+                {
+                    'phone': r[0],
+                    'name': r[1],
+                    'tier': r[2] or 'free',
+                    'active': r[3],
+                    'created_at': r[4].isoformat() if r[4] else None
+                }
+                for r in results
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error searching customers: {e}")
+        return {'results': []}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/cs/customer/{phone_number}")
+async def cs_get_customer(phone_number: str, user: str = Depends(verify_cs_auth)):
+    """Get customer details"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT phone_number, first_name, timezone, premium_status, active,
+                   created_at, last_interaction, premium_since
+            FROM users WHERE phone_number = %s
+        """, (phone_number,))
+
+        result = c.fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        # Get notes
+        c.execute("""
+            SELECT note, created_by, created_at FROM customer_notes
+            WHERE phone_number = %s ORDER BY created_at DESC
+        """, (phone_number,))
+        notes = c.fetchall()
+
+        return {
+            'phone': result[0],
+            'name': result[1],
+            'timezone': result[2],
+            'tier': result[3] or 'free',
+            'active': result[4],
+            'created_at': result[5].isoformat() if result[5] else None,
+            'last_interaction': result[6].isoformat() if result[6] else None,
+            'premium_since': result[7].isoformat() if result[7] else None,
+            'notes': [
+                {'note': n[0], 'created_by': n[1], 'created_at': n[2].isoformat() if n[2] else None}
+                for n in notes
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting customer: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/cs/customer/{phone_number}/reminders")
+async def cs_get_customer_reminders(phone_number: str, user: str = Depends(verify_cs_auth)):
+    """Get customer reminders"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, reminder_text, reminder_time, status, created_at
+            FROM reminders WHERE phone_number = %s
+            ORDER BY reminder_time DESC LIMIT 50
+        """, (phone_number,))
+
+        results = c.fetchall()
+        return [
+            {
+                'id': r[0],
+                'text': r[1],
+                'reminder_time': r[2].isoformat() if r[2] else None,
+                'status': r[3],
+                'created_at': r[4].isoformat() if r[4] else None
+            }
+            for r in results
+        ]
+    except Exception as e:
+        logger.error(f"Error getting customer reminders: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/cs/customer/{phone_number}/lists")
+async def cs_get_customer_lists(phone_number: str, user: str = Depends(verify_cs_auth)):
+    """Get customer lists with items"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, list_name, created_at FROM lists
+            WHERE phone_number = %s ORDER BY created_at DESC
+        """, (phone_number,))
+
+        lists = c.fetchall()
+        result = []
+
+        for lst in lists:
+            c.execute("""
+                SELECT id, item_text, completed FROM list_items
+                WHERE list_id = %s ORDER BY created_at
+            """, (lst[0],))
+            items = c.fetchall()
+
+            result.append({
+                'id': lst[0],
+                'name': lst[1],
+                'created_at': lst[2].isoformat() if lst[2] else None,
+                'items': [{'id': i[0], 'text': i[1], 'completed': i[2]} for i in items]
+            })
+
+        return result
+    except Exception as e:
+        logger.error(f"Error getting customer lists: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/cs/customer/{phone_number}/memories")
+async def cs_get_customer_memories(phone_number: str, user: str = Depends(verify_cs_auth)):
+    """Get customer memories"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, content, created_at FROM memories
+            WHERE phone_number = %s ORDER BY created_at DESC LIMIT 50
+        """, (phone_number,))
+
+        results = c.fetchall()
+        return [
+            {
+                'id': r[0],
+                'content': r[1],
+                'created_at': r[2].isoformat() if r[2] else None
+            }
+            for r in results
+        ]
+    except Exception as e:
+        logger.error(f"Error getting customer memories: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/cs/customer/{phone_number}/tier")
+async def cs_update_customer_tier(phone_number: str, request: Request, user: str = Depends(verify_cs_auth)):
+    """Update customer subscription tier"""
+    conn = None
+    try:
+        body = await request.json()
+        new_tier = body.get('tier', 'free')
+
+        if new_tier not in ['free', 'premium', 'family']:
+            raise HTTPException(status_code=400, detail="Invalid tier")
+
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            UPDATE users SET premium_status = %s WHERE phone_number = %s
+        """, (new_tier, phone_number))
+        conn.commit()
+
+        logger.info(f"Updated {phone_number[-4:]} tier to {new_tier} by {user}")
+        return {'success': True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating tier: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/cs/customer/{phone_number}/notes")
+async def cs_add_customer_note(phone_number: str, request: Request, user: str = Depends(verify_cs_auth)):
+    """Add a note to customer record"""
+    conn = None
+    try:
+        body = await request.json()
+        note = body.get('note', '').strip()
+
+        if not note:
+            raise HTTPException(status_code=400, detail="Note is required")
+
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            INSERT INTO customer_notes (phone_number, note, created_by)
+            VALUES (%s, %s, %s)
+        """, (phone_number, note, user))
+        conn.commit()
+
+        logger.info(f"Added note for {phone_number[-4:]} by {user}")
+        return {'success': True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding note: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
