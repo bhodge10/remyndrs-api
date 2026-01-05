@@ -233,7 +233,7 @@ def reply_to_ticket(ticket_id: int, message: str) -> dict:
 
         # Send SMS to user with ticket number (so they stay in support mode context)
         # Include instructions for exiting support mode
-        sms_message = f"[Support Ticket #{ticket_id}] {message}\n\n(Reply to continue, or text EXIT to leave support)"
+        sms_message = f"[Support Ticket #{ticket_id}]\n\n{message}\n\n(Reply to continue, or text EXIT to leave support)"
         send_sms(phone_number, sms_message)
 
         # Record outbound message

@@ -4680,6 +4680,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        let ticketRefreshInterval = null;
+
         async function openTicketModal(ticketId, status) {{
             currentTicketId = ticketId;
             currentTicketStatus = status;
@@ -4691,9 +4693,20 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             document.getElementById('reopenTicketBtn').style.display = status === 'closed' ? 'block' : 'none';
 
             await loadTicketMessages(ticketId);
+
+            // Start auto-refresh for new messages (every 5 seconds)
+            if (ticketRefreshInterval) clearInterval(ticketRefreshInterval);
+            ticketRefreshInterval = setInterval(() => {{
+                if (currentTicketId) loadTicketMessages(currentTicketId);
+            }}, 5000);
         }}
 
         function closeTicketModal() {{
+            // Stop auto-refresh
+            if (ticketRefreshInterval) {{
+                clearInterval(ticketRefreshInterval);
+                ticketRefreshInterval = null;
+            }}
             document.getElementById('ticketModal').style.display = 'none';
             currentTicketId = null;
             currentTicketStatus = null;
