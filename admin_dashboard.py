@@ -2647,6 +2647,50 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         .section-anchor {{
             scroll-margin-top: 70px;
         }}
+
+        /* Collapsible Sections */
+        .collapsible-section {{
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }}
+        .section-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: #f8f9fa;
+            cursor: pointer;
+            user-select: none;
+            border-bottom: 1px solid #eee;
+        }}
+        .section-header:hover {{
+            background: #ecf0f1;
+        }}
+        .section-header h2 {{
+            margin: 0;
+            font-size: 1.3em;
+            color: #2c3e50;
+        }}
+        .section-toggle {{
+            font-size: 1.2em;
+            color: #7f8c8d;
+            transition: transform 0.3s ease;
+        }}
+        .section-header.collapsed .section-toggle {{
+            transform: rotate(-90deg);
+        }}
+        .section-content {{
+            padding: 20px;
+            transition: max-height 0.3s ease-out, padding 0.3s ease-out;
+            overflow: hidden;
+        }}
+        .section-content.collapsed {{
+            max-height: 0;
+            padding: 0 20px;
+        }}
     </style>
 </head>
 <body>
@@ -2909,34 +2953,38 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     </div>
 
     <!-- Cost Analytics Section -->
-    <div id="costs" class="cost-section section-anchor">
-        <h2>💰 Cost Analytics</h2>
-
-        <div class="period-tabs">
-            <button class="period-tab active" onclick="showCostPeriod('day')">Today</button>
-            <button class="period-tab" onclick="showCostPeriod('week')">This Week</button>
-            <button class="period-tab" onclick="showCostPeriod('month')">This Month</button>
-            <button class="period-tab" onclick="showCostPeriod('hour')">Last Hour</button>
+    <div id="costs" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('costs')">
+            <h2>💰 Cost Analytics</h2>
+            <span class="section-toggle">▼</span>
         </div>
+        <div class="section-content">
+            <div class="period-tabs">
+                <button class="period-tab active" onclick="showCostPeriod('day')">Today</button>
+                <button class="period-tab" onclick="showCostPeriod('week')">This Week</button>
+                <button class="period-tab" onclick="showCostPeriod('month')">This Month</button>
+                <button class="period-tab" onclick="showCostPeriod('hour')">Last Hour</button>
+            </div>
 
-        <table class="cost-table" id="costTable">
-            <tr class="cost-header">
-                <th>Plan Tier</th>
-                <th>Users</th>
-                <th>Messages</th>
-                <th>SMS Cost</th>
-                <th>AI Tokens</th>
-                <th>AI Cost</th>
-                <th>Total Cost</th>
-                <th>Cost/User</th>
-            </tr>
-            <tr id="costLoading">
-                <td colspan="8" style="color: #95a5a6; text-align: center;">Loading cost data...</td>
-            </tr>
-        </table>
+            <table class="cost-table" id="costTable">
+                <tr class="cost-header">
+                    <th>Plan Tier</th>
+                    <th>Users</th>
+                    <th>Messages</th>
+                    <th>SMS Cost</th>
+                    <th>AI Tokens</th>
+                    <th>AI Cost</th>
+                    <th>Total Cost</th>
+                    <th>Cost/User</th>
+                </tr>
+                <tr id="costLoading">
+                    <td colspan="8" style="color: #95a5a6; text-align: center;">Loading cost data...</td>
+                </tr>
+            </table>
 
-        <div style="margin-top: 15px; font-size: 0.85em; color: #7f8c8d;">
-            <em>SMS: $0.0079/message (inbound + outbound) | AI: GPT-4o-mini pricing</em>
+            <div style="margin-top: 15px; font-size: 0.85em; color: #7f8c8d;">
+                <em>SMS: $0.0079/message (inbound + outbound) | AI: GPT-4o-mini pricing</em>
+            </div>
         </div>
     </div>
 
@@ -2975,23 +3023,28 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     </div>
 
     <!-- Support Tickets Section -->
-    <div id="support" class="section section-anchor">
-        <h2>🎧 Support Tickets <span id="openTicketCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
-        <p style="color: #7f8c8d; margin-bottom: 15px;">
-            Premium users can text "Support: [message]" to create tickets. Replies are sent via SMS.
-        </p>
+    <div id="support" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('support')">
+            <h2>🎧 Support Tickets <span id="openTicketCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <p style="color: #7f8c8d; margin-bottom: 15px;">
+                Premium users can text "Support: [message]" to create tickets. Replies are sent via SMS.
+            </p>
 
-        <div style="margin-bottom: 15px;">
-            <label style="margin-right: 10px;">
-                <input type="checkbox" id="showClosedTickets" onchange="loadSupportTickets()"> Show closed tickets
-            </label>
+            <div style="margin-bottom: 15px;">
+                <label style="margin-right: 10px;">
+                    <input type="checkbox" id="showClosedTickets" onchange="loadSupportTickets()"> Show closed tickets
+                </label>
+            </div>
+
+            <div id="supportTicketsList" style="margin-bottom: 20px;">
+                <p style="color: #95a5a6;">Loading...</p>
+            </div>
         </div>
 
-        <div id="supportTicketsList" style="margin-bottom: 20px;">
-            <p style="color: #95a5a6;">Loading...</p>
-        </div>
-
-        <!-- Ticket Detail Modal -->
+        <!-- Ticket Detail Modal (outside section-content so it's not affected by collapse) -->
         <div id="ticketModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
             <div style="background: white; max-width: 600px; margin: 50px auto; border-radius: 8px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
                 <div style="padding: 15px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
@@ -3019,9 +3072,12 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     </div>
 
     <!-- Conversation Viewer Section -->
-    <div id="conversations" class="conversation-section section-anchor">
-        <h2>💬 Conversation Viewer</h2>
-
+    <div id="conversations" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('conversations')">
+            <h2>💬 Conversation Viewer</h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
         <div class="tabs">
             <button class="tab active" onclick="showConversationTab('recent')">Recent Conversations</button>
             <button class="tab" onclick="showConversationTab('flagged')">
@@ -3110,11 +3166,16 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 </tr>
             </table>
         </div>
+        </div>
     </div>
 
     <!-- Recurring Reminders Section -->
-    <div id="recurring" class="broadcast-section section-anchor">
-        <h2>🔄 Recurring Reminders</h2>
+    <div id="recurring" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('recurring')">
+            <h2>🔄 Recurring Reminders</h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
         <p style="color: #7f8c8d; margin-bottom: 15px;">Manage all recurring reminders across users.</p>
 
         <div style="display: flex; gap: 10px; margin-bottom: 15px;">
@@ -3144,11 +3205,16 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <td colspan="9" style="color: #95a5a6; text-align: center;">Loading recurring reminders...</td>
             </tr>
         </table>
+        </div>
     </div>
 
     <!-- Customer Service Section -->
-    <div id="customer-service" class="broadcast-section section-anchor">
-        <h2>Customer Service</h2>
+    <div id="customer-service" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('customer-service')">
+            <h2>👥 Customer Service</h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
 
         <div style="display: flex; gap: 20px; margin-bottom: 20px;">
             <div style="flex: 1;">
@@ -3256,11 +3322,16 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 </div>
             </div>
         </div>
+        </div>
     </div>
 
     <!-- Settings Section -->
-    <div id="settings" class="broadcast-section section-anchor">
-        <h2>Settings</h2>
+    <div id="settings" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('settings')">
+            <h2>⚙️ Settings</h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
 
         <!-- Staging Fallback Settings -->
         <div class="card" style="padding: 20px; margin-bottom: 20px;">
@@ -3319,6 +3390,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 </button>
                 <span id="maintenanceSaveStatus" style="color: #27ae60; font-size: 0.9em;"></span>
             </div>
+        </div>
         </div>
     </div>
 
@@ -3381,6 +3453,40 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     <p class="refresh-note">Refresh page to update metrics</p>
 
     <script>
+        // Collapsible sections
+        function toggleSection(sectionId) {{
+            const header = document.querySelector(`#${{sectionId}} .section-header`);
+            const content = document.querySelector(`#${{sectionId}} .section-content`);
+
+            if (header && content) {{
+                header.classList.toggle('collapsed');
+                content.classList.toggle('collapsed');
+
+                // Save state to localStorage
+                const collapsed = JSON.parse(localStorage.getItem('collapsedSections') || '{{}}');
+                collapsed[sectionId] = header.classList.contains('collapsed');
+                localStorage.setItem('collapsedSections', JSON.stringify(collapsed));
+            }}
+        }}
+
+        // Restore collapsed states on page load
+        function restoreCollapsedStates() {{
+            const collapsed = JSON.parse(localStorage.getItem('collapsedSections') || '{{}}');
+            Object.keys(collapsed).forEach(sectionId => {{
+                if (collapsed[sectionId]) {{
+                    const header = document.querySelector(`#${{sectionId}} .section-header`);
+                    const content = document.querySelector(`#${{sectionId}} .section-content`);
+                    if (header && content) {{
+                        header.classList.add('collapsed');
+                        content.classList.add('collapsed');
+                    }}
+                }}
+            }});
+        }}
+
+        // Call on page load
+        document.addEventListener('DOMContentLoaded', restoreCollapsedStates);
+
         let audienceStats = {{ all: 0, free: 0, premium: 0 }};
         let currentBroadcastId = null;
 
