@@ -717,6 +717,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             elif wants_new:
                 # User wants to create a new list with incremented name
+                # First, rename the original list to #1 if it doesn't already have a number
+                original_list = get_list_by_name(phone_number, pending_list_name)
+                if original_list and not re.search(r'#\s*\d+$', pending_list_name):
+                    # Rename original to #1
+                    new_original_name = f"{pending_list_name} #1"
+                    rename_list(phone_number, pending_list_name, new_original_name)
+                    logger.info(f"Renamed original list '{pending_list_name}' to '{new_original_name}'")
+
+                # Now create the new list as #2
                 new_list_name = get_next_available_list_name(phone_number, pending_list_name)
                 create_list(phone_number, new_list_name)
                 create_or_update_user(phone_number, pending_list_create=None, last_active_list=new_list_name)
@@ -1538,6 +1547,71 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # HANDLE CONFIRMATION RESPONSES
         # ==========================================
+        # Handle "ALL" or number for multi-list delete
+        user = get_user(phone_number)
+        if user and user[9]:  # pending_delete flag
+            pending_action = get_pending_list_item(phone_number)
+            if pending_action and pending_action.startswith("__DELETE_MULTI__:"):
+                parts = pending_action.split(":")
+                list_filter = parts[1]
+                list_ids = parts[2].split(",") if len(parts) > 2 else []
+
+                if incoming_msg.upper() == "ALL":
+                    # Delete all matching lists
+                    from database import get_db_connection, return_db_connection
+                    deleted_count = 0
+                    for list_id in list_ids:
+                        try:
+                            conn = get_db_connection()
+                            c = conn.cursor()
+                            c.execute('DELETE FROM lists WHERE id = %s', (int(list_id),))
+                            if c.rowcount > 0:
+                                deleted_count += 1
+                            conn.commit()
+                            return_db_connection(conn)
+                        except Exception as e:
+                            logger.error(f"Error deleting list {list_id}: {e}")
+
+                    create_or_update_user(phone_number, pending_delete=False, pending_list_item=None)
+                    reply_msg = f"Deleted {deleted_count} {list_filter} list{'s' if deleted_count != 1 else ''} and all their items."
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(reply_msg))
+                    log_interaction(phone_number, incoming_msg, reply_msg, "delete_multi_list_all", True)
+                    return Response(content=str(resp), media_type="application/xml")
+
+                elif incoming_msg.strip().isdigit():
+                    # Delete specific list by number
+                    selection = int(incoming_msg.strip())
+                    if 1 <= selection <= len(list_ids):
+                        from database import get_db_connection, return_db_connection
+                        list_id = list_ids[selection - 1]
+
+                        # Get list name before deleting
+                        conn = get_db_connection()
+                        c = conn.cursor()
+                        c.execute('SELECT list_name FROM lists WHERE id = %s', (int(list_id),))
+                        result = c.fetchone()
+                        list_name = result[0] if result else f"{list_filter} list"
+
+                        c.execute('DELETE FROM lists WHERE id = %s', (int(list_id),))
+                        deleted = c.rowcount > 0
+                        conn.commit()
+                        return_db_connection(conn)
+
+                        create_or_update_user(phone_number, pending_delete=False, pending_list_item=None)
+                        if deleted:
+                            reply_msg = f"Deleted your {list_name} and all its items."
+                        else:
+                            reply_msg = "Couldn't delete that list."
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix(reply_msg))
+                        log_interaction(phone_number, incoming_msg, reply_msg, "delete_multi_list_single", True)
+                        return Response(content=str(resp), media_type="application/xml")
+                    else:
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix(f"Please reply with a number between 1 and {len(list_ids)}, or ALL to delete all."))
+                        return Response(content=str(resp), media_type="application/xml")
+
         if incoming_msg.upper() == "YES":
             user = get_user(phone_number)
             if user and user[9]:  # pending_delete flag
@@ -1595,6 +1669,32 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     resp = MessagingResponse()
                     resp.message("All your data (memories, reminders, and lists) has been permanently deleted.")
                     log_interaction(phone_number, incoming_msg, "All data deleted", "delete_all_confirmed", True)
+                    return Response(content=str(resp), media_type="application/xml")
+
+                elif pending_action and pending_action.startswith("__DELETE_MULTI__:"):
+                    # Multi-list delete - user confirmed with YES to delete all
+                    parts = pending_action.split(":")
+                    list_filter = parts[1]
+                    list_ids = parts[2].split(",") if len(parts) > 2 else []
+
+                    deleted_count = 0
+                    for list_id in list_ids:
+                        try:
+                            conn = get_db_connection()
+                            c = conn.cursor()
+                            c.execute('DELETE FROM lists WHERE id = %s', (int(list_id),))
+                            if c.rowcount > 0:
+                                deleted_count += 1
+                            conn.commit()
+                            return_db_connection(conn)
+                        except Exception as e:
+                            logger.error(f"Error deleting list {list_id}: {e}")
+
+                    create_or_update_user(phone_number, pending_delete=False, pending_list_item=None)
+                    reply_msg = f"Deleted {deleted_count} {list_filter} list{'s' if deleted_count != 1 else ''} and all their items."
+                    resp = MessagingResponse()
+                    resp.message(reply_msg)
+                    log_interaction(phone_number, incoming_msg, reply_msg, "delete_multi_list_confirmed", True)
                     return Response(content=str(resp), media_type="application/xml")
 
                 elif pending_action:
@@ -2484,13 +2584,50 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
         elif ai_response["action"] == "delete_list":
             list_name = ai_response.get("list_name")
-            list_info = get_list_by_name(phone_number, list_name)
-            if list_info:
-                # Store pending delete for list
-                create_or_update_user(phone_number, pending_delete=True, pending_list_item=list_name)
-                reply_text = f"Are you sure you want to delete your {list_info[1]} and all its items?\n\nReply YES to confirm."
+            list_filter = ai_response.get("list_filter", "").lower().strip()
+
+            # Fallback: detect filter from user's message if AI didn't provide it
+            if not list_filter and not list_name:
+                match = re.search(r'delete\s+(?:my\s+)?(?:all\s+)?(\w+)\s+lists?', incoming_msg.lower())
+                if match:
+                    potential_filter = match.group(1)
+                    if potential_filter not in ['all', 'the', 'my', 'this']:
+                        list_filter = potential_filter
+
+            if list_filter:
+                # Find all lists matching the filter
+                all_lists = get_lists(phone_number)
+                matching_lists = [(l[0], l[1], l[2]) for l in all_lists if list_filter in l[1].lower()]
+
+                if len(matching_lists) == 0:
+                    reply_text = f"You don't have any {list_filter} lists."
+                elif len(matching_lists) == 1:
+                    # Only one match, treat as regular delete
+                    list_info = matching_lists[0]
+                    create_or_update_user(phone_number, pending_delete=True, pending_list_item=list_info[1])
+                    reply_text = f"Are you sure you want to delete your {list_info[1]} and all its items?\n\nReply YES to confirm."
+                else:
+                    # Multiple matches - ask user what to do
+                    list_lines = []
+                    list_ids = []
+                    for i, (list_id, name, item_count) in enumerate(matching_lists, 1):
+                        list_lines.append(f"{i}. {name} ({item_count} items)")
+                        list_ids.append(str(list_id))
+
+                    # Store pending delete with filter info: __DELETE_MULTI__:filter:id1,id2,id3
+                    pending_value = f"__DELETE_MULTI__:{list_filter}:{','.join(list_ids)}"
+                    create_or_update_user(phone_number, pending_delete=True, pending_list_item=pending_value)
+
+                    reply_text = f"You have {len(matching_lists)} {list_filter} lists:\n\n" + "\n".join(list_lines)
+                    reply_text += "\n\nReply ALL to delete all of them, or a number to delete just one."
             else:
-                reply_text = f"I couldn't find a list called '{list_name}'."
+                # Original single list delete logic
+                list_info = get_list_by_name(phone_number, list_name)
+                if list_info:
+                    create_or_update_user(phone_number, pending_delete=True, pending_list_item=list_name)
+                    reply_text = f"Are you sure you want to delete your {list_info[1]} and all its items?\n\nReply YES to confirm."
+                else:
+                    reply_text = f"I couldn't find a list called '{list_name}'."
             log_interaction(phone_number, incoming_msg, reply_text, "delete_list", True)
 
         elif ai_response["action"] == "clear_list":

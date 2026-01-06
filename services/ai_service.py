@@ -478,9 +478,17 @@ If the item exists in a reminder but NOT in any list, use delete_reminder instea
 For DELETING AN ENTIRE LIST:
 {{
     "action": "delete_list",
-    "list_name": "the list to delete",
+    "list_name": "the exact list name to delete",
     "confirmation": "Are you sure you want to delete your [list name]? Reply YES to confirm."
 }}
+
+For DELETING MULTIPLE LISTS BY TYPE (when user says "delete grocery lists" plural):
+{{
+    "action": "delete_list",
+    "list_filter": "the keyword to filter lists (e.g., 'grocery' for all grocery lists)",
+    "confirmation": "Finding your [type] lists..."
+}}
+CRITICAL: When user says "delete grocery lists" or "delete my shopping lists" (PLURAL), use list_filter instead of list_name.
 
 For CLEARING ALL ITEMS FROM A LIST:
 {{
