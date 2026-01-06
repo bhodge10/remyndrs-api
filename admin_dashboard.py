@@ -1911,6 +1911,7 @@ async def cs_get_customer_memories(phone_number: str, admin: str = Depends(verif
 class UpdateTierRequest(BaseModel):
     tier: str
     reason: str = ""
+    trial_end_date: str = None  # ISO format date string for trial extension
 
 
 @router.post("/admin/cs/customer/{phone_number}/tier")
@@ -1928,31 +1929,58 @@ async def cs_update_customer_tier(
         conn = get_db_connection()
         c = conn.cursor()
 
+        # Parse trial end date if provided
+        trial_end = None
+        if request.trial_end_date:
+            from datetime import datetime
+            try:
+                trial_end = datetime.fromisoformat(request.trial_end_date.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid trial_end_date format")
+
         # Update tier
         if request.tier == 'free':
             c.execute('''
                 UPDATE users SET
                     premium_status = %s,
-                    subscription_status = 'manual'
+                    subscription_status = 'manual',
+                    trial_end_date = NULL
                 WHERE phone_number = %s
             ''', (request.tier, phone_number))
-        else:
+        elif trial_end:
+            # Setting premium with trial end date (free trial extension)
             c.execute('''
                 UPDATE users SET
                     premium_status = %s,
                     premium_since = COALESCE(premium_since, CURRENT_TIMESTAMP),
-                    subscription_status = 'manual'
+                    subscription_status = 'trial',
+                    trial_end_date = %s
+                WHERE phone_number = %s
+            ''', (request.tier, trial_end, phone_number))
+        else:
+            # Regular premium upgrade (no trial end date)
+            c.execute('''
+                UPDATE users SET
+                    premium_status = %s,
+                    premium_since = COALESCE(premium_since, CURRENT_TIMESTAMP),
+                    subscription_status = 'manual',
+                    trial_end_date = NULL
                 WHERE phone_number = %s
             ''', (request.tier, phone_number))
 
-        # Add note about the change
+        # Build note about the change
+        note_text = f"Tier changed to {request.tier}"
+        if trial_end:
+            note_text += f" (trial until {trial_end.strftime('%Y-%m-%d')})"
+        note_text += f". Reason: {request.reason or 'Not specified'}"
+
         c.execute('''
             INSERT INTO customer_notes (phone_number, note, created_by)
             VALUES (%s, %s, %s)
-        ''', (phone_number, f"Tier changed to {request.tier}. Reason: {request.reason or 'Not specified'}", admin))
+        ''', (phone_number, note_text, admin))
 
         conn.commit()
-        logger.info(f"CS: {admin} changed {phone_number[-4:]} tier to {request.tier}")
+        logger.info(f"CS: {admin} changed {phone_number[-4:]} tier to {request.tier}" + (f" (trial until {trial_end})" if trial_end else ""))
 
         return {"message": f"Tier updated to {request.tier}"}
     except HTTPException:
@@ -3168,14 +3196,21 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     <div id="csProfileStats" style="line-height: 1.8;"></div>
 
                     <h4 style="margin: 20px 0 15px; color: #2c3e50;">Change Tier</h4>
-                    <div style="display: flex; gap: 10px; align-items: center;">
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                         <select id="csTierSelect" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                             <option value="free">Free</option>
                             <option value="premium">Premium</option>
                             <option value="family">Family</option>
                         </select>
-                        <input type="text" id="csTierReason" placeholder="Reason..." style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        <input type="text" id="csTierReason" placeholder="Reason..." style="flex: 1; min-width: 150px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                         <button class="btn" onclick="csUpdateTier()" style="background: #27ae60; color: white; padding: 8px 16px;">Update</button>
+                    </div>
+                    <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="checkbox" id="csTrialMode" onchange="toggleTrialDatePicker()">
+                            <span style="font-size: 0.9em;">Set as free trial (expires on date)</span>
+                        </label>
+                        <input type="date" id="csTrialEndDate" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; display: none;">
                     </div>
                 </div>
 
@@ -5225,23 +5260,69 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        function toggleTrialDatePicker() {{
+            const checkbox = document.getElementById('csTrialMode');
+            const datePicker = document.getElementById('csTrialEndDate');
+            const tierSelect = document.getElementById('csTierSelect');
+
+            if (checkbox.checked) {{
+                datePicker.style.display = 'block';
+                // Default to 14 days from now
+                const defaultDate = new Date();
+                defaultDate.setDate(defaultDate.getDate() + 14);
+                datePicker.value = defaultDate.toISOString().split('T')[0];
+                // Auto-select premium if free is selected
+                if (tierSelect.value === 'free') {{
+                    tierSelect.value = 'premium';
+                }}
+            }} else {{
+                datePicker.style.display = 'none';
+                datePicker.value = '';
+            }}
+        }}
+
         async function csUpdateTier() {{
             if (!csCurrentPhone) return;
 
             const tier = document.getElementById('csTierSelect').value;
             const reason = document.getElementById('csTierReason').value;
+            const isTrialMode = document.getElementById('csTrialMode').checked;
+            const trialEndDate = document.getElementById('csTrialEndDate').value;
 
-            if (!confirm(`Change this customer to ${{tier}} tier?`)) return;
+            // Validate trial mode
+            if (isTrialMode && tier === 'free') {{
+                alert('Cannot set a trial for Free tier. Please select Premium or Family.');
+                return;
+            }}
+
+            if (isTrialMode && !trialEndDate) {{
+                alert('Please select a trial end date.');
+                return;
+            }}
+
+            const confirmMsg = isTrialMode
+                ? `Set this customer to ${{tier}} trial until ${{trialEndDate}}?`
+                : `Change this customer to ${{tier}} tier?`;
+
+            if (!confirm(confirmMsg)) return;
 
             try {{
+                const body = {{ tier, reason }};
+                if (isTrialMode && trialEndDate) {{
+                    body.trial_end_date = trialEndDate;
+                }}
+
                 const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(csCurrentPhone)}}/tier`, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ tier, reason }})
+                    body: JSON.stringify(body)
                 }});
                 const data = await response.json();
                 alert(data.message);
                 document.getElementById('csTierReason').value = '';
+                document.getElementById('csTrialMode').checked = false;
+                document.getElementById('csTrialEndDate').style.display = 'none';
+                document.getElementById('csTrialEndDate').value = '';
                 csViewCustomer(csCurrentPhone); // Refresh
             }} catch (e) {{
                 alert('Error: ' + e.message);

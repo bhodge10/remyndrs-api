@@ -559,11 +559,21 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             </div>
             <div class="modal-body" style="background: white;">
                 <p style="margin-bottom: 15px;">Select new tier for this customer:</p>
-                <select id="tierSelect" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                <select id="tierSelect" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 15px;">
                     <option value="free">Free</option>
                     <option value="premium">Premium</option>
                     <option value="family">Family</option>
                 </select>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="trialModeCheckbox" onchange="toggleTrialMode()">
+                        <span>Set as free trial (expires on date)</span>
+                    </label>
+                </div>
+                <div id="trialDateContainer" style="display: none;">
+                    <label style="display: block; margin-bottom: 5px; font-size: 0.9em; color: #666;">Trial End Date:</label>
+                    <input type="date" id="trialEndDate" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="saveTierChange()">Save Changes</button>
@@ -992,6 +1002,9 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         function openTierModal() {{
             if (!currentCustomer) return;
             document.getElementById('tierSelect').value = currentCustomer.tier || 'free';
+            document.getElementById('trialModeCheckbox').checked = false;
+            document.getElementById('trialDateContainer').style.display = 'none';
+            document.getElementById('trialEndDate').value = '';
             document.getElementById('tierModal').style.display = 'block';
         }}
 
@@ -999,15 +1012,54 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             document.getElementById('tierModal').style.display = 'none';
         }}
 
+        function toggleTrialMode() {{
+            const checkbox = document.getElementById('trialModeCheckbox');
+            const container = document.getElementById('trialDateContainer');
+            const tierSelect = document.getElementById('tierSelect');
+
+            if (checkbox.checked) {{
+                container.style.display = 'block';
+                // Default to 14 days from now
+                const defaultDate = new Date();
+                defaultDate.setDate(defaultDate.getDate() + 14);
+                document.getElementById('trialEndDate').value = defaultDate.toISOString().split('T')[0];
+                // Auto-select premium if free is selected
+                if (tierSelect.value === 'free') {{
+                    tierSelect.value = 'premium';
+                }}
+            }} else {{
+                container.style.display = 'none';
+                document.getElementById('trialEndDate').value = '';
+            }}
+        }}
+
         async function saveTierChange() {{
             if (!currentCustomer) return;
             const newTier = document.getElementById('tierSelect').value;
+            const isTrialMode = document.getElementById('trialModeCheckbox').checked;
+            const trialEndDate = document.getElementById('trialEndDate').value;
+
+            // Validate trial mode
+            if (isTrialMode && newTier === 'free') {{
+                alert('Cannot set a trial for Free tier. Please select Premium or Family.');
+                return;
+            }}
+
+            if (isTrialMode && !trialEndDate) {{
+                alert('Please select a trial end date.');
+                return;
+            }}
 
             try {{
+                const body = {{ tier: newTier }};
+                if (isTrialMode && trialEndDate) {{
+                    body.trial_end_date = trialEndDate;
+                }}
+
                 const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/tier`, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ tier: newTier }})
+                    body: JSON.stringify(body)
                 }});
 
                 if (response.ok) {{
