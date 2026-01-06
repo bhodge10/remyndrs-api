@@ -608,7 +608,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             }}
         }}
 
-        // Customer Search
+        // Customer Search - uses admin endpoint which returns {customers: [...]}
         async function searchCustomers() {{
             const query = document.getElementById('searchInput').value.trim();
             if (!query) return;
@@ -621,7 +621,8 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             tbody.innerHTML = '<tr><td colspan="5" class="loading">Searching...</td></tr>';
 
             try {{
-                const response = await fetch(`/cs/search?q=${{encodeURIComponent(query)}}`);
+                // Use admin search endpoint - CS credentials work for both
+                const response = await fetch(`/admin/cs/search?q=${{encodeURIComponent(query)}}`);
 
                 if (!response.ok) {{
                     throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
@@ -630,7 +631,8 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 const data = await response.json();
                 console.log('Search response:', data);
 
-                const results = data.results || [];
+                // Admin endpoint returns {customers: [...]}
+                const results = data.customers || [];
                 countSpan.textContent = `(${{results.length}} found)`;
 
                 if (results.length === 0) {{
@@ -641,9 +643,9 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 tbody.innerHTML = results.map(c => `
                     <tr>
                         <td>${{c.phone}}</td>
-                        <td>${{c.name || 'Unknown'}}</td>
+                        <td>${{c.first_name || 'Unknown'}}</td>
                         <td><span class="tier-badge tier-${{c.tier || 'free'}}">${{(c.tier || 'free').toUpperCase()}}</span></td>
-                        <td>${{c.active ? 'Active' : 'Inactive'}}</td>
+                        <td>${{c.subscription_status || 'N/A'}}</td>
                         <td><button class="btn btn-primary" onclick="viewCustomer('${{c.phone}}')">View</button></td>
                     </tr>
                 `).join('');
@@ -657,7 +659,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         // Customer Profile
         async function viewCustomer(phone) {{
             try {{
-                const response = await fetch(`/cs/customer/${{encodeURIComponent(phone)}}`);
+                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(phone)}}`);
                 const customer = await response.json();
 
                 currentCustomer = customer;
@@ -697,7 +699,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 }} else if (tab === 'notes') {{
                     await loadCustomerNotes();
                 }} else {{
-                    const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/${{tab}}`);
+                    const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/${{tab}}`);
                     const data = await response.json();
 
                     if (tab === 'reminders') {{
@@ -803,7 +805,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         async function loadCustomerNotes() {{
             const container = document.getElementById('tab-notes');
             try {{
-                const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}`);
+                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}`);
                 const customer = await response.json();
 
                 if (!customer.notes || customer.notes.length === 0) {{
@@ -1002,7 +1004,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             const newTier = document.getElementById('tierSelect').value;
 
             try {{
-                const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/tier`, {{
+                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/tier`, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ tier: newTier }})
@@ -1035,7 +1037,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             if (!note) return;
 
             try {{
-                const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/notes`, {{
+                const response = await fetch(`/admin/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/notes`, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ note }})
