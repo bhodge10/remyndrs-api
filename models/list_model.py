@@ -134,7 +134,7 @@ def get_list_by_name(phone_number, list_name):
 
 
 def get_next_available_list_name(phone_number, base_name):
-    """Get next available list name (e.g., 'Grocery list 2' if 'Grocery list' exists)"""
+    """Get next available list name (e.g., 'Grocery list #2' if 'Grocery list' exists)"""
     conn = None
     try:
         conn = get_db_connection()
@@ -174,15 +174,15 @@ def get_next_available_list_name(phone_number, base_name):
             if name_lower == base_lower:
                 max_num = max(max_num, 1)
             else:
-                # Check for pattern like "Grocery list 2"
-                match = re.match(rf'{re.escape(base_lower)}\s+(\d+)$', name_lower)
+                # Check for pattern like "Grocery list #2" or legacy "Grocery list 2"
+                match = re.match(rf'{re.escape(base_lower)}\s*#?\s*(\d+)$', name_lower)
                 if match:
                     max_num = max(max_num, int(match.group(1)))
 
-        return f"{base_name} {max_num + 1}"
+        return f"{base_name} #{max_num + 1}"
     except Exception as e:
         logger.error(f"Error getting next available list name: {e}")
-        return f"{base_name} 2"  # Fallback
+        return f"{base_name} #2"  # Fallback
     finally:
         if conn:
             return_db_connection(conn)

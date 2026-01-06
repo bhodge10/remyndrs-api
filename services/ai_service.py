@@ -423,14 +423,23 @@ For SHOWING THE CURRENT/LAST ACTIVE LIST:
 }}
 IMPORTANT: Use show_current_list when user says "show list" (SINGULAR), "show my list", "what's on my list", "view list", or just "list". This shows their last active list.
 
-For SHOWING ALL LISTS (or filtered lists):
+For SHOWING ALL LISTS:
 {{
     "action": "show_all_lists",
-    "list_filter": "optional keyword to filter lists by name (e.g., 'grocery' for grocery lists)",
-    "response": "List all the user's lists with item counts"
+    "response": "Showing your lists"
 }}
-Note: Use show_all_lists when user says "lists" (PLURAL), "all lists", "all my lists", or "show all lists".
-If user specifies a type like "show grocery lists" or "show my shopping lists", include the list_filter parameter to filter by that keyword.
+
+For SHOWING FILTERED LISTS (when user specifies a type like "grocery lists", "shopping lists"):
+{{
+    "action": "show_all_lists",
+    "list_filter": "the keyword to filter by (e.g., 'grocery', 'shopping', 'todo')",
+    "response": "Showing your [type] lists"
+}}
+CRITICAL: When user says "show grocery lists" or "show my shopping lists", you MUST include the list_filter field!
+Examples:
+- "show lists" → {{"action": "show_all_lists"}}
+- "show grocery lists" → {{"action": "show_all_lists", "list_filter": "grocery"}}
+- "show my shopping lists" → {{"action": "show_all_lists", "list_filter": "shopping"}}
 
 CRITICAL: "show list" = show_current_list, "show lists" = show_all_lists, "show grocery lists" = show_all_lists with list_filter="grocery"
 
