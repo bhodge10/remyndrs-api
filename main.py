@@ -433,68 +433,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # Check for AM/PM in various formats: "8am", "8 am", "8:00am", "8a", "8:00a", "a.m.", etc.
         has_am_pm = bool(re.search(r'\d\s*(am|pm|a\.m\.|p\.m\.|a|p)\b', incoming_msg, re.IGNORECASE))
 
-        if user and len(user) > 11 and user[10] and has_am_pm:  # pending_reminder_text exists and has AM/PM
-            pending_text = user[10]
-            pending_time = user[11]
-
-            # Detect AM vs PM from various formats (am, a.m., a, etc.)
-            am_match = re.search(r'\d\s*(am|a\.m\.|a)\b', incoming_msg, re.IGNORECASE)
-            am_pm = "AM" if am_match else "PM"
-
-            try:
-                user_time = get_user_current_time(phone_number)
-                user_tz = get_user_timezone(phone_number)
-
-                # Clean up the pending_time - remove any existing AM/PM
-                clean_time = pending_time.upper().replace("AM", "").replace("PM", "").replace("A.M.", "").replace("P.M.", "").strip()
-
-                # Parse the time
-                time_parts = clean_time.split(":")
-                hour = int(time_parts[0])
-                minute = int(time_parts[1]) if len(time_parts) > 1 else 0
-
-                # Convert to 24-hour format
-                if am_pm == "PM" and hour != 12:
-                    hour += 12
-                elif am_pm == "AM" and hour == 12:
-                    hour = 0
-
-                # Create reminder datetime in user's timezone
-                reminder_datetime = user_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-                # If time has already passed today, schedule for tomorrow
-                if reminder_datetime <= user_time:
-                    reminder_datetime = reminder_datetime + timedelta(days=1)
-
-                # Convert to UTC for storage
-                reminder_datetime_utc = reminder_datetime.astimezone(pytz.UTC)
-                reminder_date_str = reminder_datetime_utc.strftime('%Y-%m-%d %H:%M:%S')
-
-                # Save the reminder
-                save_reminder(phone_number, pending_text, reminder_date_str)
-
-                # Format confirmation
-                readable_date = reminder_datetime.strftime('%A, %B %d at %I:%M %p')
-                reply_text = f"I'll remind you on {readable_date} to {pending_text}."
-
-                # Clear pending reminder
-                create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None)
-
-                log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", True)
-                resp = MessagingResponse()
-                resp.message(staging_prefix(reply_text))
-                return Response(content=str(resp), media_type="application/xml")
-
-            except Exception as e:
-                logger.error(f"Error processing time: {e}")
-                resp = MessagingResponse()
-                resp.message(staging_prefix("Sorry, I had trouble setting that reminder. Please try again."))
-                return Response(content=str(resp), media_type="application/xml")
-
-        # ==========================================
-        # PENDING DATE TIME RESPONSE (clarify_date_time flow)
-        # ==========================================
-        # Check if user has a pending reminder date (asked "what time?") and their message contains a time
+        # Check clarify_date_time flow FIRST (pending_reminder_date set)
         pending_date_data = get_pending_reminder_date(phone_number)
         if pending_date_data and has_am_pm:
             pending_text = pending_date_data['text']
@@ -554,6 +493,65 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 logger.error(f"Error processing date/time response: {e}")
                 resp = MessagingResponse()
                 resp.message(staging_prefix("Sorry, I had trouble setting that reminder. Please try again with a time like '8am' or '3:30pm'."))
+                return Response(content=str(resp), media_type="application/xml")
+
+        # clarify_time flow - only if pending_reminder_time is set (not pending_reminder_date)
+        if user and len(user) > 11 and user[10] and user[11] and has_am_pm:  # pending_reminder_text AND pending_reminder_time exist
+            pending_text = user[10]
+            pending_time = user[11]
+
+            # Detect AM vs PM from various formats (am, a.m., a, etc.)
+            am_match = re.search(r'\d\s*(am|a\.m\.|a)\b', incoming_msg, re.IGNORECASE)
+            am_pm = "AM" if am_match else "PM"
+
+            try:
+                user_time = get_user_current_time(phone_number)
+                user_tz = get_user_timezone(phone_number)
+
+                # Clean up the pending_time - remove any existing AM/PM
+                clean_time = pending_time.upper().replace("AM", "").replace("PM", "").replace("A.M.", "").replace("P.M.", "").strip()
+
+                # Parse the time
+                time_parts = clean_time.split(":")
+                hour = int(time_parts[0])
+                minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+
+                # Convert to 24-hour format
+                if am_pm == "PM" and hour != 12:
+                    hour += 12
+                elif am_pm == "AM" and hour == 12:
+                    hour = 0
+
+                # Create reminder datetime in user's timezone
+                reminder_datetime = user_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+                # If time has already passed today, schedule for tomorrow
+                if reminder_datetime <= user_time:
+                    reminder_datetime = reminder_datetime + timedelta(days=1)
+
+                # Convert to UTC for storage
+                reminder_datetime_utc = reminder_datetime.astimezone(pytz.UTC)
+                reminder_date_str = reminder_datetime_utc.strftime('%Y-%m-%d %H:%M:%S')
+
+                # Save the reminder
+                save_reminder(phone_number, pending_text, reminder_date_str)
+
+                # Format confirmation
+                readable_date = reminder_datetime.strftime('%A, %B %d at %I:%M %p')
+                reply_text = f"I'll remind you on {readable_date} to {pending_text}."
+
+                # Clear pending reminder
+                create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None)
+
+                log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", True)
+                resp = MessagingResponse()
+                resp.message(staging_prefix(reply_text))
+                return Response(content=str(resp), media_type="application/xml")
+
+            except Exception as e:
+                logger.error(f"Error processing time: {e}")
+                resp = MessagingResponse()
+                resp.message(staging_prefix("Sorry, I had trouble setting that reminder. Please try again."))
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
