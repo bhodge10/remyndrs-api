@@ -2382,6 +2382,18 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             lists = get_lists(phone_number)
             list_filter = ai_response.get("list_filter", "").lower().strip()
 
+            # Fallback: detect filter from user's message if AI didn't provide it
+            # Pattern: "show [my] X lists" where X is the filter keyword
+            if not list_filter:
+                import re
+                match = re.search(r'show\s+(?:my\s+)?(\w+)\s+lists?', incoming_msg.lower())
+                if match:
+                    potential_filter = match.group(1)
+                    # Don't treat "all" or "the" as filters
+                    if potential_filter not in ['all', 'the', 'my']:
+                        list_filter = potential_filter
+                        logger.info(f"show_all_lists: detected filter '{list_filter}' from user message")
+
             # Filter lists if a filter keyword is provided
             if list_filter:
                 lists = [l for l in lists if list_filter in l[1].lower()]
