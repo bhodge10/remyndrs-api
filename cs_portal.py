@@ -613,23 +613,32 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             const query = document.getElementById('searchInput').value.trim();
             if (!query) return;
 
+            const resultsDiv = document.getElementById('searchResults');
+            const tbody = document.getElementById('searchResultsBody');
+            const countSpan = document.getElementById('resultCount');
+
+            resultsDiv.style.display = 'block';
+            tbody.innerHTML = '<tr><td colspan="5" class="loading">Searching...</td></tr>';
+
             try {{
                 const response = await fetch(`/cs/search?q=${{encodeURIComponent(query)}}`);
+
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+
                 const data = await response.json();
+                console.log('Search response:', data);
 
-                const resultsDiv = document.getElementById('searchResults');
-                const tbody = document.getElementById('searchResultsBody');
-                const countSpan = document.getElementById('resultCount');
+                const results = data.results || [];
+                countSpan.textContent = `(${{results.length}} found)`;
 
-                resultsDiv.style.display = 'block';
-                countSpan.textContent = `(${{data.results.length}} found)`;
-
-                if (data.results.length === 0) {{
+                if (results.length === 0) {{
                     tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No customers found</td></tr>';
                     return;
                 }}
 
-                tbody.innerHTML = data.results.map(c => `
+                tbody.innerHTML = results.map(c => `
                     <tr>
                         <td>${{c.phone}}</td>
                         <td>${{c.name || 'Unknown'}}</td>
@@ -640,6 +649,8 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 `).join('');
             }} catch (e) {{
                 console.error('Search error:', e);
+                countSpan.textContent = '';
+                tbody.innerHTML = `<tr><td colspan="5" class="empty-state" style="color: #e74c3c;">Error: ${{e.message}}</td></tr>`;
             }}
         }}
 
@@ -1253,19 +1264,40 @@ async def cs_search_customers(q: str = "", user: str = Depends(verify_cs_auth)):
         conn = get_db_connection()
         c = conn.cursor()
 
-        if not q:
-            return {'results': []}
+        if not q or len(q) < 2:
+            return {'results': [], 'message': 'Enter at least 2 characters to search'}
 
-        search_term = f"%{q}%"
-        c.execute("""
-            SELECT phone_number, first_name, premium_status, active, created_at
-            FROM users
-            WHERE phone_number LIKE %s OR first_name ILIKE %s
-            ORDER BY created_at DESC
-            LIMIT 50
-        """, (search_term, search_term))
+        # Clean up search term - remove common phone formatting
+        clean_query = q.strip().replace('-', '').replace('(', '').replace(')', '').replace(' ', '')
+
+        # Build search pattern
+        search_term = f"%{clean_query}%"
+
+        # Also try with + prefix for phone numbers (digits only)
+        if clean_query.isdigit():
+            # Search for phone with or without + prefix
+            c.execute("""
+                SELECT phone_number, first_name, premium_status, active, created_at
+                FROM users
+                WHERE phone_number LIKE %s
+                   OR phone_number LIKE %s
+                ORDER BY created_at DESC
+                LIMIT 50
+            """, (search_term, f"%+{clean_query}%"))
+        else:
+            # Search by name or phone
+            c.execute("""
+                SELECT phone_number, first_name, premium_status, active, created_at
+                FROM users
+                WHERE phone_number LIKE %s
+                   OR LOWER(first_name) LIKE LOWER(%s)
+                ORDER BY created_at DESC
+                LIMIT 50
+            """, (search_term, search_term))
 
         results = c.fetchall()
+        logger.info(f"CS search for '{q}' returned {len(results)} results")
+
         return {
             'results': [
                 {
@@ -1280,7 +1312,7 @@ async def cs_search_customers(q: str = "", user: str = Depends(verify_cs_auth)):
         }
     except Exception as e:
         logger.error(f"Error searching customers: {e}")
-        return {'results': []}
+        return {'results': [], 'error': str(e)}
     finally:
         if conn:
             return_db_connection(conn)
