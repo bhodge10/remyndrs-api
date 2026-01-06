@@ -498,7 +498,6 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             pending_date = pending_date_data['date']  # YYYY-MM-DD format
 
             try:
-                import re
                 user_tz_str = get_user_timezone(phone_number)
                 tz = pytz.timezone(user_tz_str)
 
@@ -2452,7 +2451,6 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
         elif ai_response["action"] == "update_reminder":
             # Update/change the time of an existing reminder
-            import re
             search_term = ai_response.get("search_term", "")
             new_time_str = ai_response.get("new_time", "")  # e.g., "8:00 AM", "3:30 PM"
             new_date_str = ai_response.get("new_date", "")  # optional, YYYY-MM-DD
