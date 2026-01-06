@@ -430,13 +430,16 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # Check if user has a pending reminder and their message contains AM or PM
         user = get_user(phone_number)
         msg_upper = incoming_msg.upper()
-        has_am_pm = any(x in msg_upper for x in ["AM", "PM", "A.M.", "P.M."])
+        # Check for AM/PM in various formats: "8am", "8 am", "8:00am", "8a", "8:00a", "a.m.", etc.
+        has_am_pm = bool(re.search(r'\d\s*(am|pm|a\.m\.|p\.m\.|a|p)\b', incoming_msg, re.IGNORECASE))
 
         if user and len(user) > 11 and user[10] and has_am_pm:  # pending_reminder_text exists and has AM/PM
             pending_text = user[10]
             pending_time = user[11]
 
-            am_pm = "AM" if any(x in msg_upper for x in ["AM", "A.M."]) else "PM"
+            # Detect AM vs PM from various formats (am, a.m., a, etc.)
+            am_match = re.search(r'\d\s*(am|a\.m\.|a)\b', incoming_msg, re.IGNORECASE)
+            am_pm = "AM" if am_match else "PM"
 
             try:
                 user_time = get_user_current_time(phone_number)
@@ -501,12 +504,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 user_tz_str = get_user_timezone(phone_number)
                 tz = pytz.timezone(user_tz_str)
 
-                # Parse time from user message (e.g., "8am", "8:00 AM", "3:30pm")
-                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)', incoming_msg, re.IGNORECASE)
+                # Parse time from user message (e.g., "8am", "8:00 AM", "3:30pm", "8a", "8p")
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.|a|p)\b', incoming_msg, re.IGNORECASE)
                 if time_match:
                     hour = int(time_match.group(1))
                     minute = int(time_match.group(2)) if time_match.group(2) else 0
-                    am_pm = time_match.group(3).lower().replace('.', '')
+                    am_pm_raw = time_match.group(3).lower().replace('.', '')
+                    am_pm = 'am' if am_pm_raw in ['am', 'a'] else 'pm'
 
                     # Convert to 24-hour format
                     if am_pm == 'pm' and hour != 12:
@@ -2467,12 +2471,13 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 reminder_id, reminder_text, current_date = matching_reminders[0]
 
                 try:
-                    # Parse the new time
-                    time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)', new_time_str, re.IGNORECASE)
+                    # Parse the new time (e.g., "8am", "8:00 AM", "3:30pm", "8a", "8p")
+                    time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.|a|p)\b', new_time_str, re.IGNORECASE)
                     if time_match:
                         hour = int(time_match.group(1))
                         minute = int(time_match.group(2)) if time_match.group(2) else 0
-                        am_pm = time_match.group(3).lower().replace('.', '')
+                        am_pm_raw = time_match.group(3).lower().replace('.', '')
+                        am_pm = 'am' if am_pm_raw in ['am', 'a'] else 'pm'
 
                         # Convert to 24-hour format
                         if am_pm == 'pm' and hour != 12:
