@@ -2380,7 +2380,17 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
         elif ai_response["action"] == "show_all_lists":
             lists = get_lists(phone_number)
-            logger.info(f"show_all_lists: found {len(lists)} lists")
+            list_filter = ai_response.get("list_filter", "").lower().strip()
+
+            # Filter lists if a filter keyword is provided
+            if list_filter:
+                lists = [l for l in lists if list_filter in l[1].lower()]
+                logger.info(f"show_all_lists: filtered by '{list_filter}', found {len(lists)} matching lists")
+            else:
+                logger.info(f"show_all_lists: found {len(lists)} lists")
+
+            filter_desc = f" {list_filter}" if list_filter else ""
+
             if len(lists) == 1:
                 # Only one list, show it directly
                 list_id = lists[0][0]
@@ -2401,9 +2411,13 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 list_lines = []
                 for i, (list_id, list_name, item_count, completed_count) in enumerate(lists, 1):
                     list_lines.append(f"{i}. {list_name} ({item_count} items)")
-                reply_text = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
+                header = f"Your{filter_desc} lists:" if list_filter else "Your lists:"
+                reply_text = header + "\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
             else:
-                reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
+                if list_filter:
+                    reply_text = f"You don't have any {list_filter} lists. Try 'Create a {list_filter} list'!"
+                else:
+                    reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
             log_interaction(phone_number, incoming_msg, reply_text, "show_all_lists", True)
 
         elif ai_response["action"] == "complete_item":

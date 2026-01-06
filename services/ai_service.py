@@ -423,14 +423,16 @@ For SHOWING THE CURRENT/LAST ACTIVE LIST:
 }}
 IMPORTANT: Use show_current_list when user says "show list" (SINGULAR), "show my list", "what's on my list", "view list", or just "list". This shows their last active list.
 
-For SHOWING ALL LISTS:
+For SHOWING ALL LISTS (or filtered lists):
 {{
     "action": "show_all_lists",
+    "list_filter": "optional keyword to filter lists by name (e.g., 'grocery' for grocery lists)",
     "response": "List all the user's lists with item counts"
 }}
-Note: ONLY use show_all_lists when user explicitly says "lists" (PLURAL), "all lists", "all my lists", or "show all lists".
+Note: Use show_all_lists when user says "lists" (PLURAL), "all lists", "all my lists", or "show all lists".
+If user specifies a type like "show grocery lists" or "show my shopping lists", include the list_filter parameter to filter by that keyword.
 
-CRITICAL: "show list" = show_current_list, "show lists" = show_all_lists
+CRITICAL: "show list" = show_current_list, "show lists" = show_all_lists, "show grocery lists" = show_all_lists with list_filter="grocery"
 
 For CHECKING OFF AN ITEM:
 {{
