@@ -133,6 +133,61 @@ def get_list_by_name(phone_number, list_name):
             return_db_connection(conn)
 
 
+def get_next_available_list_name(phone_number, base_name):
+    """Get next available list name (e.g., 'Grocery list 2' if 'Grocery list' exists)"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get all lists that start with the base name
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone
+            phone_hash = hash_phone(phone_number)
+            c.execute(
+                'SELECT list_name FROM lists WHERE phone_hash = %s AND LOWER(list_name) LIKE LOWER(%s)',
+                (phone_hash, f"{base_name}%")
+            )
+            results = c.fetchall()
+            if not results:
+                c.execute(
+                    'SELECT list_name FROM lists WHERE phone_number = %s AND LOWER(list_name) LIKE LOWER(%s)',
+                    (phone_number, f"{base_name}%")
+                )
+                results = c.fetchall()
+        else:
+            c.execute(
+                'SELECT list_name FROM lists WHERE phone_number = %s AND LOWER(list_name) LIKE LOWER(%s)',
+                (phone_number, f"{base_name}%")
+            )
+            results = c.fetchall()
+
+        if not results:
+            return base_name
+
+        # Find the highest number suffix
+        import re
+        max_num = 1
+        base_lower = base_name.lower()
+        for (name,) in results:
+            name_lower = name.lower()
+            if name_lower == base_lower:
+                max_num = max(max_num, 1)
+            else:
+                # Check for pattern like "Grocery list 2"
+                match = re.match(rf'{re.escape(base_lower)}\s+(\d+)$', name_lower)
+                if match:
+                    max_num = max(max_num, int(match.group(1)))
+
+        return f"{base_name} {max_num + 1}"
+    except Exception as e:
+        logger.error(f"Error getting next available list name: {e}")
+        return f"{base_name} 2"  # Fallback
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_list_by_id(list_id, phone_number):
     """Get a list by ID (with ownership check)"""
     conn = None

@@ -22,7 +22,7 @@ import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import Depends
 from database import init_db, log_interaction, get_setting
-from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list, get_pending_list_item, get_pending_reminder_delete, get_pending_memory_delete, get_pending_reminder_date, mark_user_opted_out
+from models.user import get_user, is_user_onboarded, create_or_update_user, get_user_timezone, get_last_active_list, get_pending_list_item, get_pending_reminder_delete, get_pending_memory_delete, get_pending_reminder_date, get_pending_list_create, mark_user_opted_out
 from models.memory import save_memory, get_memories, search_memories, delete_memory
 from models.reminder import (
     save_reminder, get_user_reminders, search_pending_reminders, delete_reminder,
@@ -35,7 +35,8 @@ from models.list_model import (
     create_list, get_lists, get_list_by_name, get_list_items,
     add_list_item, mark_item_complete, mark_item_incomplete,
     delete_list_item, delete_list, rename_list, clear_list,
-    find_item_in_any_list, get_list_count, get_item_count
+    find_item_in_any_list, get_list_count, get_item_count,
+    get_next_available_list_name
 )
 from services.sms_service import send_sms
 from services.ai_service import process_with_ai, parse_list_items
@@ -678,6 +679,54 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Error parsing pending memory delete data: {e}")
                 create_or_update_user(phone_number, pending_memory_delete=None)
+
+        # ==========================================
+        # PENDING LIST CREATE (duplicate list handling)
+        # ==========================================
+        # Check if user was asked about duplicate list
+        pending_list_name = get_pending_list_create(phone_number)
+        if pending_list_name:
+            msg_lower = incoming_msg.strip().lower()
+
+            # Check for "add" responses
+            add_keywords = ['add', 'existing', 'use', 'yes', 'that one', 'add to it', 'add items']
+            wants_add = any(kw in msg_lower for kw in add_keywords)
+
+            # Check for "new" responses
+            new_keywords = ['new', 'create', 'another', 'different', 'new one', 'create new']
+            wants_new = any(kw in msg_lower for kw in new_keywords)
+
+            if wants_add and not wants_new:
+                # User wants to add to existing list - set it as active
+                existing_list = get_list_by_name(phone_number, pending_list_name)
+                if existing_list:
+                    list_id, actual_name = existing_list
+                    create_or_update_user(phone_number, pending_list_create=None, last_active_list=actual_name)
+                    reply_msg = f"Great! Your {actual_name} is ready. What would you like to add?"
+                else:
+                    reply_msg = "That list no longer exists. Would you like to create it?"
+                    create_or_update_user(phone_number, pending_list_create=None)
+
+                resp = MessagingResponse()
+                resp.message(staging_prefix(reply_msg))
+                log_interaction(phone_number, incoming_msg, reply_msg, "list_duplicate_add_existing", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            elif wants_new:
+                # User wants to create a new list with incremented name
+                new_list_name = get_next_available_list_name(phone_number, pending_list_name)
+                create_list(phone_number, new_list_name)
+                create_or_update_user(phone_number, pending_list_create=None, last_active_list=new_list_name)
+                reply_msg = f"Created your {new_list_name}!"
+
+                resp = MessagingResponse()
+                resp.message(staging_prefix(reply_msg))
+                log_interaction(phone_number, incoming_msg, reply_msg, "list_duplicate_create_new", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            # If unclear, let the AI handle it but clear the pending state
+            # so the user can try again with "create a grocery list"
+            create_or_update_user(phone_number, pending_list_create=None)
 
         # ==========================================
         # PENDING LIST ITEM SELECTION
@@ -2083,11 +2132,26 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 allowed, limit_msg = can_create_list(phone_number)
                 if not allowed:
                     reply_text = limit_msg
-                elif get_list_by_name(phone_number, list_name):
-                    reply_text = f"You already have a list called '{list_name}'."
                 else:
-                    create_list(phone_number, list_name)
-                    reply_text = ai_response.get("confirmation", f"Created your {list_name}!")
+                    existing_list = get_list_by_name(phone_number, list_name)
+                    if existing_list:
+                        # List exists - ask user what they want to do
+                        list_id, actual_name = existing_list
+                        items = get_list_items(list_id)
+                        item_count = len(items)
+
+                        # Store pending state
+                        create_or_update_user(phone_number, pending_list_create=list_name)
+
+                        if item_count == 0:
+                            reply_text = f"You already have an empty {actual_name}. Would you like to add items to it, or create a new one?"
+                        elif item_count == 1:
+                            reply_text = f"You already have a {actual_name} with 1 item. Would you like to add items to it, or create a new one?"
+                        else:
+                            reply_text = f"You already have a {actual_name} with {item_count} items. Would you like to add items to it, or create a new one?"
+                    else:
+                        create_list(phone_number, list_name)
+                        reply_text = ai_response.get("confirmation", f"Created your {list_name}!")
             log_interaction(phone_number, incoming_msg, reply_text, "create_list", True)
 
         elif ai_response["action"] == "add_to_list":

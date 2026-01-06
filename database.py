@@ -389,6 +389,8 @@ def init_db():
             "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS original_timezone TEXT",
             # Pending reminder date for clarify_date_time action (date without time)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_reminder_date TEXT",
+            # Pending list create for duplicate list handling
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_list_create TEXT",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
