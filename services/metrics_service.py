@@ -356,14 +356,19 @@ def get_cost_analytics():
             'month': '30 days'
         }
 
-        # Get user counts by plan
+        # Get user counts by plan (distinguishing trial users)
+        # Trial = premium_status is premium/family AND trial_end_date > NOW()
         c.execute('''
             SELECT
-                COALESCE(premium_status, 'free') as plan,
+                CASE
+                    WHEN trial_end_date > NOW() AND premium_status IN ('premium', 'family')
+                        THEN 'trial'
+                    ELSE COALESCE(premium_status, 'free')
+                END as plan,
                 COUNT(*) as count
             FROM users
             WHERE onboarding_complete = TRUE
-            GROUP BY COALESCE(premium_status, 'free')
+            GROUP BY 1
         ''')
         user_counts = {row[0]: row[1] for row in c.fetchall()}
 
@@ -376,30 +381,38 @@ def get_cost_analytics():
             # Each log entry = 1 inbound + 1 outbound message
             c.execute(f'''
                 SELECT
-                    COALESCE(u.premium_status, 'free') as plan,
+                    CASE
+                        WHEN u.trial_end_date > NOW() AND u.premium_status IN ('premium', 'family')
+                            THEN 'trial'
+                        ELSE COALESCE(u.premium_status, 'free')
+                    END as plan,
                     COUNT(*) as message_count
                 FROM logs l
                 JOIN users u ON l.phone_number = u.phone_number
                 WHERE l.created_at >= NOW() - INTERVAL '{interval}'
-                GROUP BY COALESCE(u.premium_status, 'free')
+                GROUP BY 1
             ''')
             sms_by_plan = {row[0]: row[1] for row in c.fetchall()}
 
             # Get AI costs by plan (from api_usage table)
             c.execute(f'''
                 SELECT
-                    COALESCE(u.premium_status, 'free') as plan,
+                    CASE
+                        WHEN u.trial_end_date > NOW() AND u.premium_status IN ('premium', 'family')
+                            THEN 'trial'
+                        ELSE COALESCE(u.premium_status, 'free')
+                    END as plan,
                     SUM(a.prompt_tokens) as prompt_tokens,
                     SUM(a.completion_tokens) as completion_tokens
                 FROM api_usage a
                 JOIN users u ON a.phone_number = u.phone_number
                 WHERE a.created_at >= NOW() - INTERVAL '{interval}'
-                GROUP BY COALESCE(u.premium_status, 'free')
+                GROUP BY 1
             ''')
             ai_by_plan = {row[0]: {'prompt': row[1] or 0, 'completion': row[2] or 0} for row in c.fetchall()}
 
-            # Calculate costs for each plan tier
-            for plan in ['free', 'premium']:
+            # Calculate costs for each plan tier (including trial)
+            for plan in ['free', 'trial', 'premium', 'family']:
                 message_count = sms_by_plan.get(plan, 0)
                 # Each interaction = 1 inbound + 1 outbound
                 sms_cost = message_count * 2 * SMS_COST_PER_MESSAGE

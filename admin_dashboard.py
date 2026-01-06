@@ -3620,15 +3620,22 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 return;
             }}
 
-            // Add rows for each plan
-            ['free', 'premium'].forEach(plan => {{
+            // Add rows for each plan (including trial)
+            const planLabels = {{
+                'free': 'Free',
+                'trial': 'Premium (Trial)',
+                'premium': 'Premium (Paid)',
+                'family': 'Family'
+            }};
+            ['free', 'trial', 'premium', 'family'].forEach(plan => {{
                 const data = periodData[plan];
-                if (data) {{
+                if (data && (data.user_count > 0 || data.message_count > 0)) {{
                     const row = table.insertRow(-1);
                     row.className = 'plan-row';
+                    if (plan === 'trial') row.style.backgroundColor = '#fff8e1';
                     const totalTokens = (data.prompt_tokens || 0) + (data.completion_tokens || 0);
                     row.innerHTML = `
-                        <td>${{plan.charAt(0).toUpperCase() + plan.slice(1)}}</td>
+                        <td>${{planLabels[plan]}}</td>
                         <td>${{data.user_count}}</td>
                         <td>${{data.message_count * 2}}</td>
                         <td class="money">${{formatCurrency(data.sms_cost)}}</td>
