@@ -824,7 +824,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # LIST SELECTION BY NUMBER
         # ==========================================
         # If user sends just a number and has lists, show that list
-        if incoming_msg.strip().isdigit():
+        # But NOT if we're in a pending multi-delete flow
+        user_check = get_user(phone_number)
+        pending_delete_active = user_check and user_check[9] if user_check else False
+        if incoming_msg.strip().isdigit() and not pending_delete_active:
             list_num = int(incoming_msg.strip())
             lists = get_lists(phone_number)
             if lists and 1 <= list_num <= len(lists):
