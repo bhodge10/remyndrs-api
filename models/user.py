@@ -6,6 +6,21 @@ Handles all user-related database operations
 from database import get_db_connection, return_db_connection
 from config import logger, ENCRYPTION_ENABLED
 
+# Whitelist of allowed fields for SQL updates (prevents SQL injection via kwargs)
+ALLOWED_USER_FIELDS = {
+    'first_name', 'last_name', 'email', 'zip_code', 'timezone',
+    'onboarding_complete', 'onboarding_step', 'pending_delete',
+    'pending_reminder_text', 'pending_reminder_time', 'referral_source',
+    'premium_status', 'premium_since', 'last_active_at', 'signup_source',
+    'total_messages', 'pending_list_item', 'last_active_list',
+    'first_name_encrypted', 'last_name_encrypted', 'email_encrypted',
+    'pending_reminder_delete', 'pending_memory_delete', 'trial_end_date',
+    'last_sent_reminder_id', 'last_sent_reminder_at', 'opted_out', 'opted_out_at',
+    'stripe_customer_id', 'stripe_subscription_id', 'subscription_status',
+    'pending_reminder_date', 'pending_list_create',
+}
+
+
 def get_user(phone_number):
     """Get user info from database"""
     conn = None
@@ -83,6 +98,9 @@ def create_or_update_user(phone_number, **kwargs):
                 values.append(phone_hash)
 
             for key, value in kwargs.items():
+                if key not in ALLOWED_USER_FIELDS:
+                    logger.warning(f"Ignoring invalid field in user update: {key}")
+                    continue
                 update_fields.append(f"{key} = %s")
                 values.append(value)
 
@@ -102,6 +120,9 @@ def create_or_update_user(phone_number, **kwargs):
                 placeholders.append('%s')
 
             for key, value in kwargs.items():
+                if key not in ALLOWED_USER_FIELDS:
+                    logger.warning(f"Ignoring invalid field in user insert: {key}")
+                    continue
                 fields.append(key)
                 values.append(value)
                 placeholders.append('%s')

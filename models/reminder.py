@@ -695,7 +695,16 @@ def delete_recurring_reminder(recurring_id, phone_number):
         conn = get_db_connection()
         c = conn.cursor()
 
-        # First, delete any unsent reminders linked to this recurring reminder
+        # SECURITY: Verify ownership FIRST before deleting any linked reminders
+        c.execute(
+            'SELECT id FROM recurring_reminders WHERE id = %s AND phone_number = %s',
+            (recurring_id, phone_number)
+        )
+        if not c.fetchone():
+            logger.warning(f"Delete failed for recurring {recurring_id} - not owned by user or doesn't exist")
+            return False
+
+        # Now safe to delete pending reminders (ownership verified)
         c.execute(
             'DELETE FROM reminders WHERE recurring_id = %s AND sent = FALSE',
             (recurring_id,)
@@ -709,7 +718,7 @@ def delete_recurring_reminder(recurring_id, phone_number):
             (recurring_id,)
         )
 
-        # Now delete the recurring reminder itself
+        # Delete the recurring reminder itself
         c.execute(
             'DELETE FROM recurring_reminders WHERE id = %s AND phone_number = %s',
             (recurring_id, phone_number)
@@ -719,8 +728,6 @@ def delete_recurring_reminder(recurring_id, phone_number):
 
         if success:
             logger.info(f"Deleted recurring reminder {recurring_id}")
-        else:
-            logger.warning(f"Delete failed for recurring {recurring_id} - rowcount=0")
         return success
     except Exception as e:
         logger.error(f"Error deleting recurring reminder: {e}")

@@ -32,3 +32,4 @@ def send_sms(to_number, message, media_url=None):
         logger.info(f"✅ Sent {'MMS' if media_url else 'SMS'} to {to_number}")
     except Exception as e:
         logger.error(f"❌ Error sending SMS to {to_number}: {e}")
+        raise  # Re-raise so callers can handle/retry
