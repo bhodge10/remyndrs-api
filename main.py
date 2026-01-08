@@ -3129,6 +3129,68 @@ async def admin_stats(admin: str = Depends(verify_admin)):
         "environment": ENVIRONMENT
     }
 
+
+@app.post("/admin/cleanup-duplicate-reminders")
+async def cleanup_duplicate_reminders(admin: str = Depends(verify_admin)):
+    """
+    Clean up duplicate reminders created by the recurring reminder bug.
+    Keeps the oldest reminder for each (recurring_id, date) combination and deletes the rest.
+    Only affects reminders with a recurring_id (not one-time reminders).
+    """
+    from database import get_db_connection, return_db_connection
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Find and delete duplicates, keeping the one with the lowest ID for each (recurring_id, DATE(reminder_date))
+        # This query:
+        # 1. Finds all reminders that have a recurring_id
+        # 2. Groups by recurring_id and date
+        # 3. Keeps only the minimum ID in each group
+        # 4. Deletes all others
+        c.execute('''
+            WITH duplicates AS (
+                SELECT id, recurring_id, DATE(reminder_date) as reminder_day,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY recurring_id, DATE(reminder_date)
+                           ORDER BY id ASC
+                       ) as rn
+                FROM reminders
+                WHERE recurring_id IS NOT NULL
+            )
+            DELETE FROM reminders
+            WHERE id IN (
+                SELECT id FROM duplicates WHERE rn > 1
+            )
+            RETURNING id
+        ''')
+
+        deleted_ids = [row[0] for row in c.fetchall()]
+        deleted_count = len(deleted_ids)
+
+        conn.commit()
+
+        logger.info(f"Cleaned up {deleted_count} duplicate reminders")
+
+        return {
+            "status": "success",
+            "deleted_count": deleted_count,
+            "deleted_ids": deleted_ids[:100] if deleted_count > 100 else deleted_ids,  # Limit response size
+            "message": f"Deleted {deleted_count} duplicate reminders"
+        }
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.exception(f"Error cleaning up duplicate reminders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 # =====================================================
 # APPLICATION ENTRY POINT
 # =====================================================

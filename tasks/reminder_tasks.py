@@ -329,16 +329,15 @@ def generate_first_occurrence(recurring_id):
             logger.error(f"Could not find next occurrence for recurring {recurring_id}")
             return None
 
-        # Check if reminder already exists for this date
-        if check_reminder_exists_for_recurring(recurring_id, check_date.date()):
-            logger.info(f"Reminder already exists for recurring {recurring_id} on {check_date.date()}")
-            # Return the next occurrence datetime anyway
-            utc_dt = check_date.astimezone(pytz.UTC)
-            update_recurring_reminder_generated(recurring_id, check_date.date(), utc_dt)
-            return utc_dt
-
-        # Convert to UTC for storage
+        # Convert to UTC FIRST (must match what's stored in DB)
         utc_dt = check_date.astimezone(pytz.UTC)
+
+        # Check if reminder already exists for this date (using UTC date to match DB)
+        if check_reminder_exists_for_recurring(recurring_id, utc_dt.date()):
+            logger.info(f"Reminder already exists for recurring {recurring_id} on {utc_dt.date()}")
+            # Return the next occurrence datetime anyway
+            update_recurring_reminder_generated(recurring_id, utc_dt.date(), utc_dt)
+            return utc_dt
 
         # Create the reminder
         reminder_id = save_reminder_with_local_time(
@@ -351,9 +350,9 @@ def generate_first_occurrence(recurring_id):
         )
 
         if reminder_id:
-            logger.info(f"Generated first occurrence for recurring {recurring_id}: reminder {reminder_id} at {check_date}")
+            logger.info(f"Generated first occurrence for recurring {recurring_id}: reminder {reminder_id} at {utc_dt}")
             # Update the recurring reminder with generation info
-            update_recurring_reminder_generated(recurring_id, check_date.date(), utc_dt)
+            update_recurring_reminder_generated(recurring_id, utc_dt.date(), utc_dt)
             return utc_dt
         else:
             logger.error(f"Failed to save first occurrence for recurring {recurring_id}")
@@ -418,11 +417,11 @@ def generate_recurring_reminders():
                         recurring['recurrence_day'],
                         check_date
                     ):
-                        # Check if reminder already exists for this date
-                        if not check_reminder_exists_for_recurring(recurring_id, check_date.date()):
-                            # Convert to UTC
-                            utc_dt = check_date.astimezone(pytz.UTC)
+                        # Convert to UTC FIRST (must match what's stored in DB)
+                        utc_dt = check_date.astimezone(pytz.UTC)
 
+                        # Check if reminder already exists for this date (using UTC date to match DB)
+                        if not check_reminder_exists_for_recurring(recurring_id, utc_dt.date()):
                             # Create the reminder
                             reminder_id = save_reminder_with_local_time(
                                 phone_number=recurring['phone_number'],
@@ -434,11 +433,11 @@ def generate_recurring_reminders():
                             )
 
                             if reminder_id:
-                                logger.info(f"Generated reminder {reminder_id} for recurring {recurring_id} at {check_date}")
+                                logger.info(f"Generated reminder {reminder_id} for recurring {recurring_id} at {utc_dt}")
                                 generated_count += 1
 
                                 # Update next occurrence
-                                update_recurring_reminder_generated(recurring_id, check_date.date(), utc_dt)
+                                update_recurring_reminder_generated(recurring_id, utc_dt.date(), utc_dt)
 
                     check_date = check_date + timedelta(days=1)
 
