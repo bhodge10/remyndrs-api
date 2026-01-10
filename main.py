@@ -1280,9 +1280,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             log_interaction(phone_number, incoming_msg, "Daily summary status", "daily_summary_status", True)
             return Response(content=str(resp), media_type="application/xml")
 
-        # Set daily summary time: "SUMMARY TIME 7AM", "DAILY SUMMARY TIME 8:30AM"
+        # Set daily summary time: "SUMMARY TIME 7AM", "SUMMARY ON 10PM", "DAILY SUMMARY TIME 8:30AM"
         summary_time_match = re.match(
-            r'^(?:daily\s+)?summary\s+(?:time\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)$',
+            r'^(?:daily\s+)?summary\s+(?:on\s+|time\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)$',
             incoming_msg.strip(),
             re.IGNORECASE
         )
