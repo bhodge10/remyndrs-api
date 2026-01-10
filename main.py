@@ -1281,7 +1281,6 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # Set daily summary time: "SUMMARY TIME 7AM", "DAILY SUMMARY TIME 8:30AM"
-        import re
         summary_time_match = re.match(
             r'^(?:daily\s+)?summary\s+(?:time\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)$',
             incoming_msg.strip(),
