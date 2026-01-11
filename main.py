@@ -72,8 +72,6 @@ def parse_snooze_duration(text):
     - "2 hours" -> 120 minutes
     - "1h30m" -> 90 minutes
     """
-    import re
-
     if not text:
         return 15  # Default
 
@@ -2654,7 +2652,6 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             # Fallback: detect filter from user's message if AI didn't provide it
             # Pattern: "show [my] X lists" where X is the filter keyword
             if not list_filter:
-                import re
                 match = re.search(r'show\s+(?:my\s+)?(\w+)\s+lists?', incoming_msg.lower())
                 if match:
                     potential_filter = match.group(1)
