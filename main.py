@@ -2040,23 +2040,68 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             reminder_text = ai_response.get("reminder_text")
             time_mentioned = ai_response.get("time_mentioned")
 
-            # Fallback: extract time from response if time_mentioned is missing
-            if not time_mentioned:
-                response_text = ai_response.get("response", "")
-                # Look for patterns like "8:00", "8", "10:30" in the response
-                time_match = re.search(r'(\d{1,2}(?::\d{2})?)\s*(?:AM|PM)', response_text, re.IGNORECASE)
-                if time_match:
-                    time_mentioned = time_match.group(1)
-                    logger.info(f"Extracted time '{time_mentioned}' from AI response")
-
-            create_or_update_user(
-                phone_number,
-                pending_reminder_text=reminder_text,
-                pending_reminder_time=time_mentioned
+            # SAFEGUARD: Check if original message already has AM/PM - AI sometimes misses it
+            original_time_match = re.search(
+                r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b',
+                incoming_msg,
+                re.IGNORECASE
             )
 
-            reply_text = ai_response.get("response", f"Do you mean {time_mentioned} AM or PM?")
-            log_interaction(phone_number, incoming_msg, reply_text, "clarify_time", True)
+            if original_time_match:
+                # Original message already has AM/PM - create reminder directly
+                hour = int(original_time_match.group(1))
+                minute = int(original_time_match.group(2)) if original_time_match.group(2) else 0
+                am_pm_raw = original_time_match.group(3).lower().replace('.', '')
+                am_pm = 'AM' if am_pm_raw in ['am', 'a'] else 'PM'
+
+                # Convert to 24-hour format
+                if am_pm == 'PM' and hour != 12:
+                    hour += 12
+                elif am_pm == 'AM' and hour == 12:
+                    hour = 0
+
+                logger.info(f"Safeguard: Original message had AM/PM, creating reminder directly at {hour}:{minute:02d}")
+
+                user_time = get_user_current_time(phone_number)
+                user_tz = get_user_timezone(phone_number)
+
+                # Create reminder datetime in user's timezone
+                reminder_datetime = user_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+                # If time has already passed today, schedule for tomorrow
+                if reminder_datetime <= user_time:
+                    reminder_datetime = reminder_datetime + timedelta(days=1)
+
+                # Convert to UTC for storage
+                reminder_datetime_utc = reminder_datetime.astimezone(pytz.UTC)
+                reminder_date_str = reminder_datetime_utc.strftime('%Y-%m-%d %H:%M:%S')
+
+                # Save the reminder
+                save_reminder(phone_number, reminder_text, reminder_date_str)
+
+                # Format confirmation
+                readable_date = reminder_datetime.strftime('%A, %B %d at %I:%M %p')
+                reply_text = f"I'll remind you on {readable_date} to {reminder_text}."
+                log_interaction(phone_number, incoming_msg, reply_text, "reminder_safeguard", True)
+            else:
+                # No AM/PM in original - proceed with clarification
+                # Fallback: extract time from response if time_mentioned is missing
+                if not time_mentioned:
+                    response_text = ai_response.get("response", "")
+                    # Look for patterns like "8:00", "8", "10:30" in the response
+                    time_match = re.search(r'(\d{1,2}(?::\d{2})?)\s*(?:AM|PM)', response_text, re.IGNORECASE)
+                    if time_match:
+                        time_mentioned = time_match.group(1)
+                        logger.info(f"Extracted time '{time_mentioned}' from AI response")
+
+                create_or_update_user(
+                    phone_number,
+                    pending_reminder_text=reminder_text,
+                    pending_reminder_time=time_mentioned
+                )
+
+                reply_text = ai_response.get("response", f"Do you mean {time_mentioned} AM or PM?")
+                log_interaction(phone_number, incoming_msg, reply_text, "clarify_time", True)
 
         elif ai_response["action"] == "clarify_date_time":
             # User gave a date but no time - ask what time they want
