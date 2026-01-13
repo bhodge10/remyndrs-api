@@ -984,6 +984,35 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             delete_options = []
 
+            # UX PRIORITY: If user is viewing a specific list, ONLY delete from that list
+            # Don't show options from reminders/memories - that's confusing
+            if last_active and last_active not in ("__RECURRING__", "__LISTS__"):
+                # User is viewing a specific list - delete directly from it
+                list_info = get_list_by_name(phone_number, last_active)
+                if list_info:
+                    list_id = list_info[0]
+                    list_name = list_info[1]
+                    items = get_list_items(list_id)
+                    if items and 1 <= item_num <= len(items):
+                        item_id, item_text, _ = items[item_num - 1]
+                        # Single item from active list - ask for confirmation
+                        confirm_data = json.dumps({
+                            'awaiting_confirmation': True,
+                            'type': 'list_item',
+                            'list_name': list_name,
+                            'text': item_text
+                        })
+                        create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+                        resp = MessagingResponse()
+                        resp.message(f"Remove '{item_text}' from {list_name}?\n\nReply YES to confirm or CANCEL to keep it.")
+                        log_interaction(phone_number, incoming_msg, "Delete from active list", "delete_list_item_confirm", True)
+                        return Response(content=str(resp), media_type="application/xml")
+                    else:
+                        resp = MessagingResponse()
+                        resp.message(f"Your {list_name} doesn't have an item #{item_num}.")
+                        return Response(content=str(resp), media_type="application/xml")
+
+            # No active list context - show options from all types
             # Check for reminder at this position
             # Tuple format: (id, reminder_date, reminder_text, recurring_id, sent)
             reminders = get_user_reminders(phone_number)
@@ -1001,38 +1030,20 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     'display': f"Reminder: {display_prefix}{reminder[2][:40]}"
                 })
 
-            # Check for list items at this position
-            # If user has an active list, check that one; otherwise check all lists
-            if last_active and last_active != "__RECURRING__":
-                # Check specific active list
-                list_info = get_list_by_name(phone_number, last_active)
-                if list_info:
-                    list_id = list_info[0]
-                    list_name = list_info[1]
-                    items = get_list_items(list_id)
-                    if items and 1 <= item_num <= len(items):
-                        item_id, item_text, _ = items[item_num - 1]
-                        delete_options.append({
-                            'type': 'list_item',
-                            'list_name': list_name,
-                            'text': item_text,
-                            'display': f"'{item_text}' from {list_name} list"
-                        })
-            else:
-                # No active list - check all lists for items at this position
-                all_lists = get_lists(phone_number)
-                for lst in all_lists:
-                    list_id = lst[0]
-                    list_name = lst[1]
-                    items = get_list_items(list_id)
-                    if items and 1 <= item_num <= len(items):
-                        item_id, item_text, _ = items[item_num - 1]
-                        delete_options.append({
-                            'type': 'list_item',
-                            'list_name': list_name,
-                            'text': item_text,
-                            'display': f"'{item_text}' from {list_name} list"
-                        })
+            # Check all lists for items at this position
+            all_lists = get_lists(phone_number)
+            for lst in all_lists:
+                list_id = lst[0]
+                list_name = lst[1]
+                items = get_list_items(list_id)
+                if items and 1 <= item_num <= len(items):
+                    item_id, item_text, _ = items[item_num - 1]
+                    delete_options.append({
+                        'type': 'list_item',
+                        'list_name': list_name,
+                        'text': item_text,
+                        'display': f"'{item_text}' from {list_name}"
+                    })
 
             # Check for memory at this position
             memories = get_memories(phone_number)
@@ -2791,6 +2802,8 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     list_lines.append(f"{i}. {list_name} ({item_count} items)")
                 header = f"Your{filter_desc} lists:" if list_filter else "Your lists:"
                 reply_text = header + "\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
+                # Track that user is viewing list of lists for number selection
+                create_or_update_user(phone_number, last_active_list="__LISTS__")
             else:
                 if list_filter:
                     reply_text = f"You don't have any {list_filter} lists. Try 'Create a {list_filter} list'!"
