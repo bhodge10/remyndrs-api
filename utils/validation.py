@@ -10,13 +10,17 @@ from config import MAX_LIST_NAME_LENGTH, MAX_ITEM_TEXT_LENGTH, MAX_MESSAGE_LENGT
 
 
 def sanitize_text(text: str) -> str:
-    """Sanitize text input - escape HTML and remove control characters"""
+    """Sanitize text input - remove control characters.
+
+    Note: We don't HTML-escape here because:
+    1. Output goes to SMS (plain text, not HTML)
+    2. SQL injection is prevented by parameterized queries
+    3. HTML escaping should happen at display time in web contexts, not at storage time
+    """
     if not text:
         return ""
     # Remove control characters except newlines and tabs
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
-    # Escape HTML entities to prevent XSS
-    text = html.escape(text)
     return text.strip()
 
 
