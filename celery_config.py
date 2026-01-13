@@ -38,6 +38,11 @@ beat_schedule = {
             "expires": 55,  # Task expires if not picked up in 55 seconds
         },
     },
+    # Send abandoned onboarding follow-ups every hour
+    "abandoned-onboarding-followups": {
+        "task": "tasks.reminder_tasks.send_abandoned_onboarding_followups",
+        "schedule": timedelta(hours=1),
+    },
 }
 
 # Note: All tasks use the default 'celery' queue for simplicity.

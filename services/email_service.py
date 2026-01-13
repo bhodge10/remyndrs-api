@@ -81,8 +81,8 @@ Reply via admin dashboard: {APP_BASE_URL}/admin/dashboard#support-{ticket_id}
         msg.attach(MIMEText(text_content, 'plain'))
         msg.attach(MIMEText(html_content, 'html'))
 
-        # Send email
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        # Send email with timeout to prevent hanging
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
             server.starttls()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.sendmail(SMTP_FROM_EMAIL, SUPPORT_EMAIL, msg.as_string())

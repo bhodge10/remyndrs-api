@@ -21,7 +21,7 @@ SUPPORT_MODE_TIMEOUT = 30
 
 
 def is_premium_user(phone_number: str) -> bool:
-    """Check if user has premium status"""
+    """Check if user has premium or family status (both can access support)"""
     conn = None
     try:
         conn = get_db_connection()
@@ -31,7 +31,7 @@ def is_premium_user(phone_number: str) -> bool:
             (phone_number,)
         )
         result = c.fetchone()
-        return result and result[0] == 'premium'
+        return result and result[0] in ('premium', 'family')
     except Exception as e:
         logger.error(f"Error checking premium status: {e}")
         return False

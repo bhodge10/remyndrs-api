@@ -120,6 +120,23 @@ def init_db():
             )
         ''')
 
+        # Onboarding progress tracking for abandoned signup recovery
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS onboarding_progress (
+                id SERIAL PRIMARY KEY,
+                phone_number TEXT NOT NULL UNIQUE,
+                current_step INTEGER DEFAULT 1,
+                first_name TEXT,
+                last_name TEXT,
+                email TEXT,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                followup_24h_sent BOOLEAN DEFAULT FALSE,
+                followup_7d_sent BOOLEAN DEFAULT FALSE,
+                cancelled BOOLEAN DEFAULT FALSE
+            )
+        ''')
+
         # Logs table for monitoring
         c.execute('''
             CREATE TABLE IF NOT EXISTS logs (
@@ -395,6 +412,10 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_summary_enabled BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_summary_time TIME DEFAULT '08:00'",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_summary_last_sent DATE",
+            # Track if user has been prompted for daily summary after first action
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_summary_prompted BOOLEAN DEFAULT FALSE",
+            # Store pending time when confirming evening daily summary preference
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_daily_summary_time TEXT",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
@@ -416,6 +437,8 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_reminders_recurring_id ON reminders(recurring_id) WHERE recurring_id IS NOT NULL",
             # Daily summary: index for efficient querying of users who need summary
             "CREATE INDEX IF NOT EXISTS idx_users_daily_summary ON users(daily_summary_enabled) WHERE daily_summary_enabled = TRUE",
+            # Onboarding recovery: index for finding abandoned signups
+            "CREATE INDEX IF NOT EXISTS idx_onboarding_progress_abandoned ON onboarding_progress(followup_24h_sent, last_activity_at) WHERE cancelled = FALSE",
         ]
 
         for migration in migrations:

@@ -51,9 +51,12 @@ def get_onboarding_prompt(step):
     prompts = {
         1: "What's your first name?",
         2: "What's your last name?",
-        3: "What's your email address?",
-        4: "What's your ZIP code?",
-        5: "Would you like a daily summary of your reminders each morning?\n\nReply YES for 8am, a time like 7AM, or NO to skip."
+        3: """Email for account recovery?
+
+(We only use this for important updates - no spam!)""",
+        4: """ZIP code?
+
+(This helps me send reminders at the right time in your timezone)"""
     }
     return prompts.get(step, "Let's continue your setup!")
 
@@ -100,7 +103,7 @@ def format_reminders_list(reminders, user_tz):
                 completed.append((display_text, date_str))
             else:
                 scheduled.append((display_text, date_str))
-        except:
+        except (ValueError, TypeError, AttributeError):
             display_text = f"[R] {reminder_text}" if recurring_id else reminder_text
             if sent:
                 completed.append((display_text, ""))

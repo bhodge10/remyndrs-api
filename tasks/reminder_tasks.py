@@ -472,7 +472,7 @@ def send_daily_summaries(self):
     """
     import pytz
     from datetime import datetime
-    from models.user import get_users_due_for_daily_summary, mark_daily_summary_sent
+    from models.user import get_users_due_for_daily_summary, claim_user_for_daily_summary
     from models.reminder import get_reminders_for_date
 
     try:
@@ -485,7 +485,7 @@ def send_daily_summaries(self):
             logger.debug("No users due for daily summary")
             return {"sent": 0}
 
-        logger.info(f"Sending daily summaries to {len(due_users)} users")
+        logger.info(f"Checking daily summaries for {len(due_users)} candidates")
 
         sent_count = 0
         for user in due_users:
@@ -499,6 +499,11 @@ def send_daily_summaries(self):
                 user_now = utc_now.astimezone(user_tz)
                 user_today = user_now.date()
 
+                # Atomically claim this user to prevent duplicates from concurrent workers
+                if not claim_user_for_daily_summary(phone_number, user_today):
+                    # Already claimed by another worker or already sent today
+                    continue
+
                 # Get today's reminders
                 reminders = get_reminders_for_date(phone_number, user_today, timezone_str)
 
@@ -506,8 +511,6 @@ def send_daily_summaries(self):
                 message = format_daily_summary(reminders, first_name, user_today, user_tz)
                 send_sms(phone_number, message)
 
-                # Mark as sent
-                mark_daily_summary_sent(phone_number)
                 sent_count += 1
 
                 logger.info(f"Sent daily summary to {phone_number[-4:]} ({len(reminders)} reminders)")
@@ -568,7 +571,7 @@ def format_daily_summary(reminders, first_name, date, user_tz):
 
             local_dt = utc_dt.astimezone(user_tz)
             time_str = local_dt.strftime('%I:%M %p').lstrip('0')
-        except:
+        except (ValueError, TypeError, AttributeError):
             time_str = "TBD"
 
         lines.append(f"{i}. {time_str} - {text}")
@@ -577,3 +580,59 @@ def format_daily_summary(reminders, first_name, date, user_tz):
     lines.append("(You'll still receive each reminder at its scheduled time)")
 
     return "\n".join(lines)
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def send_abandoned_onboarding_followups(self):
+    """
+    Periodic task to send follow-up messages to abandoned onboardings.
+    Runs every hour via Celery Beat.
+    """
+    from services.onboarding_recovery_service import (
+        get_abandoned_onboardings_24h,
+        get_abandoned_onboardings_7d,
+        mark_followup_sent,
+        build_24h_followup_message,
+        build_7d_followup_message,
+    )
+
+    try:
+        sent_count = 0
+
+        # 24-hour follow-ups
+        abandoned_24h = get_abandoned_onboardings_24h()
+        for user in abandoned_24h:
+            try:
+                message = build_24h_followup_message(
+                    user['first_name'],
+                    user['current_step']
+                )
+                send_sms(user['phone_number'], message)
+                mark_followup_sent(user['phone_number'], '24h')
+                sent_count += 1
+                logger.info(f"Sent 24h onboarding followup to ...{user['phone_number'][-4:]}")
+            except Exception as e:
+                logger.error(f"Error sending 24h followup: {e}")
+
+        # 7-day follow-ups (final attempt)
+        abandoned_7d = get_abandoned_onboardings_7d()
+        for user in abandoned_7d:
+            try:
+                message = build_7d_followup_message(user['first_name'])
+                send_sms(user['phone_number'], message)
+                mark_followup_sent(user['phone_number'], '7d')
+                sent_count += 1
+                logger.info(f"Sent 7d onboarding followup to ...{user['phone_number'][-4:]}")
+            except Exception as e:
+                logger.error(f"Error sending 7d followup: {e}")
+
+        logger.info(f"Abandoned onboarding followups complete: {sent_count} sent")
+        return {"followups_sent": sent_count}
+
+    except Exception as exc:
+        logger.exception("Error in abandoned onboarding followups")
+        raise self.retry(exc=exc)

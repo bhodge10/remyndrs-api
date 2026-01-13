@@ -37,7 +37,7 @@ def process_with_ai(message, phone_number, context):
                         date_obj = datetime.strptime(str(created_date), '%Y-%m-%d %H:%M:%S')
                     readable_date = date_obj.strftime('%B %d, %Y')
                     formatted_memories.append(f"- {memory_text} (recorded on {readable_date})")
-                except:
+                except (ValueError, TypeError, AttributeError):
                     formatted_memories.append(f"- {memory_text}")
             memory_context = "\n".join(formatted_memories)
         else:
@@ -86,7 +86,7 @@ def process_with_ai(message, phone_number, context):
                     else:
                         scheduled_num += 1
                         scheduled.append(f"{scheduled_num}. {display_text}\n   {date_str}")
-                except:
+                except (ValueError, TypeError, AttributeError):
                     display_text = f"[R] {reminder_text}" if recurring_id else reminder_text
                     if sent:
                         completed_num += 1
@@ -396,54 +396,83 @@ For ADDING TO A SPECIFIC LIST:
 {{
     "action": "add_to_list",
     "list_name": "the name of the list",
-    "item_text": "ALL items exactly as the user said them (e.g., 'milk, eggs, bread' or 'chips and salsa, mac and cheese')",
-    "confirmation": "Added [item] to your [list name]"
+    "item_text": "VERBATIM copy of ALL items - do NOT parse or split, just copy exactly as user said",
+    "confirmation": "Added [items] to your [list name]"
 }}
 Note: ALWAYS use add_to_list when the user specifies a list name, even if that list doesn't exist yet. The system will auto-create it.
-IMPORTANT: Keep ALL items in item_text exactly as the user said them. Do NOT extract just one item. If user says "add milk, eggs, bread", item_text should be "milk, eggs, bread".
+
+CRITICAL MULTI-ITEM RULE - READ CAREFULLY:
+- The item_text field MUST contain the EXACT text of ALL items the user mentioned
+- Do NOT split items, do NOT parse, do NOT extract just the first one
+- The server will handle parsing - your job is to pass through ALL items verbatim
+
+CORRECT EXAMPLES - Follow these exactly:
+- User: "add milk, eggs, bread to grocery list" → item_text: "milk, eggs, bread" (NOT just "milk")
+- User: "add chips and salsa to shopping list" → item_text: "chips and salsa"
+- User: "add apples, oranges, bananas" → item_text: "apples, oranges, bananas" (NOT just "apples")
+- User: "put toilet paper, paper towels, soap on my list" → item_text: "toilet paper, paper towels, soap"
+
+WRONG - NEVER DO THIS:
+- User says "add milk, eggs, bread" → item_text: "milk" (WRONG - missing eggs and bread!)
+- User says "add apples and oranges" → item_text: "apples" (WRONG - missing oranges!)
 
 For ADDING ITEM BUT NO LIST SPECIFIED (user has lists but didn't say which):
 {{
     "action": "add_item_ask_list",
-    "item_text": "ALL items exactly as the user said them",
+    "item_text": "VERBATIM copy of ALL items - same rules as add_to_list above",
     "response": "Which list would you like to add these to?"
 }}
 Note: Only use add_item_ask_list if user has multiple lists and didn't specify which one. If user specifies a list name like "grocery list", use add_to_list instead.
-IMPORTANT: Keep ALL items in item_text exactly as the user said them. Do NOT extract just one item.
 
-For SHOWING A SPECIFIC LIST (user specifies which list):
+For SHOWING A SPECIFIC NAMED LIST (user says a list name like "grocery list", "shopping list"):
 {{
     "action": "show_list",
-    "list_name": "the name of the list",
+    "list_name": "the full list name (e.g., 'grocery list', 'shopping list')",
     "response": "Format the list contents from USER'S LISTS above"
 }}
+CRITICAL: Use show_list when user mentions a SPECIFIC list name (singular with a type), even if it contains keywords like "grocery", "shopping".
+Examples of show_list:
+- "show grocery list" → {{"action": "show_list", "list_name": "grocery list"}}
+- "show my shopping list" → {{"action": "show_list", "list_name": "shopping list"}}
+- "show the todo list" → {{"action": "show_list", "list_name": "todo list"}}
+- "what's on my grocery list" → {{"action": "show_list", "list_name": "grocery list"}}
 
-For SHOWING THE CURRENT/LAST ACTIVE LIST:
+For SHOWING THE CURRENT/LAST ACTIVE LIST (no specific list name given):
 {{
     "action": "show_current_list",
     "response": "Showing your current list"
 }}
-IMPORTANT: Use show_current_list when user says "show list" (SINGULAR), "show my list", "what's on my list", "view list", or just "list". This shows their last active list.
+Use show_current_list ONLY for generic phrases without a list name:
+- "show list" → show_current_list
+- "show my list" → show_current_list
+- "what's on my list" → show_current_list
+- "view list" → show_current_list
 
-For SHOWING ALL LISTS:
+For SHOWING ALL LISTS (plural "lists" without a type):
 {{
     "action": "show_all_lists",
     "response": "Showing your lists"
 }}
+Examples:
+- "show lists" → show_all_lists
+- "show my lists" → show_all_lists
+- "what lists do I have" → show_all_lists
 
-For SHOWING FILTERED LISTS (when user specifies a type like "grocery lists", "shopping lists"):
+For SHOWING FILTERED LISTS (PLURAL "lists" with a type keyword):
 {{
     "action": "show_all_lists",
-    "list_filter": "the keyword to filter by (e.g., 'grocery', 'shopping', 'todo')",
+    "list_filter": "the keyword to filter by",
     "response": "Showing your [type] lists"
 }}
-CRITICAL: When user says "show grocery lists" or "show my shopping lists", you MUST include the list_filter field!
-Examples:
-- "show lists" → {{"action": "show_all_lists"}}
-- "show grocery lists" → {{"action": "show_all_lists", "list_filter": "grocery"}}
-- "show my shopping lists" → {{"action": "show_all_lists", "list_filter": "shopping"}}
+CRITICAL: ONLY use list_filter when user says PLURAL "lists" with a filter:
+- "show grocery lists" (PLURAL) → {{"action": "show_all_lists", "list_filter": "grocery"}}
+- "show my shopping lists" (PLURAL) → {{"action": "show_all_lists", "list_filter": "shopping"}}
 
-CRITICAL: "show list" = show_current_list, "show lists" = show_all_lists, "show grocery lists" = show_all_lists with list_filter="grocery"
+DISAMBIGUATION RULES - SINGULAR vs PLURAL:
+1. "[type] list" (SINGULAR) = show_list with list_name="[type] list"
+2. "[type] lists" (PLURAL) = show_all_lists with list_filter="[type]"
+3. "list" (no type) = show_current_list
+4. "lists" (no type) = show_all_lists
 
 For CHECKING OFF AN ITEM:
 {{
