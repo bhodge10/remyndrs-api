@@ -2245,11 +2245,17 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     phone_number, reminder_text, reminder_date_utc,
                     local_time_str, user_tz_str
                 )
+
+                # Generate confirmation server-side to ensure accurate day-of-week
+                # (AI sometimes miscalculates day names for dates)
+                time_str = naive_dt.strftime('%I:%M %p').lstrip('0')
+                date_str = naive_dt.strftime('%A, %B %d, %Y')
+                reply_text = f"Got it! I'll remind you on {date_str} at {time_str} to {reminder_text}."
+
             except Exception as e:
                 logger.error(f"Error converting reminder time to UTC: {e}")
                 save_reminder(phone_number, reminder_text, reminder_date)
-
-            reply_text = ai_response.get("confirmation", "Got it! I'll remind you.")
+                reply_text = ai_response.get("confirmation", "Got it! I'll remind you.")
 
             # Check if this is user's first action and prompt for daily summary
             if should_prompt_daily_summary(phone_number):
