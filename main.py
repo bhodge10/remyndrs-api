@@ -709,12 +709,77 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 resp.message(staging_prefix("Sorry, I had trouble setting that reminder. Please try again with a time like '8am' or '3:30pm'."))
                 return Response(content=str(resp), media_type="application/xml")
 
+        # ==========================================
+        # VAGUE TIME FOLLOW-UP (clarify_specific_time flow)
+        # ==========================================
+        # Check if pending_reminder_time is "NEEDS_TIME" (from vague time like "in a bit")
+        if user and len(user) > 11 and user[10] and user[11] == "NEEDS_TIME" and not is_new_reminder_request:
+            pending_text = user[10]
+
+            # Check for simple time like "3p", "3pm", "at 3pm", "8am"
+            simple_time_match = re.match(r'^(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m?\.?)$', incoming_msg.strip(), re.IGNORECASE)
+            if simple_time_match:
+                hour = int(simple_time_match.group(1))
+                minute = int(simple_time_match.group(2)) if simple_time_match.group(2) else 0
+                am_pm_raw = simple_time_match.group(3).lower()
+                am_pm = "AM" if 'a' in am_pm_raw else "PM"
+
+                try:
+                    user_time = get_user_current_time(phone_number)
+
+                    # Convert to 24-hour format
+                    if am_pm == "PM" and hour != 12:
+                        hour += 12
+                    elif am_pm == "AM" and hour == 12:
+                        hour = 0
+
+                    # Create reminder datetime in user's timezone
+                    reminder_datetime = user_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+                    # If time has already passed today, schedule for tomorrow
+                    if reminder_datetime <= user_time:
+                        reminder_datetime = reminder_datetime + timedelta(days=1)
+
+                    # Convert to UTC for storage
+                    reminder_datetime_utc = reminder_datetime.astimezone(pytz.UTC)
+                    reminder_date_str = reminder_datetime_utc.strftime('%Y-%m-%d %H:%M:%S')
+
+                    # Save the reminder
+                    save_reminder(phone_number, pending_text, reminder_date_str)
+
+                    # Format confirmation
+                    readable_date = reminder_datetime.strftime('%A, %B %d at %I:%M %p')
+                    reply_text = f"I'll remind you on {readable_date} {format_reminder_confirmation(pending_text)}."
+
+                    # Clear pending reminder
+                    create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None)
+
+                    # Check if this is user's first action and prompt for daily summary
+                    if should_prompt_daily_summary(phone_number):
+                        reply_text = get_daily_summary_prompt_message(reply_text)
+                        mark_daily_summary_prompted(phone_number)
+
+                    log_interaction(phone_number, incoming_msg, reply_text, "vague_time_confirmed", True)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(reply_text))
+                    return Response(content=str(resp), media_type="application/xml")
+
+                except Exception as e:
+                    logger.error(f"Error processing vague time follow-up: {e}")
+                    # Fall through to AI processing
+
+            # Complex time like "in 30 minutes" or "tomorrow at 9am"
+            # Reconstruct the request and let AI process it
+            incoming_msg = f"remind me to {pending_text} {incoming_msg}"
+            create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None)
+            # Fall through to AI processing with reconstructed message
+
         # clarify_time flow - only if pending_reminder_time is set (not pending_reminder_date)
         # Check for AM/PM with number (8am) OR standalone AM/PM response
         is_standalone_am_pm = bool(re.match(r'^(am|pm|a\.m\.|p\.m\.)\.?$', incoming_msg.strip(), re.IGNORECASE))
 
         # Note: is_new_reminder_request was already defined and pending states were cleared above
-        if user and len(user) > 11 and user[10] and user[11] and (has_am_pm or is_standalone_am_pm) and not is_new_reminder_request:  # pending_reminder_text AND pending_reminder_time exist, but NOT a new reminder request
+        if user and len(user) > 11 and user[10] and user[11] and user[11] != "NEEDS_TIME" and (has_am_pm or is_standalone_am_pm) and not is_new_reminder_request:  # pending_reminder_text AND pending_reminder_time exist, but NOT a new reminder request
             pending_text = user[10]
             pending_time = user[11]
 
@@ -2409,6 +2474,19 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
             reply_text = ai_response.get("response", "What time would you like the reminder?")
             log_interaction(phone_number, incoming_msg, reply_text, "clarify_date_time", True)
+
+        elif ai_response["action"] == "clarify_specific_time":
+            # User gave a vague time like "in a bit" - ask for specific time
+            reminder_text = ai_response.get("reminder_text")
+
+            create_or_update_user(
+                phone_number,
+                pending_reminder_text=reminder_text,
+                pending_reminder_time="NEEDS_TIME"  # Special marker
+            )
+
+            reply_text = ai_response.get("response", "What time would you like the reminder?")
+            log_interaction(phone_number, incoming_msg, reply_text, "clarify_specific_time", True)
 
         elif ai_response["action"] == "reminder":
             reminder_date = ai_response.get("reminder_date")

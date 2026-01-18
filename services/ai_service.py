@@ -407,6 +407,19 @@ DO NOT USE clarify_date_time when time IS specified:
 - "Remind me next Tuesday at 2pm about meeting" → Use action "reminder" (2pm IS specified!)
 CRITICAL: If the message contains "at [time]am" or "at [time]pm" ANYWHERE, extract that time and use action "reminder" - do NOT ask for time again!
 
+For VAGUE TIME (when time expression is unclear like "in a bit", "later", "soon"):
+{{
+    "action": "clarify_specific_time",
+    "reminder_text": "what to remind them about",
+    "response": "I'd be happy to set that reminder! What time works? (e.g., 'in 30 minutes', 'at 3pm', 'tomorrow at 9am')"
+}}
+WHEN TO USE clarify_specific_time:
+- "Remind me in a bit to check email" → vague time "in a bit"
+- "Remind me later to call mom" → vague time "later"
+- "Remind me soon about the meeting" → vague time "soon"
+- "Set a reminder for sometime" → vague time "sometime"
+DO NOT use this for relative times that ARE specific like "in 30 minutes" - those should use reminder_relative
+
 For UNCLEAR requests or GREETINGS:
 {{
     "action": "help",
