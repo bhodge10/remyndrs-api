@@ -834,10 +834,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     log_interaction(phone_number, incoming_msg, reply_msg, f"delete_{delete_type}_confirmed", True)
                     return Response(content=str(resp), media_type="application/xml")
                 else:
-                    # Not YES or CANCEL - remind user of options
-                    resp = MessagingResponse()
-                    resp.message("Reply YES to confirm delete, or CANCEL to keep it.")
-                    return Response(content=str(resp), media_type="application/xml")
+                    # Not YES or CANCEL - clear pending state and let message be processed normally
+                    # This allows users to start a new request without explicitly cancelling
+                    create_or_update_user(phone_number, pending_reminder_delete=None)
+                    # Fall through to normal message processing
 
             # Handle number selection
             if incoming_msg.strip().isdigit():
