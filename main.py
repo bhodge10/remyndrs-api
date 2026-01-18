@@ -461,8 +461,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # DAILY SUMMARY RESPONSE (after first action)
         # ==========================================
         # Check if user is responding to daily summary prompt
-        # Skip this if it's a new reminder request or undo command to avoid false positives
-        if not is_new_reminder_request and not is_undo_command:
+        # Skip this if it's a new reminder request, undo command, or has pending confirmations
+        pending_delete_check = get_pending_reminder_delete(phone_number)
+        pending_confirm_check = get_pending_reminder_confirmation(phone_number)
+        has_pending_state = pending_delete_check or pending_confirm_check
+
+        if not is_new_reminder_request and not is_undo_command and not has_pending_state:
             handled, response_text = handle_daily_summary_response(phone_number, incoming_msg)
             if handled and response_text:
                 log_interaction(phone_number, incoming_msg, response_text, "daily_summary_setup", True)
