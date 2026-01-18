@@ -607,8 +607,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             recent_reminder = get_most_recent_reminder(phone_number)
             if recent_reminder:
                 reminder_id, reminder_text, reminder_date = recent_reminder
-                # Store for confirmation
-                confirm_data = json.dumps({'type': 'delete_recent', 'reminder_id': reminder_id, 'reminder_text': reminder_text})
+                # Store for confirmation (using same format as other delete confirmations)
+                confirm_data = json.dumps({
+                    'awaiting_confirmation': True,
+                    'type': 'reminder',
+                    'id': reminder_id,
+                    'text': reminder_text
+                })
                 create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
                 resp = MessagingResponse()
                 resp.message(staging_prefix(f"Delete your most recent reminder: \"{reminder_text}\"?\n\nReply YES to delete or NO to keep it."))
