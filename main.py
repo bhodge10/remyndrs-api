@@ -595,8 +595,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # Also skip if there's a pending_reminder_delete (delete confirmation) - let that handler deal with cancel
         pending_reminder_del = get_pending_reminder_delete(phone_number)
         has_pending_delete_confirm = pending_reminder_del is not None
+        # Also skip if there's a pending_reminder_time (clarify_time flow) - let that handler deal with cancel
+        has_pending_time_clarify = user_for_undo and len(user_for_undo) > 11 and user_for_undo[11] and user_for_undo[11] != "NEEDS_TIME"
 
-        if is_undo_command and not has_pending_add and not has_pending_delete_confirm:
+        if is_undo_command and not has_pending_add and not has_pending_delete_confirm and not has_pending_time_clarify:
             # First check if there's a pending confirmation to cancel
             if pending_confirmation:
                 create_or_update_user(phone_number, pending_reminder_confirmation=None)
@@ -764,7 +766,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     # Fall through to AI processing
 
             # Check for cancel commands
-            cancel_phrases = ['cancel', 'nevermind', 'never mind', 'skip', 'forget it', 'no thanks']
+            cancel_phrases = ['cancel', 'nevermind', 'never mind', 'skip', 'forget it', 'no thanks', 'undo']
             if incoming_msg.strip().lower() in cancel_phrases:
                 create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None)
                 resp = MessagingResponse()
