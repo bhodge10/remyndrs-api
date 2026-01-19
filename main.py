@@ -1199,6 +1199,57 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # DELETE REMINDERS (show list to pick from)
+        # ==========================================
+        # Handle "Delete reminders", "Cancel reminders", etc. - shows numbered list
+        if msg_upper in ["DELETE REMINDERS", "DELETE MY REMINDERS", "CANCEL REMINDERS", "CANCEL MY REMINDERS", "REMOVE REMINDERS", "REMOVE MY REMINDERS"]:
+            reminders = get_user_reminders(phone_number)
+            pending = [r for r in reminders if not r[4]]  # r[4] is 'sent' flag
+
+            if not pending:
+                resp = MessagingResponse()
+                resp.message(staging_prefix("You don't have any pending reminders to delete."))
+                log_interaction(phone_number, incoming_msg, "No reminders to delete", "delete_reminders_list", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            # Build numbered list and store options for selection
+            user_tz = get_user_timezone(phone_number)
+            tz = pytz.timezone(user_tz)
+            lines = ["Which reminder would you like to delete?\n"]
+            delete_options = []
+
+            for i, reminder in enumerate(pending, 1):
+                reminder_id, reminder_date, reminder_text, recurring_id, sent = reminder
+                # Convert UTC to user timezone for display
+                if isinstance(reminder_date, str):
+                    utc_dt = datetime.strptime(reminder_date, '%Y-%m-%d %H:%M:%S')
+                else:
+                    utc_dt = reminder_date
+                utc_dt = pytz.UTC.localize(utc_dt)
+                local_dt = utc_dt.astimezone(tz)
+                formatted_date = local_dt.strftime('%b %d at %I:%M %p')
+
+                prefix = "[R] " if recurring_id else ""
+                lines.append(f"{i}. {prefix}{reminder_text}\n   {formatted_date}")
+                delete_options.append({
+                    'type': 'reminder',
+                    'id': reminder_id,
+                    'text': reminder_text,
+                    'recurring_id': recurring_id
+                })
+
+            lines.append("\nReply with a number to delete, or CANCEL")
+            reply_msg = "\n".join(lines)
+
+            # Store options for number selection
+            create_or_update_user(phone_number, pending_reminder_delete=json.dumps(delete_options))
+
+            resp = MessagingResponse()
+            resp.message(staging_prefix(reply_msg))
+            log_interaction(phone_number, incoming_msg, "Showing delete reminders list", "delete_reminders_list", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # DELETE REMINDER BY NUMBER
         # ==========================================
         # Handle "Delete reminder 1", "Cancel reminder 2", etc.
