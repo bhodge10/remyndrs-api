@@ -5,46 +5,16 @@ Helper functions for formatting text and data
 
 def get_help_text():
     """Return help guide for users"""
-    return """REMYNDRS HELP GUIDE
+    return """REMYNDRS HELP
 
-MEMORIES
-Store: "My car is a 2018 Honda, VIN ABC123"
-Recall: "What's my VIN?"
-Delete: "Forget my car info"
+Reminders, lists & memories - just text naturally!
 
-REMINDERS
-Set: "Remind me at 3pm to call mom"
-Relative: "Remind me in 30 minutes to check oven"
-View: "Show my reminders"
-Delete: "Delete reminder about mom"
-Snooze: Reply SNOOZE when you get a reminder (adds 15 min), or "SNOOZE 1h" for 1 hour
+Examples:
+• "Remind me at 3pm to call mom"
+• "Add milk to my grocery list"
+• "Remember my WiFi is ABC123"
 
-DAILY SUMMARY
-Enable: SUMMARY ON
-Set time: SUMMARY TIME 7AM
-Disable: SUMMARY OFF
-Status: MY SUMMARY
-
-LISTS
-Create: "Create a grocery list"
-Add: "Add milk, eggs, bread to grocery list"
-View: "Show my grocery list" or "MY LISTS"
-Check off: "Check off milk"
-Remove: "Remove eggs from list"
-
-QUICK COMMANDS
-? - This help guide
-MY LISTS - View all lists
-LIST ALL - View all memories
-SNOOZE - Snooze last reminder
-SUMMARY ON/OFF - Daily summary
-STOP - Pauses texts from Remyndrs (your account and data stay active, text START to resume)
-FEEDBACK: [message] - Send us feedback
-
-TIPS
-- Always include AM or PM for times
-- I understand natural language - just talk!
-- Reply SNOOZE within 30 min of a reminder"""
+Full guide: remyndrs.com/commands"""
 
 def get_onboarding_prompt(step):
     """Get the appropriate prompt for the current onboarding step"""
