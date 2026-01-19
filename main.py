@@ -344,7 +344,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
-        # START/RESUBSCRIBE COMMAND (Twilio compliance)
+        # START/RESUBSCRIBE COMMAND (Twilio sends basic subscription message)
         # ==========================================
         # Note: "YES" is also used for confirmations, so check if user has pending action first
         if incoming_msg.upper() in ["START", "YES", "UNSTOP"]:
@@ -367,28 +367,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     logger.info(f"New user or incomplete onboarding - routing to onboarding flow")
                     # Fall through to onboarding check below
                     pass
-                elif is_opted_out:
-                    # Returning user who was opted out - welcome back with resubscribe
-                    create_or_update_user(phone_number, opted_out=False, opted_out_at=None)
-                    first_name = get_user_first_name(phone_number)
-                    if first_name:
-                        msg = f"Welcome back, {first_name}! You've been resubscribed to Remyndrs. Your reminders, lists, and memories are right where you left them. Just text me anytime to pick up where you left off."
-                    else:
-                        msg = "Welcome back! You've been resubscribed to Remyndrs. Your reminders, lists, and memories are right where you left them. Just text me anytime to pick up where you left off."
-                    resp = MessagingResponse()
-                    resp.message(msg)
-                    log_interaction(phone_number, incoming_msg, "User resubscribed", "start", True)
-                    return Response(content=str(resp), media_type="application/xml")
                 else:
-                    # Existing onboarded user just saying START - give them a friendly prompt
-                    first_name = get_user_first_name(phone_number)
-                    if first_name:
-                        msg = f"Hi {first_name}! What would you like help with today - a reminder, memory, or list?"
-                    else:
-                        msg = "Hi! What would you like help with today - a reminder, memory, or list?"
+                    # Existing onboarded user - clear opted_out if set and welcome back
+                    if is_opted_out:
+                        create_or_update_user(phone_number, opted_out=False, opted_out_at=None)
+
+                    # Twilio sends basic subscription message, we send the follow-up
                     resp = MessagingResponse()
-                    resp.message(msg)
-                    log_interaction(phone_number, incoming_msg, "User greeted", "start", True)
+                    resp.message("Your reminders, lists, and memories are right where you left them. Just text me anytime to pick up where you left off.")
+                    log_interaction(phone_number, incoming_msg, "User resubscribed" if is_opted_out else "User greeted", "start", True)
                     return Response(content=str(resp), media_type="application/xml")
             # If has pending action or YES without opt-out, fall through to handle confirmation
 
