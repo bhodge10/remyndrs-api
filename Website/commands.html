@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commands - Remyndrs</title>
+    <meta name="description" content="Complete guide to using Remyndrs. Learn all the commands and see examples of what you can do.">
+    <link rel="icon" type="image/svg+xml" href="remyndrs-logo.svg">
+    <link rel="alternate icon" type="image/png" href="remyndrs-logo.png">
+    
+    <style>
+        :root {
+            --primary-blue: #4A90A4;
+            --success-green: #50B688;
+            --text-dark: #3D4F5C;
+            --bg-light: #f8f9fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            color: var(--text-dark);
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Header */
+        header {
+            background: white;
+            padding: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--primary-blue);
+            text-decoration: none;
+        }
+        
+        .logo img {
+            height: 45px;
+            width: auto;
+            display: block;
+        }
+        
+        nav a {
+            margin-left: 30px;
+            text-decoration: none;
+            color: var(--text-dark);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        nav a:hover {
+            color: var(--primary-blue);
+        }
+        
+        /* Hero */
+        .page-hero {
+            background: linear-gradient(135deg, var(--primary-blue) 0%, #6BA8BC 100%);
+            color: white;
+            padding: 60px 0;
+            text-align: center;
+        }
+        
+        .page-hero h1 {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        
+        .page-hero p {
+            font-size: 20px;
+            opacity: 0.95;
+        }
+        
+        /* Content Section */
+        .content-section {
+            padding: 60px 0;
+        }
+        
+        .intro-text {
+            font-size: 18px;
+            color: #666;
+            margin-bottom: 50px;
+            text-align: center;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        /* Command Category */
+        .command-category {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .command-category h2 {
+            font-size: 32px;
+            color: var(--primary-blue);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .command-category .subtitle {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .command-example {
+            background: var(--bg-light);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid var(--success-green);
+        }
+        
+        .command-example h3 {
+            font-size: 18px;
+            color: var(--text-dark);
+            margin-bottom: 10px;
+        }
+        
+        .command-text {
+            font-family: 'Courier New', monospace;
+            background: white;
+            padding: 12px 15px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            color: var(--primary-blue);
+            font-weight: 600;
+        }
+        
+        .command-note {
+            font-size: 14px;
+            color: #666;
+            font-style: italic;
+        }
+        
+        /* Special Commands */
+        .special-commands {
+            background: #FFF3CD;
+            border-left: 4px solid #FFA500;
+            padding: 25px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+        
+        .special-commands h3 {
+            color: #856404;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+        
+        .special-commands ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .special-commands li {
+            margin-bottom: 10px;
+            padding-left: 25px;
+            position: relative;
+        }
+        
+        .special-commands li:before {
+            content: "⚠️";
+            position: absolute;
+            left: 0;
+        }
+        
+        /* CTA Section */
+        .cta-section {
+            background: linear-gradient(135deg, var(--success-green) 0%, #6BCFA0 100%);
+            color: white;
+            padding: 60px 0;
+            text-align: center;
+            margin-top: 60px;
+        }
+        
+        .cta-section h2 {
+            font-size: 36px;
+            margin-bottom: 15px;
+        }
+        
+        .cta-section p {
+            font-size: 18px;
+            margin-bottom: 30px;
+            opacity: 0.95;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: white;
+            color: var(--success-green);
+            padding: 16px 40px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 18px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 255, 255, 0.3);
+        }
+        
+        /* Footer */
+        footer {
+            background: var(--text-dark);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+            margin-top: 0;
+        }
+        
+        footer p {
+            opacity: 0.8;
+        }
+        
+        footer a {
+            color: white;
+            text-decoration: none;
+            opacity: 0.8;
+        }
+        
+        footer a:hover {
+            opacity: 1;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .page-hero h1 {
+                font-size: 36px;
+            }
+            
+            nav {
+                display: none;
+            }
+            
+            .command-category {
+                padding: 25px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="/" class="logo">
+                    <img src="remyndrs-logo.svg" alt="Remyndrs">
+                </a>
+                <nav>
+                    <a href="/">Home</a>
+                    <a href="/#how-it-works">How It Works</a>
+                    <a href="/#use-cases">Use Cases</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Page Hero -->
+    <section class="page-hero">
+        <div class="container">
+            <h1>How to Use Remyndrs</h1>
+            <p>Complete guide to all commands and features</p>
+        </div>
+    </section>
+
+    <!-- Main Content -->
+    <section class="content-section">
+        <div class="container">
+            <p class="intro-text">
+                Remyndrs understands natural language, so just text like you normally would. Here are all the ways you can use it:
+            </p>
+
+            <!-- Setting Reminders -->
+            <div class="command-category">
+                <h2>⏰ Setting Reminders</h2>
+                <p class="subtitle">Get reminded at exactly the right time</p>
+                
+                <div class="command-example">
+                    <h3>Specific Date & Time</h3>
+                    <div class="command-text">"Remind me to call mom tomorrow at 2pm"</div>
+                    <div class="command-text">"Remind me about the dentist appointment on March 15 at 10am"</div>
+                    <p class="command-note">You can use dates, times, or both</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>Relative Time</h3>
+                    <div class="command-text">"Remind me to check the oven in 30 minutes"</div>
+                    <div class="command-text">"Remind me about the meeting in 3 hours"</div>
+                    <p class="command-note">Use minutes, hours, days, weeks, or months</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>Recurring Reminders</h3>
+                    <div class="command-text">"Remind me every Monday to take out the trash"</div>
+                    <div class="command-text">"Remind me daily at 9am to take my medication"</div>
+                    <div class="command-text">"Remind me every 3 months to change the air filter"</div>
+                    <p class="command-note">Set up repeating reminders for regular tasks</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>Snooze Reminders</h3>
+                    <div class="command-text">SNOOZE</div>
+                    <div class="command-text">SNOOZE 1h</div>
+                    <div class="command-text">SNOOZE 30m</div>
+                    <p class="command-note">Reply SNOOZE within 30 minutes of receiving a reminder to snooze it. Default is 15 minutes, or specify a time like "1h" or "30m"</p>
+                </div>
+            </div>
+
+            <!-- Daily Summary -->
+            <div class="command-category">
+                <h2>📊 Daily Summary</h2>
+                <p class="subtitle">Get a daily overview of your reminders and tasks</p>
+
+                <div class="command-example">
+                    <h3>Enable/Disable</h3>
+                    <div class="command-text">SUMMARY ON</div>
+                    <div class="command-text">SUMMARY OFF</div>
+                    <p class="command-note">Turn your daily summary on or off</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>Set Time</h3>
+                    <div class="command-text">SUMMARY TIME 7AM</div>
+                    <div class="command-text">SUMMARY TIME 9:30AM</div>
+                    <p class="command-note">Choose when you want to receive your daily summary</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>Check Status</h3>
+                    <div class="command-text">MY SUMMARY</div>
+                    <p class="command-note">See your current daily summary settings</p>
+                </div>
+            </div>
+
+            <!-- Managing Lists -->
+            <div class="command-category">
+                <h2>📝 Creating & Managing Lists</h2>
+                <p class="subtitle">Keep track of shopping lists, to-dos, and more</p>
+                
+                <div class="command-example">
+                    <h3>Add to List</h3>
+                    <div class="command-text">"Add milk and eggs to my grocery list"</div>
+                    <div class="command-text">"Add toothpaste to my shopping list"</div>
+                    <p class="command-note">Lists are created automatically when you add items</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>View List</h3>
+                    <div class="command-text">"Show me my grocery list"</div>
+                    <div class="command-text">"What's on my shopping list?"</div>
+                    <p class="command-note">See everything on a specific list</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>Check Off Items</h3>
+                    <div class="command-text">"Check off milk"</div>
+                    <div class="command-text">"Mark eggs as done"</div>
+                    <p class="command-note">Mark items as complete without removing them</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>Remove from List</h3>
+                    <div class="command-text">"Remove bread from my grocery list"</div>
+                    <div class="command-text">"Delete eggs from my list"</div>
+                    <p class="command-note">Remove items you no longer need</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>View All Lists</h3>
+                    <div class="command-text">"Show all my lists"</div>
+                    <div class="command-text">"What lists do I have?"</div>
+                    <p class="command-note">See all your active lists at once</p>
+                </div>
+            </div>
+
+            <!-- Saving Information -->
+            <div class="command-category">
+                <h2>💾 Saving Information</h2>
+                <p class="subtitle">Store important details you want to remember</p>
+                
+                <div class="command-example">
+                    <h3>Save Facts & Details</h3>
+                    <div class="command-text">"Remember: my WiFi password is Home2024"</div>
+                    <div class="command-text">"Save my vet's number: 555-0199"</div>
+                    <div class="command-text">"Garage door code is 4829"</div>
+                    <p class="command-note">Save anything you might need later</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>Save Locations</h3>
+                    <div class="command-text">"Remember: I parked on Level 3, Section B"</div>
+                    <div class="command-text">"Save: spare key is under the blue flower pot"</div>
+                    <p class="command-note">Never forget where you put things</p>
+                </div>
+            </div>
+
+            <!-- Retrieving Information -->
+            <div class="command-category">
+                <h2>🔍 Retrieving Information</h2>
+                <p class="subtitle">Ask questions to recall what you saved</p>
+                
+                <div class="command-example">
+                    <h3>Ask Questions</h3>
+                    <div class="command-text">"What's my WiFi password?"</div>
+                    <div class="command-text">"Where did I park?"</div>
+                    <div class="command-text">"What's my vet's number?"</div>
+                    <p class="command-note">Just ask naturally - we'll find what you saved</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>View All Reminders</h3>
+                    <div class="command-text">"Show all my reminders"</div>
+                    <div class="command-text">"What reminders do I have?"</div>
+                    <div class="command-text">"Show me upcoming reminders"</div>
+                    <p class="command-note">See everything you've set up</p>
+                </div>
+            </div>
+
+            <!-- Managing Data -->
+            <div class="command-category">
+                <h2>🗑️ Managing Your Data</h2>
+                <p class="subtitle">Edit and delete your information</p>
+                
+                <div class="command-example">
+                    <h3>Delete Specific Items</h3>
+                    <div class="command-text">"Delete my reminder about the dentist"</div>
+                    <div class="command-text">"Remove the vet's number"</div>
+                    <p class="command-note">Remove individual reminders or saved info</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>View All Data</h3>
+                    <div class="command-text">"Show all"</div>
+                    <div class="command-text">"What do you have saved for me?"</div>
+                    <p class="command-note">See everything we're remembering for you</p>
+                </div>
+            </div>
+
+            <!-- Quick Commands -->
+            <div class="command-category">
+                <h2>⚡ Quick Commands</h2>
+                <p class="subtitle">Shortcuts for common actions</p>
+
+                <div class="command-example">
+                    <h3>Help</h3>
+                    <div class="command-text">?</div>
+                    <p class="command-note">Get a quick help guide with examples</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>View All Lists</h3>
+                    <div class="command-text">MY LISTS</div>
+                    <p class="command-note">See all your lists at a glance</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>View All Memories</h3>
+                    <div class="command-text">LIST ALL</div>
+                    <p class="command-note">See everything you've saved</p>
+                </div>
+
+                <div class="command-example">
+                    <h3>View Reminders</h3>
+                    <div class="command-text">SHOW REMINDERS</div>
+                    <p class="command-note">See all your upcoming reminders</p>
+                </div>
+            </div>
+
+            <!-- Special Commands -->
+            <div class="command-category">
+                <h2>⚙️ Account & Support</h2>
+                <p class="subtitle">Important system commands</p>
+
+                <div class="command-example">
+                    <h3>Send Feedback</h3>
+                    <div class="command-text">FEEDBACK: Love this app!</div>
+                    <div class="command-text">FEEDBACK: Would be great if...</div>
+                    <p class="command-note">Send us feedback, suggestions, or report issues</p>
+                </div>
+
+                <div class="special-commands">
+                    <h3>System Commands</h3>
+                    <ul>
+                        <li><strong>STOP</strong> - Pause text messages from Remyndrs. Your account and data stay active. Text START to resume anytime.</li>
+                        <li><strong>START</strong> - Resume receiving text messages after pausing</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Tips Section -->
+            <div class="command-category">
+                <h2>💡 Pro Tips</h2>
+                <p class="subtitle">Get the most out of Remyndrs</p>
+                
+                <div class="command-example">
+                    <h3>✅ Natural Language Works</h3>
+                    <p class="command-note">Don't worry about exact phrasing. "Remind me tomorrow" and "Set a reminder for tomorrow" both work!</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>✅ Be Specific</h3>
+                    <p class="command-note">The more details you give, the better. "Remind me about doctor" vs "Remind me about Dr. Smith appointment on Tuesday at 3pm"</p>
+                </div>
+                
+                <div class="command-example">
+                    <h3>✅ One Message Per Action</h3>
+                    <p class="command-note">For best results, send separate texts for different tasks. Instead of "Remind me about X and also add Y to my list", send two messages.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>Ready to Try It?</h2>
+            <p>Text us and see how easy it is</p>
+            <a href="sms:8555521950" class="cta-button">Text Us Now: (855) 552-1950</a>
+            <p style="font-size: 12px; color: rgba(255,255,255,0.8); margin-top: 15px; line-height: 1.4;">By texting, you consent to receive SMS messages from Remyndrs. Msg & data rates may apply. Reply STOP to unsubscribe.</p>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 Remyndrs. All rights reserved.</p>
+            <p style="margin-top: 10px;"><a href="/">Home</a> • <a href="/#privacy">Privacy Policy</a></p>
+        </div>
+    </footer>
+</body>
+</html>
