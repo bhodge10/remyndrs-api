@@ -601,11 +601,44 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if is_undo_command and not has_pending_add and not has_pending_delete_confirm and not has_pending_time_clarify:
             # First check if there's a pending confirmation to cancel
             if pending_confirmation:
-                create_or_update_user(phone_number, pending_reminder_confirmation=None)
-                resp = MessagingResponse()
-                resp.message(staging_prefix("Got it, cancelled! Please tell me what you'd like instead."))
-                log_interaction(phone_number, incoming_msg, "Pending confirmation cancelled via undo", "undo", True)
-                return Response(content=str(resp), media_type="application/xml")
+                # Check if this is a summary_undo type (from SUMMARY TIME command)
+                if pending_confirmation.get('type') == 'summary_undo':
+                    # Revert to previous summary settings
+                    previous_enabled = pending_confirmation.get('previous_enabled', False)
+                    previous_time = pending_confirmation.get('previous_time')
+
+                    create_or_update_user(
+                        phone_number,
+                        daily_summary_enabled=previous_enabled,
+                        daily_summary_time=previous_time,
+                        pending_reminder_confirmation=None
+                    )
+
+                    if previous_enabled and previous_time:
+                        # Format previous time for display
+                        h, m = map(int, previous_time.split(':'))
+                        disp_am_pm = 'AM' if h < 12 else 'PM'
+                        disp_h = h if h <= 12 else h - 12
+                        if disp_h == 0:
+                            disp_h = 12
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix(f"Daily summary reverted to {disp_h}:{m:02d} {disp_am_pm}."))
+                    elif previous_enabled:
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix("Daily summary reverted to previous settings."))
+                    else:
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix("Daily summary turned off."))
+
+                    log_interaction(phone_number, incoming_msg, "Summary settings reverted via undo", "undo_summary", True)
+                    return Response(content=str(resp), media_type="application/xml")
+                else:
+                    # Regular pending confirmation - cancel it
+                    create_or_update_user(phone_number, pending_reminder_confirmation=None)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix("Got it, cancelled! Please tell me what you'd like instead."))
+                    log_interaction(phone_number, incoming_msg, "Pending confirmation cancelled via undo", "undo", True)
+                    return Response(content=str(resp), media_type="application/xml")
 
             # No pending confirmation - check if we can offer to undo the last reminder
             from models.reminder import get_most_recent_reminder
@@ -1733,8 +1766,21 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if msg_upper in ["SUMMARY ON", "DAILY SUMMARY ON", "DAILY SUMMARY"]:
             from models.user import get_daily_summary_settings
 
+            # Get current settings for undo capability
+            current_settings = get_daily_summary_settings(phone_number)
+            previous_enabled = current_settings[0] if current_settings else False
+            previous_time = current_settings[1] if current_settings else None
+
+            # Store undo data
+            undo_data = json.dumps({
+                'type': 'summary_undo',
+                'previous_enabled': previous_enabled,
+                'previous_time': previous_time,
+                'action': 'enabled'
+            })
+
             # Enable with default time (8:00 AM)
-            create_or_update_user(phone_number, daily_summary_enabled=True)
+            create_or_update_user(phone_number, daily_summary_enabled=True, pending_reminder_confirmation=undo_data)
 
             settings = get_daily_summary_settings(phone_number)
             time_str = settings['time'] if settings else '08:00'
@@ -1756,7 +1802,22 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
         # Disable daily summary: "SUMMARY OFF", "DAILY SUMMARY OFF"
         if msg_upper in ["SUMMARY OFF", "DAILY SUMMARY OFF"]:
-            create_or_update_user(phone_number, daily_summary_enabled=False)
+            from models.user import get_daily_summary_settings
+
+            # Get current settings for undo capability
+            current_settings = get_daily_summary_settings(phone_number)
+            previous_enabled = current_settings[0] if current_settings else False
+            previous_time = current_settings[1] if current_settings else None
+
+            # Store undo data
+            undo_data = json.dumps({
+                'type': 'summary_undo',
+                'previous_enabled': previous_enabled,
+                'previous_time': previous_time,
+                'action': 'disabled'
+            })
+
+            create_or_update_user(phone_number, daily_summary_enabled=False, pending_reminder_confirmation=undo_data)
 
             resp = MessagingResponse()
             resp.message(staging_prefix("Daily summary disabled. You'll no longer receive daily reminder summaries."))
@@ -1818,11 +1879,26 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             # Format for storage (HH:MM)
             time_str = f"{hour:02d}:{minute:02d}"
 
-            # Enable and set time
+            # Get current summary settings for undo capability
+            from models.user import get_daily_summary_settings
+            current_settings = get_daily_summary_settings(phone_number)
+            previous_enabled = current_settings[0] if current_settings else False
+            previous_time = current_settings[1] if current_settings else None
+
+            # Store previous state for undo (using pending_reminder_confirmation with special type)
+            undo_data = json.dumps({
+                'type': 'summary_undo',
+                'previous_enabled': previous_enabled,
+                'previous_time': previous_time,
+                'new_time': time_str
+            })
+
+            # Enable and set time, storing undo data
             create_or_update_user(
                 phone_number,
                 daily_summary_enabled=True,
-                daily_summary_time=time_str
+                daily_summary_time=time_str,
+                pending_reminder_confirmation=undo_data
             )
 
             # Format for display
