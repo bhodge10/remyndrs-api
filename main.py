@@ -2734,8 +2734,9 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             time_mentioned = ai_response.get("time_mentioned")
 
             # SAFEGUARD: Check if original message already has AM/PM - AI sometimes misses it
+            # Match patterns like: 10am, 10:00am, 10a, 10:00a, 10 am, 10:00 a.m.
             original_time_match = re.search(
-                r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b',
+                r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.|a|p)\b',
                 incoming_msg,
                 re.IGNORECASE
             )
