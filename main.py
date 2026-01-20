@@ -1790,8 +1790,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # Set daily summary time: "SUMMARY TIME 7AM", "SUMMARY ON 10PM", "DAILY SUMMARY TIME 8:30AM"
+        # Also supports shorthand: "SUMMARY TIME 10a", "SUMMARY TIME 3p"
         summary_time_match = re.match(
-            r'^(?:daily\s+)?summary\s+(?:on\s+|time\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)$',
+            r'^(?:daily\s+)?summary\s+(?:on\s+|time\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a|p)$',
             incoming_msg.strip(),
             re.IGNORECASE
         )
@@ -1799,7 +1800,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if summary_time_match:
             hour = int(summary_time_match.group(1))
             minute = int(summary_time_match.group(2)) if summary_time_match.group(2) else 0
-            am_pm = summary_time_match.group(3).upper()
+            am_pm_raw = summary_time_match.group(3).upper()
+            am_pm = 'AM' if am_pm_raw in ['AM', 'A'] else 'PM'
 
             # Convert to 24-hour format
             if am_pm == 'PM' and hour != 12:
