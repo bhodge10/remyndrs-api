@@ -542,7 +542,7 @@ def format_daily_summary(reminders, first_name, date, user_tz):
     from datetime import datetime
 
     # Build greeting
-    greeting = f"Good morning{', ' + first_name if first_name else ''}!"
+    greeting = f"Good day{', ' + first_name if first_name else ''}!"
 
     # Format date
     date_str = date.strftime('%A, %B %d')
