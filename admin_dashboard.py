@@ -1280,16 +1280,17 @@ async def run_interaction_monitor(
 @router.get("/admin/monitoring/issues")
 async def get_monitoring_issues(
     limit: int = 50,
-    validated: bool = False,
+    show_all: bool = False,
     admin: str = Depends(verify_admin)
 ):
-    """Get detected monitoring issues"""
+    """Get detected monitoring issues (open issues by default, or all if show_all=true)"""
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
 
-        if validated:
+        if show_all:
+            # Show everything including false positives and resolved
             c.execute('''
                 SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
                        mi.severity, mi.details, mi.detected_at, mi.validated,
@@ -1301,6 +1302,7 @@ async def get_monitoring_issues(
                 LIMIT %s
             ''', (limit,))
         else:
+            # Show open issues: not false positive, not resolved
             c.execute('''
                 SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
                        mi.severity, mi.details, mi.detected_at, mi.validated,
@@ -1308,7 +1310,7 @@ async def get_monitoring_issues(
                        l.message_in, l.message_out
                 FROM monitoring_issues mi
                 LEFT JOIN logs l ON mi.log_id = l.id
-                WHERE mi.validated = FALSE AND mi.false_positive = FALSE
+                WHERE mi.false_positive = FALSE AND mi.resolution IS NULL
                 ORDER BY
                     CASE mi.severity
                         WHEN 'critical' THEN 0
