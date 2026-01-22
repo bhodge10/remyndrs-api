@@ -1199,6 +1199,568 @@ async def cleanup_stuck_reminders(admin: str = Depends(verify_admin)):
 
 
 # =====================================================
+# MONITORING AGENT API ENDPOINTS
+# =====================================================
+
+@router.get("/admin/monitoring/run")
+async def run_interaction_monitor(
+    hours: int = 24,
+    dry_run: bool = False,
+    admin: str = Depends(verify_admin)
+):
+    """Run the interaction monitor agent"""
+    try:
+        from agents.interaction_monitor import analyze_interactions, generate_report
+        results = analyze_interactions(hours=hours, dry_run=dry_run)
+        return JSONResponse(content={
+            "success": True,
+            "run_id": results.get('run_id'),
+            "logs_analyzed": results['logs_analyzed'],
+            "issues_found": len(results['issues_found']),
+            "summary": results['summary'],
+            "report": generate_report(results) if not dry_run else None
+        })
+    except Exception as e:
+        logger.error(f"Error running interaction monitor: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/monitoring/issues")
+async def get_monitoring_issues(
+    limit: int = 50,
+    validated: bool = False,
+    admin: str = Depends(verify_admin)
+):
+    """Get detected monitoring issues"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if validated:
+            c.execute('''
+                SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
+                       mi.severity, mi.details, mi.detected_at, mi.validated,
+                       mi.resolution, mi.false_positive,
+                       l.message_in, l.message_out
+                FROM monitoring_issues mi
+                LEFT JOIN logs l ON mi.log_id = l.id
+                ORDER BY mi.detected_at DESC
+                LIMIT %s
+            ''', (limit,))
+        else:
+            c.execute('''
+                SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
+                       mi.severity, mi.details, mi.detected_at, mi.validated,
+                       mi.resolution, mi.false_positive,
+                       l.message_in, l.message_out
+                FROM monitoring_issues mi
+                LEFT JOIN logs l ON mi.log_id = l.id
+                WHERE mi.validated = FALSE AND mi.false_positive = FALSE
+                ORDER BY
+                    CASE mi.severity
+                        WHEN 'critical' THEN 0
+                        WHEN 'high' THEN 1
+                        WHEN 'medium' THEN 2
+                        ELSE 3
+                    END,
+                    mi.detected_at DESC
+                LIMIT %s
+            ''', (limit,))
+
+        rows = c.fetchall()
+        issues = []
+        for r in rows:
+            issues.append({
+                "id": r[0],
+                "log_id": r[1],
+                "phone": "..." + r[2][-4:] if r[2] else None,
+                "issue_type": r[3],
+                "severity": r[4],
+                "details": r[5],
+                "detected_at": r[6].isoformat() if r[6] else None,
+                "validated": r[7],
+                "resolution": r[8],
+                "false_positive": r[9],
+                "message_in": r[10],
+                "message_out": r[11]
+            })
+
+        return JSONResponse(content={"issues": issues, "count": len(issues)})
+    except Exception as e:
+        logger.error(f"Error getting monitoring issues: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/admin/monitoring/issues/{issue_id}/validate")
+async def validate_monitoring_issue(
+    issue_id: int,
+    request: Request,
+    admin: str = Depends(verify_admin)
+):
+    """Mark a monitoring issue as validated (true issue or false positive)"""
+    conn = None
+    try:
+        data = await request.json()
+        false_positive = data.get("false_positive", False)
+        resolution = data.get("resolution", "")
+
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            UPDATE monitoring_issues
+            SET validated = TRUE,
+                validated_by = %s,
+                validated_at = NOW(),
+                false_positive = %s,
+                resolution = %s
+            WHERE id = %s
+            RETURNING id
+        ''', (admin, false_positive, resolution, issue_id))
+
+        result = c.fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Issue not found")
+        conn.commit()
+
+        return JSONResponse(content={"success": True, "issue_id": issue_id})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error validating monitoring issue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/admin/monitoring/stats")
+async def get_monitoring_stats(admin: str = Depends(verify_admin)):
+    """Get monitoring statistics"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        stats = {}
+
+        # Total issues
+        c.execute('SELECT COUNT(*) FROM monitoring_issues')
+        stats['total_issues'] = c.fetchone()[0]
+
+        # Pending validation
+        c.execute('SELECT COUNT(*) FROM monitoring_issues WHERE validated = FALSE')
+        stats['pending_validation'] = c.fetchone()[0]
+
+        # By severity
+        c.execute('''
+            SELECT severity, COUNT(*) FROM monitoring_issues
+            WHERE validated = FALSE
+            GROUP BY severity
+        ''')
+        stats['by_severity'] = {row[0]: row[1] for row in c.fetchall()}
+
+        # By type
+        c.execute('''
+            SELECT issue_type, COUNT(*) FROM monitoring_issues
+            WHERE validated = FALSE
+            GROUP BY issue_type ORDER BY COUNT(*) DESC
+        ''')
+        stats['by_type'] = {row[0]: row[1] for row in c.fetchall()}
+
+        # Recent runs
+        c.execute('''
+            SELECT id, started_at, logs_analyzed, issues_found, status
+            FROM monitoring_runs
+            ORDER BY started_at DESC
+            LIMIT 5
+        ''')
+        stats['recent_runs'] = [
+            {
+                "id": r[0],
+                "started_at": r[1].isoformat() if r[1] else None,
+                "logs_analyzed": r[2],
+                "issues_found": r[3],
+                "status": r[4]
+            }
+            for r in c.fetchall()
+        ]
+
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting monitoring stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# AGENT 2: ISSUE VALIDATOR API ENDPOINTS
+# =====================================================
+
+@router.get("/admin/validator/run")
+async def run_issue_validator(
+    batch: int = 50,
+    use_ai: bool = True,
+    dry_run: bool = False,
+    admin: str = Depends(verify_admin)
+):
+    """Run the issue validator agent"""
+    try:
+        from agents.issue_validator import validate_issues, generate_report
+        results = validate_issues(limit=batch, use_ai=use_ai, dry_run=dry_run)
+        return JSONResponse(content={
+            "success": True,
+            "run_id": results.get('run_id'),
+            "issues_processed": results['issues_processed'],
+            "validated_count": len(results['validated']),
+            "false_positive_count": len(results['false_positives']),
+            "patterns_found": results['patterns_found'],
+            "severity_adjustments": results['severity_adjustments']
+        })
+    except Exception as e:
+        logger.error(f"Error running issue validator: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/validator/patterns")
+async def get_issue_patterns(admin: str = Depends(verify_admin)):
+    """Get issue pattern analysis"""
+    try:
+        from agents.issue_validator import analyze_patterns
+        patterns = analyze_patterns()
+        return JSONResponse(content=patterns)
+    except Exception as e:
+        logger.error(f"Error getting issue patterns: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/validator/stats")
+async def get_validator_stats(admin: str = Depends(verify_admin)):
+    """Get validator statistics"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        stats = {}
+
+        # Validation runs
+        c.execute('''
+            SELECT COUNT(*), SUM(issues_processed), SUM(validated_count), SUM(false_positive_count)
+            FROM validation_runs WHERE status = 'completed'
+        ''')
+        row = c.fetchone()
+        stats['total_runs'] = row[0] or 0
+        stats['total_processed'] = row[1] or 0
+        stats['total_validated'] = row[2] or 0
+        stats['total_false_positives'] = row[3] or 0
+
+        # False positive rate
+        if stats['total_processed'] > 0:
+            stats['false_positive_rate'] = round(
+                stats['total_false_positives'] / stats['total_processed'] * 100, 1
+            )
+        else:
+            stats['false_positive_rate'] = 0
+
+        # Active patterns
+        c.execute('''
+            SELECT COUNT(*) FROM issue_patterns WHERE status = 'active'
+        ''')
+        stats['active_patterns'] = c.fetchone()[0]
+
+        # Recent validation runs
+        c.execute('''
+            SELECT id, started_at, issues_processed, validated_count,
+                   false_positive_count, ai_used, status
+            FROM validation_runs
+            ORDER BY started_at DESC
+            LIMIT 5
+        ''')
+        stats['recent_runs'] = [
+            {
+                "id": r[0],
+                "started_at": r[1].isoformat() if r[1] else None,
+                "processed": r[2],
+                "validated": r[3],
+                "false_positives": r[4],
+                "ai_used": r[5],
+                "status": r[6]
+            }
+            for r in c.fetchall()
+        ]
+
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting validator stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# AGENT 3: RESOLUTION TRACKER API ENDPOINTS
+# =====================================================
+
+@router.get("/admin/tracker/health")
+async def get_system_health(days: int = 7, admin: str = Depends(verify_admin)):
+    """Get system health metrics"""
+    try:
+        from agents.resolution_tracker import calculate_health_metrics
+        metrics = calculate_health_metrics(days=days)
+        return JSONResponse(content=metrics)
+    except Exception as e:
+        logger.error(f"Error getting health metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/tracker/open")
+async def get_open_issues_tracker(limit: int = 50, admin: str = Depends(verify_admin)):
+    """Get open issues needing resolution"""
+    try:
+        from agents.resolution_tracker import get_open_issues
+        issues = get_open_issues(limit=limit)
+        # Convert datetime objects
+        for issue in issues:
+            if issue.get('detected_at'):
+                issue['detected_at'] = issue['detected_at'].isoformat()
+            if issue.get('validated_at'):
+                issue['validated_at'] = issue['validated_at'].isoformat()
+        return JSONResponse(content={"issues": issues, "count": len(issues)})
+    except Exception as e:
+        logger.error(f"Error getting open issues: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/tracker/resolve/{issue_id}")
+async def resolve_issue_tracker(
+    issue_id: int,
+    request: Request,
+    admin: str = Depends(verify_admin)
+):
+    """Resolve an issue"""
+    try:
+        from agents.resolution_tracker import resolve_issue, RESOLUTION_TYPES
+
+        data = await request.json()
+        resolution_type = data.get("resolution_type")
+        description = data.get("description", "")
+        commit_ref = data.get("commit_ref", "")
+
+        if resolution_type not in RESOLUTION_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid resolution type. Valid types: {list(RESOLUTION_TYPES.keys())}"
+            )
+
+        success = resolve_issue(
+            issue_id,
+            resolution_type,
+            description=description,
+            commit_ref=commit_ref,
+            resolved_by=admin
+        )
+
+        if success:
+            return JSONResponse(content={"success": True, "issue_id": issue_id})
+        else:
+            raise HTTPException(status_code=500, detail="Failed to resolve issue")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving issue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/tracker/report")
+async def get_weekly_report(admin: str = Depends(verify_admin)):
+    """Get weekly health report"""
+    try:
+        from agents.resolution_tracker import generate_weekly_report
+        report = generate_weekly_report()
+
+        # Convert datetime objects for JSON
+        def convert_dates(obj):
+            if isinstance(obj, dict):
+                return {k: convert_dates(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_dates(i) for i in obj]
+            elif hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            return obj
+
+        return JSONResponse(content=convert_dates(report))
+    except Exception as e:
+        logger.error(f"Error generating report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/tracker/trends")
+async def get_health_trends(days: int = 30, admin: str = Depends(verify_admin)):
+    """Get health score trends over time"""
+    try:
+        from agents.resolution_tracker import get_health_trend
+        trend = get_health_trend(days=days)
+        return JSONResponse(content={"trend": trend, "days": days})
+    except Exception as e:
+        logger.error(f"Error getting trends: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/tracker/snapshot")
+async def save_daily_snapshot(admin: str = Depends(verify_admin)):
+    """Save a daily health snapshot"""
+    try:
+        from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot
+        metrics = calculate_health_metrics(days=1)
+        save_health_snapshot(metrics)
+        return JSONResponse(content={
+            "success": True,
+            "health_score": metrics['health_score'],
+            "message": "Daily snapshot saved"
+        })
+    except Exception as e:
+        logger.error(f"Error saving snapshot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/tracker/resolution-types")
+async def get_resolution_types(admin: str = Depends(verify_admin)):
+    """Get available resolution types"""
+    try:
+        from agents.resolution_tracker import RESOLUTION_TYPES
+        return JSONResponse(content=RESOLUTION_TYPES)
+    except Exception as e:
+        logger.error(f"Error getting resolution types: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================================================
+# ALERT SETTINGS (Teams + Email)
+# =====================================================
+
+@router.get("/admin/alerts/settings")
+async def get_alert_settings(admin: str = Depends(verify_admin)):
+    """Get current alert configuration"""
+    try:
+        from services.alerts_service import (
+            get_teams_webhook_url, get_alert_email_recipients,
+            get_health_threshold, is_alerts_enabled,
+            get_sms_alert_numbers, is_sms_alerts_enabled
+        )
+        from config import SMTP_ENABLED
+
+        # Mask webhook URL for security (show only domain)
+        webhook_url = get_teams_webhook_url()
+        webhook_display = None
+        if webhook_url:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(webhook_url)
+                webhook_display = f"***{parsed.netloc}***"
+            except:
+                webhook_display = "***configured***"
+
+        # Mask phone numbers for security
+        sms_numbers = get_sms_alert_numbers()
+        sms_display = [f"...{n[-4:]}" for n in sms_numbers] if sms_numbers else []
+
+        return JSONResponse(content={
+            "alerts_enabled": is_alerts_enabled(),
+            "teams_configured": bool(webhook_url),
+            "teams_webhook_display": webhook_display,
+            "email_configured": SMTP_ENABLED,
+            "email_recipients": get_alert_email_recipients(),
+            "sms_enabled": is_sms_alerts_enabled(),
+            "sms_recipients": sms_display,
+            "health_threshold": get_health_threshold(),
+        })
+    except Exception as e:
+        logger.error(f"Error getting alert settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/alerts/settings")
+async def update_alert_settings(request: Request, admin: str = Depends(verify_admin)):
+    """Update alert configuration"""
+    try:
+        data = await request.json()
+
+        # Update settings
+        if "alerts_enabled" in data:
+            set_setting("alert_enabled", "true" if data["alerts_enabled"] else "false")
+
+        if "teams_webhook_url" in data:
+            # Only update if provided (don't clear existing)
+            webhook = data["teams_webhook_url"].strip()
+            if webhook:
+                set_setting("alert_teams_webhook_url", webhook)
+
+        if "email_recipients" in data:
+            recipients = data["email_recipients"]
+            if isinstance(recipients, list):
+                recipients = ",".join(recipients)
+            set_setting("alert_email_recipients", recipients.strip())
+
+        if "sms_enabled" in data:
+            set_setting("alert_sms_enabled", "true" if data["sms_enabled"] else "false")
+
+        if "sms_numbers" in data:
+            numbers = data["sms_numbers"]
+            if isinstance(numbers, list):
+                numbers = ",".join(numbers)
+            set_setting("alert_sms_numbers", numbers.strip())
+
+        if "health_threshold" in data:
+            try:
+                threshold = int(data["health_threshold"])
+                if 0 <= threshold <= 100:
+                    set_setting("alert_health_threshold", str(threshold))
+            except ValueError:
+                pass
+
+        logger.info(f"Alert settings updated by {admin}")
+        return JSONResponse(content={"success": True, "message": "Settings updated"})
+
+    except Exception as e:
+        logger.error(f"Error updating alert settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/alerts/test")
+async def send_test_alert(admin: str = Depends(verify_admin)):
+    """Send a test alert to verify configuration"""
+    try:
+        from services.alerts_service import send_test_alert
+        results = send_test_alert()
+        return JSONResponse(content={
+            "success": results["teams"] or results["email"],
+            "results": results
+        })
+    except Exception as e:
+        logger.error(f"Error sending test alert: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/admin/alerts/teams-webhook")
+async def clear_teams_webhook(admin: str = Depends(verify_admin)):
+    """Clear the Teams webhook URL"""
+    try:
+        set_setting("alert_teams_webhook_url", "")
+        logger.info(f"Teams webhook cleared by {admin}")
+        return JSONResponse(content={"success": True, "message": "Teams webhook cleared"})
+    except Exception as e:
+        logger.error(f"Error clearing Teams webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================================================
 # RECURRING REMINDERS MANAGEMENT
 # =====================================================
 
@@ -2759,6 +3321,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     <div class="nav-menu">
         <span class="nav-title">Remyndrs Dashboard</span>
         <button onclick="showRecentMessages()" style="padding: 8px 16px; background: #9b59b6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Recent Messages</button>
+        <a href="/admin/monitoring" style="padding: 8px 16px; background: #27ae60; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Monitoring</a>
         <a href="#overview">Overview</a>
         <a href="#broadcast">Broadcast</a>
         <a href="#support">Support Tickets</a>
