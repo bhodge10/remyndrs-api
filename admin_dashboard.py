@@ -3321,6 +3321,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     <div class="nav-menu">
         <span class="nav-title">Remyndrs Dashboard</span>
         <button onclick="showRecentMessages()" style="padding: 8px 16px; background: #9b59b6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Recent Messages</button>
+        <a href="/admin/monitoring" style="padding: 8px 16px; background: #27ae60; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Monitoring</a>
         <a href="#overview">Overview</a>
         <a href="#broadcast">Broadcast</a>
         <a href="#support">Support Tickets</a>
