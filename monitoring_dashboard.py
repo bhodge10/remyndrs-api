@@ -488,6 +488,127 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
             font-size: 3em;
             margin-bottom: 15px;
         }}
+
+        /* Modal */
+        .modal-overlay {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }}
+
+        .modal-content {{
+            background: #1e272e;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }}
+
+        .modal-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            border-bottom: 1px solid #333;
+        }}
+
+        .modal-header h3 {{
+            margin: 0;
+            color: #fff;
+        }}
+
+        .modal-close {{
+            background: none;
+            border: none;
+            color: #888;
+            font-size: 24px;
+            cursor: pointer;
+        }}
+
+        .modal-close:hover {{
+            color: #fff;
+        }}
+
+        .modal-body {{
+            padding: 20px;
+        }}
+
+        .detail-row {{
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #333;
+        }}
+
+        .detail-label {{
+            color: #888;
+            font-size: 0.9em;
+        }}
+
+        .detail-value {{
+            color: #fff;
+            font-weight: 500;
+        }}
+
+        .detail-section {{
+            margin-top: 15px;
+        }}
+
+        .detail-message {{
+            background: #2d3436;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 8px;
+            color: #fff;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: inherit;
+            line-height: 1.5;
+        }}
+
+        .detail-message.user-msg {{
+            border-left: 3px solid #3498db;
+        }}
+
+        .detail-message.bot-msg {{
+            border-left: 3px solid #27ae60;
+        }}
+
+        .detail-code {{
+            background: #2d3436;
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 8px;
+            color: #e74c3c;
+            font-family: monospace;
+            font-size: 0.85em;
+        }}
+
+        .modal-footer {{
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 15px 20px;
+            border-top: 1px solid #333;
+        }}
+
+        .issue-item {{
+            cursor: pointer;
+            transition: background 0.2s;
+        }}
+
+        .issue-item:hover {{
+            background: rgba(52, 152, 219, 0.1);
+        }}
     </style>
 </head>
 <body>
@@ -617,6 +738,54 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
     <!-- Toast -->
     <div class="toast" id="toast"></div>
 
+    <!-- Issue Detail Modal -->
+    <div class="modal-overlay" id="issueModal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Issue Details</h3>
+                <button class="modal-close" onclick="closeIssueModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="detail-row">
+                    <span class="detail-label">Issue Type</span>
+                    <span class="detail-value" id="modalIssueType">-</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Severity</span>
+                    <span class="detail-value" id="modalSeverity">-</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Status</span>
+                    <span class="detail-value" id="modalStatus">-</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Phone</span>
+                    <span class="detail-value" id="modalPhone">-</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Detected</span>
+                    <span class="detail-value" id="modalDetected">-</span>
+                </div>
+                <div class="detail-section">
+                    <div class="detail-label">User Message</div>
+                    <div class="detail-message user-msg" id="modalUserMsg">-</div>
+                </div>
+                <div class="detail-section">
+                    <div class="detail-label">Bot Response</div>
+                    <div class="detail-message bot-msg" id="modalBotMsg">-</div>
+                </div>
+                <div class="detail-section" id="modalPatternSection" style="display: none;">
+                    <div class="detail-label">Pattern Matched</div>
+                    <div class="detail-code" id="modalPattern">-</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="markFalsePositive()">Mark False Positive</button>
+                <button class="btn btn-primary" onclick="closeIssueModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API_BASE = '';
 
@@ -678,6 +847,10 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        // Store issues for modal access
+        let issuesData = {{}};
+        let currentIssueId = null;
+
         // Load open issues
         async function loadIssues() {{
             try {{
@@ -688,6 +861,10 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 // Filter to unresolved issues only
                 const openIssues = issues.filter(i => !i.resolution);
                 document.getElementById('issueCount').textContent = openIssues.length;
+
+                // Store for modal access
+                issuesData = {{}};
+                openIssues.forEach(i => issuesData[i.id] = i);
 
                 if (openIssues.length === 0) {{
                     list.innerHTML = `
@@ -700,7 +877,7 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 }}
 
                 list.innerHTML = openIssues.map(issue => `
-                    <div class="issue-item">
+                    <div class="issue-item" onclick="showIssueDetail(${{issue.id}})">
                         <div class="issue-severity ${{issue.severity}}"></div>
                         <div class="issue-content">
                             <div class="issue-type">
@@ -721,6 +898,64 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                     '<div class="empty-state">Failed to load issues</div>';
             }}
         }}
+
+        // Show issue detail modal
+        function showIssueDetail(issueId) {{
+            const issue = issuesData[issueId];
+            if (!issue) return;
+
+            currentIssueId = issueId;
+
+            document.getElementById('modalTitle').textContent = `Issue #${{issue.id}}`;
+            document.getElementById('modalIssueType').textContent = issue.issue_type;
+            document.getElementById('modalSeverity').innerHTML =
+                `<span style="color: ${{issue.severity === 'critical' ? '#e74c3c' : issue.severity === 'high' ? '#e67e22' : '#f1c40f'}}">${{issue.severity.toUpperCase()}}</span>`;
+            document.getElementById('modalStatus').innerHTML =
+                issue.validated
+                    ? '<span style="color:#27ae60">✓ Validated</span>'
+                    : '<span style="color:#f39c12">Pending Validation</span>';
+            document.getElementById('modalPhone').textContent = issue.phone || 'Unknown';
+            document.getElementById('modalDetected').textContent =
+                issue.detected_at ? new Date(issue.detected_at).toLocaleString() : '-';
+
+            document.getElementById('modalUserMsg').textContent = issue.message_in || '(no message)';
+            document.getElementById('modalBotMsg').textContent = issue.message_out || '(no response)';
+
+            // Show pattern if available
+            const patternSection = document.getElementById('modalPatternSection');
+            if (issue.details && issue.details.pattern_matched) {{
+                patternSection.style.display = 'block';
+                document.getElementById('modalPattern').textContent = issue.details.pattern_matched;
+            }} else {{
+                patternSection.style.display = 'none';
+            }}
+
+            document.getElementById('issueModal').style.display = 'flex';
+        }}
+
+        // Close modal
+        function closeIssueModal() {{
+            document.getElementById('issueModal').style.display = 'none';
+            currentIssueId = null;
+        }}
+
+        // Mark as false positive
+        async function markFalsePositive() {{
+            if (!currentIssueId) return;
+            try {{
+                await fetchAPI(`/admin/monitoring/issues/${{currentIssueId}}/false-positive`, {{ method: 'POST' }});
+                showToast('Marked as false positive', 'success');
+                closeIssueModal();
+                loadIssues();
+            }} catch (e) {{
+                showToast('Failed to update', 'error');
+            }}
+        }}
+
+        // Close modal on overlay click
+        document.getElementById('issueModal')?.addEventListener('click', (e) => {{
+            if (e.target.id === 'issueModal') closeIssueModal();
+        }});
 
         // Load patterns
         async function loadPatterns() {{

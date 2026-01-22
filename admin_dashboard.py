@@ -1391,6 +1391,43 @@ async def validate_monitoring_issue(
             return_db_connection(conn)
 
 
+@router.post("/admin/monitoring/issues/{issue_id}/false-positive")
+async def mark_issue_false_positive(
+    issue_id: int,
+    admin: str = Depends(verify_admin)
+):
+    """Quick endpoint to mark an issue as false positive"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            UPDATE monitoring_issues
+            SET validated = TRUE,
+                validated_by = %s,
+                validated_at = NOW(),
+                false_positive = TRUE,
+                resolution = 'Marked as false positive from dashboard'
+            WHERE id = %s
+            RETURNING id
+        ''', (admin, issue_id))
+
+        result = c.fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Issue not found")
+        conn.commit()
+
+        return JSONResponse(content={"success": True, "issue_id": issue_id})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking issue as false positive: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 @router.get("/admin/monitoring/stats")
 async def get_monitoring_stats(admin: str = Depends(verify_admin)):
     """Get monitoring statistics"""
