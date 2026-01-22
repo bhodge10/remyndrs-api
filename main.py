@@ -1768,8 +1768,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             # Get current settings for undo capability
             current_settings = get_daily_summary_settings(phone_number)
-            previous_enabled = current_settings[0] if current_settings else False
-            previous_time = current_settings[1] if current_settings else None
+            previous_enabled = current_settings['enabled'] if current_settings else False
+            previous_time = current_settings['time'] if current_settings else None
 
             # Store undo data
             undo_data = json.dumps({
@@ -1806,8 +1806,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             # Get current settings for undo capability
             current_settings = get_daily_summary_settings(phone_number)
-            previous_enabled = current_settings[0] if current_settings else False
-            previous_time = current_settings[1] if current_settings else None
+            previous_enabled = current_settings['enabled'] if current_settings else False
+            previous_time = current_settings['time'] if current_settings else None
 
             # Store undo data
             undo_data = json.dumps({
@@ -1882,8 +1882,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             # Get current summary settings for undo capability
             from models.user import get_daily_summary_settings
             current_settings = get_daily_summary_settings(phone_number)
-            previous_enabled = current_settings[0] if current_settings else False
-            previous_time = current_settings[1] if current_settings else None
+            previous_enabled = current_settings['enabled'] if current_settings else False
+            previous_time = current_settings['time'] if current_settings else None
 
             # Store previous state for undo (using pending_reminder_confirmation with special type)
             undo_data = json.dumps({
