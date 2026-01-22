@@ -1202,6 +1202,58 @@ async def cleanup_stuck_reminders(admin: str = Depends(verify_admin)):
 # MONITORING AGENT API ENDPOINTS
 # =====================================================
 
+@router.get("/admin/pipeline/run")
+async def run_full_pipeline(
+    hours: int = 24,
+    use_ai: bool = False,
+    admin: str = Depends(verify_admin)
+):
+    """Run the full monitoring pipeline (Agent 1 + 2 + 3)"""
+    try:
+        from agents.interaction_monitor import analyze_interactions
+        from agents.issue_validator import validate_issues
+        from agents.resolution_tracker import calculate_health_metrics
+
+        results = {
+            'agent1': None,
+            'agent2': None,
+            'agent3': None,
+        }
+
+        # Agent 1: Interaction Monitor
+        monitor_results = analyze_interactions(hours=hours, dry_run=False)
+        results['agent1'] = {
+            'logs_analyzed': monitor_results['logs_analyzed'],
+            'issues_found': len(monitor_results['issues_found']),
+        }
+
+        # Agent 2: Issue Validator
+        if results['agent1']['issues_found'] > 0:
+            validator_results = validate_issues(limit=100, use_ai=use_ai, dry_run=False)
+            results['agent2'] = {
+                'processed': validator_results['issues_processed'],
+                'validated': len(validator_results['validated']),
+                'false_positives': len(validator_results['false_positives']),
+            }
+        else:
+            results['agent2'] = {'processed': 0, 'validated': 0, 'false_positives': 0}
+
+        # Agent 3: Health Metrics
+        health = calculate_health_metrics(days=7)
+        results['agent3'] = {
+            'health_score': health['health_score'],
+            'health_status': health['health_status'],
+        }
+
+        return JSONResponse(content={
+            "success": True,
+            "results": results
+        })
+    except Exception as e:
+        logger.error(f"Error running full pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/admin/monitoring/run")
 async def run_interaction_monitor(
     hours: int = 24,
