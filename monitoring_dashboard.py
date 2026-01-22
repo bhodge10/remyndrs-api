@@ -681,13 +681,15 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
         // Load open issues
         async function loadIssues() {{
             try {{
-                const data = await fetchAPI('/admin/tracker/open?limit=20');
+                const data = await fetchAPI('/admin/monitoring/issues?limit=20');
                 const list = document.getElementById('issueList');
                 const issues = data.issues || [];
 
-                document.getElementById('issueCount').textContent = issues.length;
+                // Filter to unresolved issues only
+                const openIssues = issues.filter(i => !i.resolution);
+                document.getElementById('issueCount').textContent = openIssues.length;
 
-                if (issues.length === 0) {{
+                if (openIssues.length === 0) {{
                     list.innerHTML = `
                         <div class="empty-state">
                             <div class="icon">✅</div>
@@ -697,13 +699,16 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                     return;
                 }}
 
-                list.innerHTML = issues.map(issue => `
+                list.innerHTML = openIssues.map(issue => `
                     <div class="issue-item">
                         <div class="issue-severity ${{issue.severity}}"></div>
                         <div class="issue-content">
-                            <div class="issue-type">${{issue.issue_type}}</div>
+                            <div class="issue-type">
+                                ${{issue.issue_type}}
+                                ${{issue.validated ? '<span style="color:#27ae60;font-size:0.7em;margin-left:5px;">✓ validated</span>' : '<span style="color:#f39c12;font-size:0.7em;margin-left:5px;">pending</span>'}}
+                            </div>
                             <div class="issue-detail">
-                                ${{issue.message_in ? issue.message_in.substring(0, 60) + '...' : 'No message'}}
+                                ${{issue.message_in ? issue.message_in.substring(0, 60) + (issue.message_in.length > 60 ? '...' : '') : 'No message'}}
                             </div>
                         </div>
                         <div class="issue-id">#${{issue.id}}</div>
@@ -814,10 +819,11 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
 
         // Actions
         async function runPipeline() {{
-            showToast('Starting pipeline...', 'success');
+            showToast('Running full pipeline (3 agents)...', 'success');
             try {{
-                const data = await fetchAPI('/admin/monitoring/run?hours=24');
-                showToast(`Pipeline complete: ${{data.issues_found}} issues found`, 'success');
+                const data = await fetchAPI('/admin/pipeline/run?hours=24');
+                const r = data.results;
+                showToast(`Pipeline complete: ${{r.agent1.issues_found}} found, ${{r.agent2.validated}} validated`, 'success');
                 loadHealth();
                 loadIssues();
                 loadPatterns();
