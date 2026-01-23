@@ -33,13 +33,15 @@ from config import ENVIRONMENT
 # ============================================================================
 
 # Messages indicating user confusion
+# Note: Be specific - avoid matching common words in legitimate requests
 CONFUSION_PATTERNS = [
-    r'\b(what|huh|confused|dont understand|don\'t understand)\b',
-    r'\?\s*\?',  # Multiple question marks
-    r'^(help|how|why)\s*$',  # Single-word confusion
-    r'\b(not working|doesn\'t work|didn\'t work|broken)\b',
-    r'\b(wrong|incorrect|mistake)\b',
-    r'\b(try again|again)\b',
+    r'\b(huh|confused|dont understand|don\'t understand)\b',
+    r'\?\s*\?',  # Multiple question marks (e.g., "??")
+    r'^(help|huh)\s*$',  # Single-word confusion (removed "how", "why" - too common)
+    r'\b(not working|doesn\'t work|didn\'t work|broken|this is broken)\b',
+    r'\b(that\'s wrong|that\'s incorrect|you got it wrong)\b',  # More specific than just "wrong"
+    r'\b(try again)\b',  # Keep this - explicit retry request indicates failure
+    r'^what\?+$',  # Just "what?" or "what??" indicates confusion
 ]
 
 # System error responses (from our responses)
@@ -60,13 +62,16 @@ TIMEZONE_PATTERNS = [
 ]
 
 # Parsing failure indicators (in our responses)
+# Note: Be careful with patterns - avoid matching normal conversational prompts
+# "what would you like" and "did you mean" are often legitimate prompts, not failures
 PARSING_FAILURE_PATTERNS = [
     r'i\'m not sure what you mean',
-    r'could you clarify',
-    r'did you mean',
     r'i couldn\'t understand',
-    r'please specify',
-    r'what would you like',
+    r'i don\'t understand',
+    r'i\'m having trouble understanding',
+    r'could you (please )?rephrase',
+    r'i\'m confused by',
+    r'not sure (what|how) to',
 ]
 
 

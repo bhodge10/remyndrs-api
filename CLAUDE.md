@@ -141,3 +141,48 @@ Optional: `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_K
 ## Rate Limiting
 
 15 messages per 60-second window per user (configurable in `config.py`).
+
+## Multi-Agent Monitoring System
+
+Automated issue detection and health tracking for the SMS service.
+
+### Dashboard
+- **URL:** `/admin/monitoring`
+- Visual dashboard showing health score, open issues, patterns, and trends
+- Click any issue to see full message context (user message + bot response)
+- "Mark False Positive" button to dismiss non-issues
+
+### Three Agents
+1. **Agent 1 - Interaction Monitor** (`agents/interaction_monitor.py`)
+   - Detects anomalies: user confusion, parsing failures, error responses, timezone issues
+   - Scans `logs` table for patterns indicating problems
+
+2. **Agent 2 - Issue Validator** (`agents/issue_validator.py`)
+   - Validates issues from Agent 1, filters false positives
+   - Optional AI analysis with GPT-4o-mini (`use_ai=True`)
+   - Identifies recurring patterns
+
+3. **Agent 3 - Resolution Tracker** (`agents/resolution_tracker.py`)
+   - Calculates health score (0-100)
+   - Tracks issue resolutions and detects regressions
+   - Generates weekly reports
+
+### Celery Schedule (automatic)
+- **Hourly:** Critical issue check
+- **Every 4 hours:** Agent 1 (interaction monitor)
+- **Every 6 hours:** Agent 2 (issue validator)
+- **Daily 6 AM UTC:** Full pipeline with AI
+- **Weekly Monday 8 AM UTC:** Weekly report
+
+### Manual Triggers
+- Dashboard "Run Full Pipeline" button
+- API: `GET /admin/pipeline/run?hours=24`
+
+### Alerts
+Configured via dashboard Alert Settings section:
+- **Teams:** Requires `TEAMS_WEBHOOK_URL` env var
+- **Email:** Requires `SMTP_*` env vars and recipient list
+- **SMS:** For critical issues only (health < 50)
+
+### Database Tables
+`monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`

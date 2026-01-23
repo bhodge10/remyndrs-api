@@ -332,8 +332,9 @@ def calculate_health_metrics(days: int = 7) -> Dict:
 
         # Health score (inverse of issue rate, weighted)
         if metrics['total_interactions'] > 0:
-            # Base score from issue rate
-            base_score = 100 - (metrics['issue_rate'] * 5)  # 1% issues = 5 point penalty
+            # Base score from issue rate (reduced penalty: 2 points per 1% instead of 5)
+            # This means: 10% issue rate = 80 score, 20% = 60, 30% = 40
+            base_score = 100 - (metrics['issue_rate'] * 2)
 
             # Bonus for high resolution rate
             resolution_bonus = (metrics['resolution_rate'] - 50) / 10 if metrics['resolution_rate'] > 50 else 0
