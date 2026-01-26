@@ -436,6 +436,8 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS five_minute_nudge_scheduled_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS five_minute_nudge_sent BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS post_onboarding_interactions INTEGER DEFAULT 0",
+            # Trial info messaging (one-time after first real interaction)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_info_sent BOOLEAN DEFAULT FALSE",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

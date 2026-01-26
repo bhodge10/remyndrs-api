@@ -42,6 +42,12 @@ from services.sms_service import send_sms
 from services.ai_service import process_with_ai, parse_list_items
 from services.onboarding_service import handle_onboarding
 from services.first_action_service import should_prompt_daily_summary, mark_daily_summary_prompted, get_daily_summary_prompt_message, handle_daily_summary_response
+from services.trial_messaging_service import (
+    is_pricing_question, is_comparison_question, is_acknowledgment,
+    get_trial_info_sent, mark_trial_info_sent,
+    get_pricing_response, get_comparison_response, get_acknowledgment_response,
+    append_trial_info_to_response
+)
 # NOTE: Reminder checking is now handled by Celery Beat (see tasks/reminder_tasks.py)
 from services.metrics_service import track_user_activity, increment_message_count
 from utils.timezone import get_user_current_time
@@ -447,6 +453,38 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if nudge_cancelled:
             logger.info(f"User ...{phone_number[-4:]} texted back - cancelled engagement nudge")
         increment_post_onboarding_interactions(phone_number)
+
+        # ==========================================
+        # PRICING & TRIAL QUESTIONS
+        # ==========================================
+        # Handle pricing questions directly without AI processing
+        if is_comparison_question(incoming_msg):
+            logger.info(f"User ...{phone_number[-4:]} asked about free vs premium comparison")
+            reply_text = get_comparison_response()
+            if not get_trial_info_sent(phone_number):
+                mark_trial_info_sent(phone_number)
+            log_interaction(phone_number, incoming_msg, reply_text, "pricing_comparison", True)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(reply_text))
+            return Response(content=str(resp), media_type="application/xml")
+
+        if is_pricing_question(incoming_msg):
+            logger.info(f"User ...{phone_number[-4:]} asked about pricing")
+            reply_text = get_pricing_response()
+            if not get_trial_info_sent(phone_number):
+                mark_trial_info_sent(phone_number)
+            log_interaction(phone_number, incoming_msg, reply_text, "pricing_question", True)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(reply_text))
+            return Response(content=str(resp), media_type="application/xml")
+
+        # Handle simple acknowledgments (e.g., "ok", "thanks" after trial message)
+        if is_acknowledgment(incoming_msg):
+            reply_text = get_acknowledgment_response()
+            log_interaction(phone_number, incoming_msg, reply_text, "acknowledgment", True)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(reply_text))
+            return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
         # NEW REMINDER REQUEST DETECTION (must come first)
@@ -2731,8 +2769,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
         # Process each action and collect replies
         all_replies = []
+        first_action_type = None
         for action_index, current_action in enumerate(actions_to_process):
             action_type = current_action.get("action", "error")
+            if action_index == 0:
+                first_action_type = action_type
             logger.info(f"Processing action {action_index + 1}/{len(actions_to_process)}: {action_type}")
 
             # Handle each action and get reply
@@ -2747,6 +2788,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             reply_text = all_replies[0]
         else:
             reply_text = "I processed your request."
+
+        # Append trial info if this is user's first real interaction
+        if first_action_type:
+            reply_text = append_trial_info_to_response(reply_text, first_action_type, phone_number)
 
         # Send response
         resp = MessagingResponse()

@@ -26,6 +26,7 @@ ALLOWED_USER_FIELDS = {
     'daily_summary_prompted', 'pending_daily_summary_time',
     'pending_reminder_confirmation',
     'five_minute_nudge_scheduled_at', 'five_minute_nudge_sent', 'post_onboarding_interactions',
+    'trial_info_sent',
 }
 
 

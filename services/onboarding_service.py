@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from fastapi.responses import Response
 from twilio.twiml.messaging_response import MessagingResponse
 
-from config import logger, FREE_TRIAL_DAYS, TIER_PREMIUM, APP_BASE_URL
+from config import logger, FREE_TRIAL_DAYS, TIER_PREMIUM, APP_BASE_URL, PREMIUM_MONTHLY_PRICE
 from models.user import get_user, get_onboarding_step, create_or_update_user
 from models.memory import save_memory
 from utils.timezone import get_timezone_from_zip, get_user_current_time
@@ -144,6 +144,16 @@ Why I need this info:
 • ZIP: Set your timezone for accurate reminders
 
 Text "cancel" to cancel setup, or just answer the question to continue!""")
+            return Response(content=str(resp), media_type="application/xml")
+
+        # Handle pricing questions during onboarding
+        pricing_keywords = ['cost', 'price', 'pricing', 'how much', 'free', 'paid', 'subscription']
+        if step > 0 and any(keyword in message_lower for keyword in pricing_keywords):
+            logger.info(f"Pricing question during onboarding from ...{phone_number[-4:]}")
+            current_prompt = get_onboarding_prompt(step)
+            resp.message(f"""Great question! You get a FREE {FREE_TRIAL_DAYS}-day Premium trial to start. After that, it's {PREMIUM_MONTHLY_PRICE}/mo for Premium or a free tier with 2 reminders/day.
+
+Let's finish setup first - {current_prompt}""")
             return Response(content=str(resp), media_type="application/xml")
 
         # Handle cancel request during onboarding
