@@ -33,8 +33,8 @@ class TestOnboardingFlow:
 
         # Step 5: Provide ZIP code - should complete onboarding
         result = await simulator.send_message(phone, "90210")
-        # Should mention setup complete or ask for first action
-        assert any(word in result["output"].lower() for word in ["complete", "ready", "help", "remind"])
+        # Should confirm setup complete and mention first saved memory
+        assert any(word in result["output"].lower() for word in ["all set", "saved", "memory"])
 
     @pytest.mark.asyncio
     async def test_onboarding_with_full_name(self, simulator, clean_test_user):
@@ -89,7 +89,7 @@ class TestOnboardingFlow:
 
         # Valid ZIP
         result = await simulator.send_message(phone, "90210")
-        assert any(word in result["output"].lower() for word in ["complete", "ready", "help", "timezone"])
+        assert any(word in result["output"].lower() for word in ["all set", "saved", "memory"])
 
     @pytest.mark.asyncio
     async def test_onboarding_cancel(self, simulator, clean_test_user):

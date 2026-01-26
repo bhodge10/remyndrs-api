@@ -636,3 +636,22 @@ def send_abandoned_onboarding_followups(self):
     except Exception as exc:
         logger.exception("Error in abandoned onboarding followups")
         raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def send_delayed_sms(self, to_number: str, message: str, media_url: str = None):
+    """
+    Send an SMS/MMS with optional delay (use .apply_async(countdown=N)).
+    Used for onboarding VCF card delivery with delay.
+    """
+    try:
+        send_sms(to_number, message, media_url=media_url)
+        logger.info(f"Sent delayed SMS to ...{to_number[-4:]}")
+        return {"success": True}
+    except Exception as exc:
+        logger.error(f"Error sending delayed SMS: {exc}")
+        raise self.retry(exc=exc)

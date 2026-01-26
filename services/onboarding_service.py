@@ -10,9 +10,10 @@ from twilio.twiml.messaging_response import MessagingResponse
 
 from config import logger, FREE_TRIAL_DAYS, TIER_PREMIUM, APP_BASE_URL
 from models.user import get_user, get_onboarding_step, create_or_update_user
+from models.memory import save_memory
 from utils.timezone import get_timezone_from_zip, get_user_current_time
 from utils.formatting import get_onboarding_prompt
-from services.sms_service import send_sms
+from tasks.reminder_tasks import send_delayed_sms
 from services.onboarding_recovery_service import (
     track_onboarding_progress,
     mark_onboarding_complete,
@@ -321,39 +322,31 @@ Email for account recovery?
             user = get_user(phone_number)
             first_name = user[1]
 
-            # Send completion message with pricing transparency and first action prompt
-            resp.message(f"""Perfect! Your timezone is set to {timezone}.
+            # Save first memory: signup date
+            signup_date = datetime.utcnow().strftime("%B %d, %Y")
+            first_memory = f"Signed up for Remyndrs on {signup_date}"
+            save_memory(phone_number, first_memory, {"type": "signup", "auto_created": True})
 
-You're all set, {first_name}! 🎉
+            # Send completion message - focused on immediate value
+            resp.message(f"""Perfect! You're all set, {first_name}! 🎉
 
-You have a FREE {FREE_TRIAL_DAYS}-day Premium trial starting now!
+I just saved your first memory: "{first_memory}"
 
-After {FREE_TRIAL_DAYS} days, you choose:
-• Premium: $4.99/mo (early adopter rate - save $12!)
-• Free tier: 2 reminders/day, still useful
-• Cancel anytime: no charge, no hassle
+Try asking me: "What do I have saved?"
 
-💡 Quick tip: Save this number to your contacts!
-(Check the next message for a contact card you can tap to save)
+(Tip: Check your next message to save me as a contact!)""")
 
-Now let's set your first reminder!
-
-What's something you need to remember?
-
-Try: "Remind me to call mom tomorrow at 2pm"
-Or: "Add milk and eggs to my grocery list\"""")
-
-            # Send VCF contact card as separate follow-up MMS (non-blocking)
+            # Send VCF contact card after 5-second delay
             try:
                 vcf_url = f"{APP_BASE_URL}/contact.vcf"
-                send_sms(
-                    phone_number,
-                    "📱 Tap to save Remyndrs to your contacts!",
-                    media_url=vcf_url
+                send_delayed_sms.apply_async(
+                    args=[phone_number, "📱 Tap to save Remyndrs to your contacts!"],
+                    kwargs={"media_url": vcf_url},
+                    countdown=5
                 )
             except Exception as vcf_error:
                 # Don't fail onboarding if VCF send fails
-                logger.warning(f"Could not send VCF card to {phone_number}: {vcf_error}")
+                logger.warning(f"Could not queue VCF card for {phone_number}: {vcf_error}")
 
         return Response(content=str(resp), media_type="application/xml")
 

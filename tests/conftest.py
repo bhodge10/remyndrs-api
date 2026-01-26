@@ -270,15 +270,25 @@ class ConversationSimulator:
 def sms_capture():
     """Fixture providing SMS capture for tests."""
     capture = SMSCapture()
+
+    def mock_delayed_sms_apply_async(args=None, kwargs=None, countdown=None):
+        """Mock for send_delayed_sms.apply_async - captures the SMS immediately"""
+        if args:
+            to_number = args[0]
+            message = args[1] if len(args) > 1 else ""
+            media_url = kwargs.get('media_url') if kwargs else None
+            capture.send_sms(to_number, message, media_url=media_url)
+        return None
+
     # Patch send_sms in ALL modules that import it to prevent real Twilio calls
     # Each module that does "from services.sms_service import send_sms" gets its own reference
     with patch('services.sms_service.send_sms', side_effect=capture.send_sms), \
-         patch('services.onboarding_service.send_sms', side_effect=capture.send_sms), \
          patch('services.first_action_service.send_sms', side_effect=capture.send_sms), \
          patch('services.reminder_service.send_sms', side_effect=capture.send_sms), \
          patch('services.support_service.send_sms', side_effect=capture.send_sms), \
          patch('services.onboarding_recovery_service.send_sms', side_effect=capture.send_sms), \
          patch('tasks.reminder_tasks.send_sms', side_effect=capture.send_sms), \
+         patch('services.onboarding_service.send_delayed_sms.apply_async', side_effect=mock_delayed_sms_apply_async), \
          patch('main.send_sms', side_effect=capture.send_sms), \
          patch('admin_dashboard.send_sms', side_effect=capture.send_sms):
         yield capture
