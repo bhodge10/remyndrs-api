@@ -11,10 +11,12 @@ from database import get_db_connection, return_db_connection
 
 
 # Actions that trigger trial info message
+# These match the actual action types returned by the AI
 TRIAL_TRIGGER_ACTIONS = {
-    'save_memory', 'save_reminder', 'create_list', 'add_to_list',
-    'show_memories', 'show_lists', 'show_reminders', 'show_all',
-    'retrieve', 'list_add', 'list_create', 'reminder_confirmed',
+    # Save actions
+    'store', 'reminder', 'list_add', 'list_create',
+    # Retrieval actions
+    'retrieve', 'list_reminders', 'list_show', 'show_lists',
 }
 
 # Pricing question patterns
