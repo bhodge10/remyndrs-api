@@ -143,6 +143,18 @@ After that, choose:
 For now, just use me naturally. Text 'help' anytime!"""
 
 
+def get_pricing_faq_response() -> str:
+    """Get shorter pricing FAQ for users who already received trial info."""
+    free_limits = TIER_LIMITS[TIER_FREE]
+    return f"""You're on a {FREE_TRIAL_DAYS}-day Premium trial (unlimited everything).
+
+After that:
+• Premium: {PREMIUM_MONTHLY_PRICE}/mo
+• Free: {free_limits['reminders_per_day']} reminders/day
+
+Want details? Text 'what's premium?'"""
+
+
 def get_comparison_response() -> str:
     """Get detailed free vs premium comparison."""
     free = TIER_LIMITS[TIER_FREE]
@@ -162,6 +174,17 @@ PREMIUM ({PREMIUM_MONTHLY_PRICE}/mo):
 - Priority support
 
 You're on Premium trial now - try everything! What do you want to save?"""
+
+
+def get_comparison_faq_response() -> str:
+    """Get comparison table for users who already received trial info."""
+    free = TIER_LIMITS[TIER_FREE]
+    return f"""FREE vs PREMIUM:
+
+FREE: {free['reminders_per_day']} reminders/day, {free['max_lists']} lists, {free['max_memories']} memories
+PREMIUM ({PREMIUM_MONTHLY_PRICE}/mo): Unlimited everything + recurring reminders
+
+You're on Premium trial now!"""
 
 
 def get_acknowledgment_response() -> str:

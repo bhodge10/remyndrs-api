@@ -45,8 +45,9 @@ from services.first_action_service import should_prompt_daily_summary, mark_dail
 from services.trial_messaging_service import (
     is_pricing_question, is_comparison_question, is_acknowledgment,
     get_trial_info_sent, mark_trial_info_sent,
-    get_pricing_response, get_comparison_response, get_acknowledgment_response,
-    append_trial_info_to_response
+    get_pricing_response, get_pricing_faq_response,
+    get_comparison_response, get_comparison_faq_response,
+    get_acknowledgment_response, append_trial_info_to_response
 )
 # NOTE: Reminder checking is now handled by Celery Beat (see tasks/reminder_tasks.py)
 from services.metrics_service import track_user_activity, increment_message_count
@@ -459,9 +460,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # Handle pricing questions directly without AI processing
         if is_comparison_question(incoming_msg):
-            logger.info(f"User ...{phone_number[-4:]} asked about free vs premium comparison")
-            reply_text = get_comparison_response()
-            if not get_trial_info_sent(phone_number):
+            trial_already_sent = get_trial_info_sent(phone_number)
+            if trial_already_sent:
+                logger.info(f"Comparison question - trial already explained, sending FAQ for ...{phone_number[-4:]}")
+                reply_text = get_comparison_faq_response()
+            else:
+                logger.info(f"Comparison question - first time, sending full comparison for ...{phone_number[-4:]}")
+                reply_text = get_comparison_response()
                 mark_trial_info_sent(phone_number)
             log_interaction(phone_number, incoming_msg, reply_text, "pricing_comparison", True)
             resp = MessagingResponse()
@@ -469,9 +474,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         if is_pricing_question(incoming_msg):
-            logger.info(f"User ...{phone_number[-4:]} asked about pricing")
-            reply_text = get_pricing_response()
-            if not get_trial_info_sent(phone_number):
+            trial_already_sent = get_trial_info_sent(phone_number)
+            if trial_already_sent:
+                logger.info(f"Pricing question - trial already explained, sending FAQ for ...{phone_number[-4:]}")
+                reply_text = get_pricing_faq_response()
+            else:
+                logger.info(f"Pricing question - first time, sending full trial info for ...{phone_number[-4:]}")
+                reply_text = get_pricing_response()
                 mark_trial_info_sent(phone_number)
             log_interaction(phone_number, incoming_msg, reply_text, "pricing_question", True)
             resp = MessagingResponse()
