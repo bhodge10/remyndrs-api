@@ -111,6 +111,12 @@ def init_monitoring_tables():
             ON monitoring_issues(validated) WHERE validated = FALSE
         ''')
 
+        # Unique constraint to prevent duplicate issues for same log
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_monitoring_issues_log_type
+            ON monitoring_issues(log_id, issue_type) WHERE log_id IS NOT NULL
+        ''')
+
         # Monitoring runs table (audit trail)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS monitoring_runs (
@@ -425,7 +431,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
             results['issues_found'].append(issue)
             results['summary']['delivery_failure'] += 1
 
-        # Store issues in database
+        # Store issues in database (skip duplicates via unique constraint)
         if not dry_run and results['issues_found']:
             with get_db_cursor() as cursor:
                 for issue in results['issues_found']:
@@ -433,6 +439,8 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
                         INSERT INTO monitoring_issues
                         (log_id, phone_number, issue_type, severity, details)
                         VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (log_id, issue_type) WHERE log_id IS NOT NULL
+                        DO NOTHING
                     ''', (
                         issue.get('log_id'),
                         issue['phone_number'],
