@@ -384,6 +384,99 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
         .setting-value.active {{ color: #27ae60; }}
         .setting-value.inactive {{ color: #e74c3c; }}
 
+        /* Form Inputs */
+        .form-group {{
+            margin-bottom: 15px;
+        }}
+
+        .form-group label {{
+            display: block;
+            color: #888;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+        }}
+
+        .form-group input[type="text"],
+        .form-group input[type="email"],
+        .form-group input[type="number"],
+        .form-group textarea {{
+            width: 100%;
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 6px;
+            color: #fff;
+            font-size: 0.9em;
+        }}
+
+        .form-group input:focus,
+        .form-group textarea:focus {{
+            outline: none;
+            border-color: #3498db;
+        }}
+
+        .form-group textarea {{
+            min-height: 60px;
+            resize: vertical;
+        }}
+
+        .form-row {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }}
+
+        .toggle-switch {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+
+        .toggle-switch input[type="checkbox"] {{
+            width: 40px;
+            height: 22px;
+            appearance: none;
+            background: rgba(255,255,255,0.2);
+            border-radius: 11px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s;
+        }}
+
+        .toggle-switch input[type="checkbox"]:checked {{
+            background: #27ae60;
+        }}
+
+        .toggle-switch input[type="checkbox"]::before {{
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s;
+        }}
+
+        .toggle-switch input[type="checkbox"]:checked::before {{
+            transform: translateX(18px);
+        }}
+
+        .form-actions {{
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }}
+
+        .form-hint {{
+            font-size: 0.75em;
+            color: #666;
+            margin-top: 4px;
+        }}
+
         /* Buttons */
         .btn {{
             display: inline-block;
@@ -1021,34 +1114,97 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 const container = document.getElementById('alertSettings');
 
                 container.innerHTML = `
-                    <div class="setting-item">
-                        <span class="setting-label">Alerts</span>
-                        <span class="setting-value ${{data.alerts_enabled ? 'active' : 'inactive'}}">
-                            ${{data.alerts_enabled ? 'Enabled' : 'Disabled'}}
-                        </span>
-                    </div>
-                    <div class="setting-item">
-                        <span class="setting-label">Teams</span>
-                        <span class="setting-value ${{data.teams_configured ? 'active' : 'inactive'}}">
-                            ${{data.teams_configured ? 'Connected' : 'Not configured'}}
-                        </span>
-                    </div>
-                    <div class="setting-item">
-                        <span class="setting-label">Email</span>
-                        <span class="setting-value ${{data.email_recipients?.length ? 'active' : 'inactive'}}">
-                            ${{data.email_recipients?.length || 0}} recipient(s)
-                        </span>
-                    </div>
-                    <div class="setting-item">
-                        <span class="setting-label">SMS</span>
-                        <span class="setting-value ${{data.sms_enabled ? 'active' : 'inactive'}}">
-                            ${{data.sms_enabled ? data.sms_recipients?.length + ' number(s)' : 'Disabled'}}
-                        </span>
-                    </div>
+                    <form id="alertSettingsForm" onsubmit="saveAlertSettings(event)" style="grid-column: 1 / -1;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="alertsEnabled" ${{data.alerts_enabled ? 'checked' : ''}}>
+                                    <span>Alerts Enabled</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>Health Threshold</label>
+                                <input type="number" id="healthThreshold" min="0" max="100"
+                                    value="${{data.health_threshold || 70}}" placeholder="70">
+                                <div class="form-hint">Alert when health score drops below this</div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Microsoft Teams Webhook URL</label>
+                            <input type="text" id="teamsWebhook"
+                                placeholder="${{data.teams_configured ? '(webhook configured - enter new to replace)' : 'https://outlook.office.com/webhook/...'}}"
+                                value="">
+                            <div class="form-hint">${{data.teams_configured ? '✓ Connected' : 'Get from Teams: Channel → Connectors → Incoming Webhook'}}</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Email Recipients</label>
+                            <textarea id="emailRecipients" rows="2"
+                                placeholder="email1@example.com, email2@example.com">${{(data.email_recipients || []).join(', ')}}</textarea>
+                            <div class="form-hint">Comma-separated email addresses${{data.email_configured ? '' : ' (SMTP not configured in env vars)'}}</div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="smsEnabled" ${{data.sms_enabled ? 'checked' : ''}}>
+                                    <span>SMS Alerts (Critical Only)</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>SMS Numbers</label>
+                                <input type="text" id="smsNumbers"
+                                    placeholder="+15551234567, +15559876543"
+                                    value="${{data.sms_recipients?.map(n => '...' + n).join(', ') || ''}}">
+                                <div class="form-hint">Full phone numbers with country code</div>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Save Settings</button>
+                            <button type="button" class="btn btn-secondary" onclick="testAlerts()">Test Alerts</button>
+                        </div>
+                    </form>
                 `;
 
             }} catch (e) {{
                 console.error('Failed to load alert settings:', e);
+            }}
+        }}
+
+        // Save alert settings
+        async function saveAlertSettings(event) {{
+            event.preventDefault();
+
+            const settings = {{
+                alerts_enabled: document.getElementById('alertsEnabled').checked,
+                health_threshold: parseInt(document.getElementById('healthThreshold').value) || 70,
+                email_recipients: document.getElementById('emailRecipients').value,
+                sms_enabled: document.getElementById('smsEnabled').checked,
+            }};
+
+            // Only include Teams webhook if a new one was entered
+            const teamsWebhook = document.getElementById('teamsWebhook').value.trim();
+            if (teamsWebhook) {{
+                settings.teams_webhook_url = teamsWebhook;
+            }}
+
+            // Only include SMS numbers if changed (doesn't start with ...)
+            const smsNumbers = document.getElementById('smsNumbers').value.trim();
+            if (smsNumbers && !smsNumbers.startsWith('...')) {{
+                settings.sms_numbers = smsNumbers;
+            }}
+
+            try {{
+                await fetchAPI('/admin/alerts/settings', {{
+                    method: 'POST',
+                    body: JSON.stringify(settings)
+                }});
+                showToast('Settings saved successfully', 'success');
+                loadAlertSettings();  // Reload to show updated values
+            }} catch (e) {{
+                showToast('Failed to save settings', 'error');
             }}
         }}
 
