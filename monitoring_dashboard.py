@@ -1128,17 +1128,16 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
 
                 const current = data.current_health || {{}};
                 const recommendations = data.recommendations || [];
-                const comparison = data.comparison || {{}};
 
-                // Resolution types breakdown
-                const resolutionTypes = data.resolution_breakdown || {{}};
-                const resolutionList = Object.entries(resolutionTypes)
-                    .filter(([k, v]) => v > 0)
-                    .map(([type, count]) => `<span class="badge">${{type}}: ${{count}}</span>`)
+                // Resolution types breakdown (array of {type, count, label})
+                const resolutionBreakdown = data.resolution_breakdown || [];
+                const resolutionList = resolutionBreakdown
+                    .filter(r => r.count > 0)
+                    .map(r => `<span class="badge">${{r.label || r.type}}: ${{r.count}}</span>`)
                     .join(' ') || '<span style="color: #666;">No resolutions yet</span>';
 
-                // Week over week change
-                const healthChange = comparison.health_change || 0;
+                // Week over week change (health_change is at top level of report)
+                const healthChange = data.health_change || 0;
                 const changeIcon = healthChange > 0 ? '📈' : healthChange < 0 ? '📉' : '➡️';
                 const changeColor = healthChange > 0 ? '#27ae60' : healthChange < 0 ? '#e74c3c' : '#888';
 
