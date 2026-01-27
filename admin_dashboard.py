@@ -1287,6 +1287,10 @@ async def get_monitoring_issues(
     """Get detected monitoring issues (open issues by default, or all if show_all=true)"""
     conn = None
     try:
+        # Ensure monitoring tables exist
+        from agents.interaction_monitor import init_monitoring_tables
+        init_monitoring_tables()
+
         conn = get_monitoring_connection()
         c = conn.cursor()
 
@@ -1523,7 +1527,8 @@ async def run_issue_validator(
 async def get_issue_patterns(admin: str = Depends(verify_admin)):
     """Get issue pattern analysis"""
     try:
-        from agents.issue_validator import analyze_patterns
+        from agents.issue_validator import analyze_patterns, init_validator_tables
+        init_validator_tables()  # Ensure tables exist
         patterns = analyze_patterns()
         return JSONResponse(content=patterns)
     except Exception as e:
@@ -1604,7 +1609,8 @@ async def get_validator_stats(admin: str = Depends(verify_admin)):
 async def get_system_health(days: int = 7, admin: str = Depends(verify_admin)):
     """Get system health metrics"""
     try:
-        from agents.resolution_tracker import calculate_health_metrics
+        from agents.resolution_tracker import calculate_health_metrics, init_tracker_tables
+        init_tracker_tables()  # Ensure tables exist
         metrics = calculate_health_metrics(days=days)
         return JSONResponse(content=metrics)
     except Exception as e:
