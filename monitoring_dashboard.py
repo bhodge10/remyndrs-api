@@ -1129,7 +1129,7 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 const current = data.current_health || {{}};
                 const recommendations = data.recommendations || [];
 
-                // Resolution types breakdown (array of {type, count, label})
+                // Resolution types breakdown (array of objects with type, count, label)
                 const resolutionBreakdown = data.resolution_breakdown || [];
                 const resolutionList = resolutionBreakdown
                     .filter(r => r.count > 0)
