@@ -28,7 +28,7 @@ from collections import defaultdict
 # Add parent directory to path for imports
 sys.path.insert(0, '.')
 
-from database import get_db_cursor, logger
+from database import get_monitoring_cursor, logger
 from config import ENVIRONMENT, OPENAI_API_KEY
 
 
@@ -107,7 +107,7 @@ SEVERITY_ADJUSTMENTS = {
 
 def init_validator_tables():
     """Create validator-specific tables if they don't exist"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Issue patterns table - groups related issues
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS issue_patterns (
@@ -165,7 +165,7 @@ def init_validator_tables():
 
 def get_pending_issues(limit: int = 50) -> List[Dict]:
     """Get issues pending validation from Agent 1"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
                    mi.severity, mi.details, mi.detected_at,
@@ -195,7 +195,7 @@ def get_pending_issues(limit: int = 50) -> List[Dict]:
 def mark_issue_validated(issue_id: int, false_positive: bool = False,
                          adjusted_severity: str = None, notes: str = None):
     """Mark an issue as validated"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         if adjusted_severity:
             cursor.execute('''
                 UPDATE monitoring_issues
@@ -221,7 +221,7 @@ def mark_issue_validated(issue_id: int, false_positive: bool = False,
 
 def get_or_create_pattern(pattern_name: str, description: str = None) -> int:
     """Get or create an issue pattern, returns pattern_id"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Try to find existing
         cursor.execute('''
             SELECT id FROM issue_patterns WHERE pattern_name = %s
@@ -248,7 +248,7 @@ def get_or_create_pattern(pattern_name: str, description: str = None) -> int:
 
 def link_issue_to_pattern(issue_id: int, pattern_id: int, confidence: float = 1.0):
     """Link an issue to a pattern"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             INSERT INTO issue_pattern_links (issue_id, pattern_id, confidence)
             VALUES (%s, %s, %s)
@@ -430,7 +430,7 @@ Respond in JSON format:
 
 def analyze_patterns() -> Dict:
     """Analyze issue patterns and generate insights"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Get active patterns with counts
         cursor.execute('''
             SELECT ip.id, ip.pattern_name, ip.description, ip.issue_count,
@@ -531,7 +531,7 @@ def validate_issues(limit: int = 50, use_ai: bool = True, dry_run: bool = False)
     # Start validation run
     run_id = None
     if not dry_run:
-        with get_db_cursor() as cursor:
+        with get_monitoring_cursor() as cursor:
             cursor.execute('''
                 INSERT INTO validation_runs (ai_used)
                 VALUES (%s)
@@ -639,7 +639,7 @@ def validate_issues(limit: int = 50, use_ai: bool = True, dry_run: bool = False)
 
         # Complete validation run
         if not dry_run and run_id:
-            with get_db_cursor() as cursor:
+            with get_monitoring_cursor() as cursor:
                 cursor.execute('''
                     UPDATE validation_runs
                     SET completed_at = NOW(),
@@ -665,7 +665,7 @@ def validate_issues(limit: int = 50, use_ai: bool = True, dry_run: bool = False)
         results['error'] = str(e)
 
         if not dry_run and run_id:
-            with get_db_cursor() as cursor:
+            with get_monitoring_cursor() as cursor:
                 cursor.execute('''
                     UPDATE validation_runs SET status = 'failed' WHERE id = %s
                 ''', (run_id,))

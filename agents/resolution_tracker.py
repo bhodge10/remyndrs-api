@@ -26,7 +26,7 @@ from collections import defaultdict
 # Add parent directory to path for imports
 sys.path.insert(0, '.')
 
-from database import get_db_cursor, logger
+from database import get_monitoring_cursor, logger
 from config import ENVIRONMENT
 
 
@@ -93,7 +93,7 @@ HEALTH_THRESHOLDS = {
 
 def init_tracker_tables():
     """Create resolution tracker tables if they don't exist"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Resolutions table - tracks how issues were resolved
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS issue_resolutions (
@@ -163,7 +163,7 @@ def resolve_issue(issue_id: int, resolution_type: str, description: str = None,
         logger.error(f"Invalid resolution type: {resolution_type}")
         return False
 
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Insert resolution record
         cursor.execute('''
             INSERT INTO issue_resolutions (issue_id, resolution_type, description, commit_ref, resolved_by)
@@ -188,7 +188,7 @@ def resolve_issue(issue_id: int, resolution_type: str, description: str = None,
 def resolve_pattern(pattern_id: int, resolution_type: str, description: str = None,
                     resolved_by: str = 'agent3') -> bool:
     """Mark a pattern as resolved"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Insert pattern resolution
         cursor.execute('''
             INSERT INTO pattern_resolutions (pattern_id, resolution_type, description, resolved_by)
@@ -210,7 +210,7 @@ def resolve_pattern(pattern_id: int, resolution_type: str, description: str = No
 
 def get_open_issues(limit: int = 50) -> List[Dict]:
     """Get validated issues that haven't been resolved"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
                    mi.severity, mi.details, mi.detected_at, mi.validated_at,
@@ -238,7 +238,7 @@ def get_open_issues(limit: int = 50) -> List[Dict]:
 
 def get_resolved_issues(days: int = 7, limit: int = 50) -> List[Dict]:
     """Get recently resolved issues"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT mi.id, mi.issue_type, mi.severity, mi.resolved_at,
                    ir.resolution_type, ir.description, ir.commit_ref, ir.resolved_by
@@ -260,7 +260,7 @@ def get_resolved_issues(days: int = 7, limit: int = 50) -> List[Dict]:
 
 def calculate_health_metrics(days: int = 7) -> Dict:
     """Calculate system health metrics for a time period"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         metrics = {}
 
         # Total interactions
@@ -398,7 +398,7 @@ def save_health_snapshot(metrics: Dict = None):
     if metrics is None:
         metrics = calculate_health_metrics(days=1)
 
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             INSERT INTO health_snapshots (
                 snapshot_date, total_interactions, total_issues, false_positives,
@@ -438,7 +438,7 @@ def save_health_snapshot(metrics: Dict = None):
 
 def get_health_trend(days: int = 30) -> List[Dict]:
     """Get health score trend over time"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT snapshot_date, health_score, issue_rate, resolution_rate,
                    total_interactions, total_issues, open_issues
@@ -463,7 +463,7 @@ def detect_regressions() -> List[Dict]:
     """Detect patterns that were resolved but are recurring"""
     regressions = []
 
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Find patterns marked as resolved that have new issues
         cursor.execute('''
             SELECT ip.id, ip.pattern_name, pr.resolved_at,
@@ -527,7 +527,7 @@ def generate_weekly_report() -> Dict:
     report['current_health'] = current
 
     # Previous week for comparison
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT AVG(health_score), AVG(issue_rate), AVG(resolution_rate)
             FROM health_snapshots
@@ -556,7 +556,7 @@ def generate_weekly_report() -> Dict:
     report['regressions'] = detect_regressions()
 
     # Resolution breakdown
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT resolution_type, COUNT(*)
             FROM issue_resolutions
@@ -782,7 +782,7 @@ def show_dashboard():
     print()
 
     # Open issues by severity
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT severity, COUNT(*)
             FROM monitoring_issues

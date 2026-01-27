@@ -21,12 +21,12 @@ from agents.interaction_monitor import analyze_interactions, generate_report, ge
 
 def show_stats():
     """Show current monitoring stats"""
-    from database import get_db_cursor
+    from database import get_monitoring_cursor
 
     print("\n📊 MONITORING STATS")
     print("=" * 50)
 
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Total issues
         cursor.execute('SELECT COUNT(*) FROM monitoring_issues')
         total = cursor.fetchone()[0]
