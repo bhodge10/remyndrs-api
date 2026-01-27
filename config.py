@@ -36,6 +36,8 @@ try:
     PUBLIC_PHONE_NUMBER = os.environ.get("PUBLIC_PHONE_NUMBER", "+18555521950")
     ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
     DATABASE_URL = os.environ.get("DATABASE_URL")
+    # Optional: Separate DB for monitoring (allows staging to monitor production)
+    MONITORING_DATABASE_URL = os.environ.get("MONITORING_DATABASE_URL", DATABASE_URL)
 
     if not all([OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, DATABASE_URL]):
         logger.error("Missing required environment variables!")

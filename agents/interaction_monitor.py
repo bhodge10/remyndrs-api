@@ -24,7 +24,7 @@ from collections import defaultdict
 # Add parent directory to path for imports
 sys.path.insert(0, '.')
 
-from database import get_db_cursor, logger
+from database import get_monitoring_cursor, logger
 from config import ENVIRONMENT
 
 
@@ -81,7 +81,7 @@ PARSING_FAILURE_PATTERNS = [
 
 def init_monitoring_tables():
     """Create monitoring tables if they don't exist"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         # Main issues table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS monitoring_issues (
@@ -287,7 +287,7 @@ def detect_delivery_failures(hours: int) -> list:
     """Check for reminder delivery failures"""
     issues = []
 
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT id, phone_number, reminder_text, reminder_date,
                    delivery_status, error_message, created_at
@@ -335,7 +335,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
     # Start monitoring run
     run_id = None
     if not dry_run:
-        with get_db_cursor() as cursor:
+        with get_monitoring_cursor() as cursor:
             cursor.execute('''
                 INSERT INTO monitoring_runs (time_range_start, time_range_end)
                 VALUES (NOW() - INTERVAL '%s hours', NOW())
@@ -354,7 +354,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
 
     try:
         # Fetch recent logs
-        with get_db_cursor() as cursor:
+        with get_monitoring_cursor() as cursor:
             cursor.execute('''
                 SELECT id, phone_number, message_in, message_out, intent, success, created_at
                 FROM logs
@@ -368,7 +368,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
         results['logs_analyzed'] = len(logs)
 
         # Fetch recent confidence logs for correlation
-        with get_db_cursor() as cursor:
+        with get_monitoring_cursor() as cursor:
             cursor.execute('''
                 SELECT phone_number, action_type, confidence_score, threshold,
                        confirmed, user_message, created_at
@@ -433,7 +433,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
 
         # Store issues in database (skip duplicates via unique constraint)
         if not dry_run and results['issues_found']:
-            with get_db_cursor() as cursor:
+            with get_monitoring_cursor() as cursor:
                 for issue in results['issues_found']:
                     cursor.execute('''
                         INSERT INTO monitoring_issues
@@ -451,7 +451,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
 
         # Complete monitoring run
         if not dry_run and run_id:
-            with get_db_cursor() as cursor:
+            with get_monitoring_cursor() as cursor:
                 cursor.execute('''
                     UPDATE monitoring_runs
                     SET completed_at = NOW(),
@@ -469,7 +469,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
         results['error'] = str(e)
 
         if not dry_run and run_id:
-            with get_db_cursor() as cursor:
+            with get_monitoring_cursor() as cursor:
                 cursor.execute('''
                     UPDATE monitoring_runs SET status = 'failed' WHERE id = %s
                 ''', (run_id,))
@@ -553,7 +553,7 @@ def generate_report(results: dict) -> str:
 
 def get_pending_issues(limit: int = 50) -> list:
     """Get issues pending validation (for Agent 2)"""
-    with get_db_cursor() as cursor:
+    with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
                    mi.severity, mi.details, mi.detected_at,

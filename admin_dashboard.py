@@ -20,7 +20,8 @@ from database import (
     get_db_connection, return_db_connection, get_setting, set_setting,
     get_recent_logs, get_flagged_conversations, mark_analysis_reviewed,
     manual_flag_conversation, mark_conversation_good, get_good_conversations,
-    dismiss_conversation
+    dismiss_conversation,
+    get_monitoring_connection, return_monitoring_connection
 )
 from config import ADMIN_USERNAME, ADMIN_PASSWORD, logger
 from utils.validation import log_security_event
@@ -1286,7 +1287,7 @@ async def get_monitoring_issues(
     """Get detected monitoring issues (open issues by default, or all if show_all=true)"""
     conn = None
     try:
-        conn = get_db_connection()
+        conn = get_monitoring_connection()
         c = conn.cursor()
 
         if show_all:
@@ -1346,7 +1347,7 @@ async def get_monitoring_issues(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if conn:
-            return_db_connection(conn)
+            return_monitoring_connection(conn)
 
 
 @router.post("/admin/monitoring/issues/{issue_id}/validate")
@@ -1362,7 +1363,7 @@ async def validate_monitoring_issue(
         false_positive = data.get("false_positive", False)
         resolution = data.get("resolution", "")
 
-        conn = get_db_connection()
+        conn = get_monitoring_connection()
         c = conn.cursor()
         c.execute('''
             UPDATE monitoring_issues
@@ -1388,7 +1389,7 @@ async def validate_monitoring_issue(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if conn:
-            return_db_connection(conn)
+            return_monitoring_connection(conn)
 
 
 @router.post("/admin/monitoring/issues/{issue_id}/false-positive")
@@ -1399,7 +1400,7 @@ async def mark_issue_false_positive(
     """Quick endpoint to mark an issue as false positive"""
     conn = None
     try:
-        conn = get_db_connection()
+        conn = get_monitoring_connection()
         c = conn.cursor()
         c.execute('''
             UPDATE monitoring_issues
@@ -1425,7 +1426,7 @@ async def mark_issue_false_positive(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if conn:
-            return_db_connection(conn)
+            return_monitoring_connection(conn)
 
 
 @router.get("/admin/monitoring/stats")
@@ -1433,7 +1434,7 @@ async def get_monitoring_stats(admin: str = Depends(verify_admin)):
     """Get monitoring statistics"""
     conn = None
     try:
-        conn = get_db_connection()
+        conn = get_monitoring_connection()
         c = conn.cursor()
 
         stats = {}
@@ -1486,7 +1487,7 @@ async def get_monitoring_stats(admin: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if conn:
-            return_db_connection(conn)
+            return_monitoring_connection(conn)
 
 
 # =====================================================

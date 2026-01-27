@@ -6,7 +6,7 @@ Handles database initialization and connection management for PostgreSQL
 import psycopg2
 from psycopg2 import pool
 from contextlib import contextmanager
-from config import DATABASE_URL, ENCRYPTION_ENABLED, logger
+from config import DATABASE_URL, MONITORING_DATABASE_URL, ENCRYPTION_ENABLED, logger
 
 # Connection pool settings
 MIN_CONNECTIONS = 2
@@ -62,6 +62,63 @@ def get_db_cursor():
     finally:
         if conn:
             return_db_connection(conn)
+
+
+# =====================================================
+# MONITORING DATABASE CONNECTION (for staging to monitor production)
+# =====================================================
+_monitoring_pool = None
+
+def init_monitoring_pool():
+    """Initialize separate connection pool for monitoring database"""
+    global _monitoring_pool
+    try:
+        _monitoring_pool = pool.ThreadedConnectionPool(
+            1,  # Min connections
+            5,  # Max connections (smaller pool for monitoring)
+            MONITORING_DATABASE_URL
+        )
+        if MONITORING_DATABASE_URL != DATABASE_URL:
+            logger.info("Monitoring database pool initialized (separate from main DB)")
+        else:
+            logger.info("Monitoring database pool initialized (same as main DB)")
+    except Exception as e:
+        logger.error(f"Failed to initialize monitoring connection pool: {e}")
+        raise
+
+
+def get_monitoring_connection():
+    """Get a connection to the monitoring database"""
+    global _monitoring_pool
+    if _monitoring_pool is None:
+        init_monitoring_pool()
+    return _monitoring_pool.getconn()
+
+
+def return_monitoring_connection(conn):
+    """Return a monitoring connection to the pool"""
+    global _monitoring_pool
+    if _monitoring_pool and conn:
+        _monitoring_pool.putconn(conn)
+
+
+@contextmanager
+def get_monitoring_cursor():
+    """Context manager for monitoring database operations"""
+    conn = None
+    try:
+        conn = get_monitoring_connection()
+        cursor = conn.cursor()
+        yield cursor
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            return_monitoring_connection(conn)
+
 
 def init_db():
     """Initialize all database tables"""
