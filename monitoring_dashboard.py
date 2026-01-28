@@ -699,6 +699,137 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
             transition: background 0.2s;
         }}
 
+        /* Code Analysis Styles */
+        .analysis-section {{
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(52, 152, 219, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(52, 152, 219, 0.3);
+        }}
+
+        .analysis-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }}
+
+        .analysis-header h4 {{
+            margin: 0;
+            color: #3498db;
+            font-size: 0.95em;
+        }}
+
+        .confidence-badge {{
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 500;
+        }}
+
+        .confidence-high {{ background: #27ae60; color: white; }}
+        .confidence-medium {{ background: #f39c12; color: white; }}
+        .confidence-low {{ background: #95a5a6; color: white; }}
+
+        .analysis-summary {{
+            color: #fff;
+            font-size: 0.9em;
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }}
+
+        .analysis-files {{
+            color: #888;
+            font-size: 0.85em;
+        }}
+
+        .analysis-files code {{
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-right: 5px;
+            color: #e74c3c;
+        }}
+
+        .prompt-section {{
+            margin-top: 20px;
+            padding: 15px;
+            background: #1a1a2e;
+            border-radius: 10px;
+            border: 1px solid #333;
+        }}
+
+        .prompt-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }}
+
+        .prompt-header h4 {{
+            margin: 0;
+            color: #9b59b6;
+            font-size: 0.95em;
+        }}
+
+        .prompt-box {{
+            background: #0d0d1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.85em;
+            color: #e0e0e0;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }}
+
+        .copy-btn {{
+            background: #9b59b6;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 5px;
+            font-size: 0.8em;
+            cursor: pointer;
+            transition: background 0.2s;
+        }}
+
+        .copy-btn:hover {{
+            background: #8e44ad;
+        }}
+
+        .copy-btn.copied {{
+            background: #27ae60;
+        }}
+
+        .generate-btn {{
+            display: block;
+            width: 100%;
+            padding: 12px;
+            background: rgba(52, 152, 219, 0.2);
+            border: 1px dashed #3498db;
+            border-radius: 8px;
+            color: #3498db;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 15px;
+        }}
+
+        .generate-btn:hover {{
+            background: rgba(52, 152, 219, 0.3);
+        }}
+
+        .analysis-loading {{
+            text-align: center;
+            padding: 20px;
+            color: #888;
+        }}
+
         .issue-item:hover {{
             background: rgba(52, 152, 219, 0.1);
         }}
@@ -837,6 +968,35 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                         </button>
                     </div>
                 </div>
+
+                <!-- Code Analyzer Actions -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>🔍 Code Analyzer</h2>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <button class="btn btn-primary" onclick="runCodeAnalyzer()" id="runAnalyzerBtn">
+                            🤖 Run Code Analyzer
+                        </button>
+                        <button class="btn btn-secondary" onclick="showAnalyzerStats()">
+                            📈 View Analyzer Stats
+                        </button>
+                        <div id="analyzerStatsPanel" style="display: none; margin-top: 10px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9em;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="color: #888;">Total Analyses:</span>
+                                <span id="statTotalAnalyses" style="color: #fff;">-</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="color: #888;">Avg Confidence:</span>
+                                <span id="statAvgConfidence" style="color: #fff;">-</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="color: #888;">Applied Fixes:</span>
+                                <span id="statAppliedFixes" style="color: #27ae60;">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -883,6 +1043,39 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 <div class="detail-section" id="modalPatternSection" style="display: none;">
                     <div class="detail-label">Pattern Matched</div>
                     <div class="detail-code" id="modalPattern">-</div>
+                </div>
+
+                <!-- Code Analysis Section -->
+                <div id="codeAnalysisContainer">
+                    <div id="codeAnalysisLoading" class="analysis-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <p>Generating code analysis...</p>
+                    </div>
+
+                    <div id="codeAnalysisContent" style="display: none;">
+                        <div class="analysis-section">
+                            <div class="analysis-header">
+                                <h4>Root Cause Analysis</h4>
+                                <span class="confidence-badge" id="analysisConfidence">-</span>
+                            </div>
+                            <div class="analysis-summary" id="analysisSummary">-</div>
+                            <div class="analysis-files">
+                                Files to review: <span id="analysisFiles">-</span>
+                            </div>
+                        </div>
+
+                        <div class="prompt-section">
+                            <div class="prompt-header">
+                                <h4>Claude Code Prompt</h4>
+                                <button class="copy-btn" onclick="copyPrompt()">Copy</button>
+                            </div>
+                            <div class="prompt-box" id="claudePrompt">-</div>
+                        </div>
+                    </div>
+
+                    <button class="generate-btn" id="generateAnalysisBtn" onclick="generateAnalysis()">
+                        Generate Code Analysis
+                    </button>
                 </div>
             </div>
             <div class="modal-footer">
@@ -1037,12 +1230,116 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
             }}
 
             document.getElementById('issueModal').style.display = 'flex';
+
+            // Load code analysis for this issue
+            loadCodeAnalysis(issueId);
+        }}
+
+        // Load code analysis for an issue
+        async function loadCodeAnalysis(issueId) {{
+            const container = document.getElementById('codeAnalysisContainer');
+            const loading = document.getElementById('codeAnalysisLoading');
+            const content = document.getElementById('codeAnalysisContent');
+            const generateBtn = document.getElementById('generateAnalysisBtn');
+
+            // Reset state
+            content.style.display = 'none';
+            loading.style.display = 'none';
+            generateBtn.style.display = 'block';
+
+            try {{
+                // Try to get existing analysis (don't generate if not exists)
+                const response = await fetch(`/admin/analyzer/issue/${{issueId}}`);
+                if (response.ok) {{
+                    const analysis = await response.json();
+                    displayCodeAnalysis(analysis);
+                }}
+                // If 404, no analysis exists yet - show generate button
+            }} catch (e) {{
+                console.log('No existing analysis found');
+            }}
+        }}
+
+        // Display code analysis in modal
+        function displayCodeAnalysis(analysis) {{
+            const content = document.getElementById('codeAnalysisContent');
+            const generateBtn = document.getElementById('generateAnalysisBtn');
+
+            // Set confidence badge
+            const confidenceBadge = document.getElementById('analysisConfidence');
+            const confidence = analysis.confidence_score || 50;
+            let confClass = 'confidence-low';
+            let confText = 'Low';
+            if (confidence >= 80) {{ confClass = 'confidence-high'; confText = 'High'; }}
+            else if (confidence >= 60) {{ confClass = 'confidence-medium'; confText = 'Medium'; }}
+            confidenceBadge.className = 'confidence-badge ' + confClass;
+            confidenceBadge.textContent = confText + ' (' + confidence + '%)';
+
+            // Set summary
+            document.getElementById('analysisSummary').textContent =
+                analysis.root_cause_summary || 'Analysis not available';
+
+            // Set files
+            const files = analysis.likely_files || [];
+            document.getElementById('analysisFiles').innerHTML =
+                files.map(f => `<code>${{f}}</code>`).join('') || 'No files identified';
+
+            // Set Claude prompt
+            document.getElementById('claudePrompt').textContent =
+                analysis.claude_prompt || 'No prompt available';
+
+            // Show content, hide generate button
+            content.style.display = 'block';
+            generateBtn.style.display = 'none';
+        }}
+
+        // Generate code analysis
+        async function generateAnalysis() {{
+            if (!currentIssueId) return;
+
+            const loading = document.getElementById('codeAnalysisLoading');
+            const generateBtn = document.getElementById('generateAnalysisBtn');
+
+            loading.style.display = 'block';
+            generateBtn.style.display = 'none';
+
+            try {{
+                const analysis = await fetchAPI(`/admin/analyzer/issue/${{currentIssueId}}?force=true`);
+                displayCodeAnalysis(analysis);
+                loading.style.display = 'none';
+                showToast('Analysis generated', 'success');
+            }} catch (e) {{
+                loading.style.display = 'none';
+                generateBtn.style.display = 'block';
+                showToast('Failed to generate analysis', 'error');
+            }}
+        }}
+
+        // Copy Claude prompt to clipboard
+        async function copyPrompt() {{
+            const prompt = document.getElementById('claudePrompt').textContent;
+            try {{
+                await navigator.clipboard.writeText(prompt);
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {{
+                    btn.textContent = 'Copy';
+                    btn.classList.remove('copied');
+                }}, 2000);
+            }} catch (e) {{
+                showToast('Failed to copy', 'error');
+            }}
         }}
 
         // Close modal
         function closeIssueModal() {{
             document.getElementById('issueModal').style.display = 'none';
             currentIssueId = null;
+            // Reset code analysis section
+            document.getElementById('codeAnalysisContent').style.display = 'none';
+            document.getElementById('codeAnalysisLoading').style.display = 'none';
+            document.getElementById('generateAnalysisBtn').style.display = 'block';
         }}
 
         // Mark as false positive
@@ -1319,6 +1616,46 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 showToast(`Report ready: Health ${{Math.round(data.current_health?.health_score || 0)}}`, 'success');
             }} catch (e) {{
                 showToast('Failed to generate report', 'error');
+            }}
+        }}
+
+        // Code Analyzer Actions
+        async function runCodeAnalyzer() {{
+            const btn = document.getElementById('runAnalyzerBtn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⏳ Analyzing...';
+            btn.disabled = true;
+
+            try {{
+                const data = await fetchAPI('/admin/analyzer/run?use_ai=true');
+                showToast(`Analyzer complete: ${{data.analyses_generated}} analyses generated for ${{data.issues_analyzed}} issues`, 'success');
+                // Refresh analyzer stats
+                showAnalyzerStats();
+            }} catch (e) {{
+                showToast('Code analyzer failed', 'error');
+            }} finally {{
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }}
+        }}
+
+        async function showAnalyzerStats() {{
+            const panel = document.getElementById('analyzerStatsPanel');
+            const isVisible = panel.style.display !== 'none';
+
+            if (isVisible) {{
+                panel.style.display = 'none';
+                return;
+            }}
+
+            try {{
+                const data = await fetchAPI('/admin/analyzer/stats');
+                document.getElementById('statTotalAnalyses').textContent = data.total_analyses || 0;
+                document.getElementById('statAvgConfidence').textContent = (data.avg_confidence || 0) + '%';
+                document.getElementById('statAppliedFixes').textContent = data.by_status?.applied || 0;
+                panel.style.display = 'block';
+            }} catch (e) {{
+                showToast('Failed to load analyzer stats', 'error');
             }}
         }}
 

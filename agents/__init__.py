@@ -1,7 +1,7 @@
 """
 Multi-Agent Monitoring System for Remyndrs
 
-A lightweight pipeline for detecting, validating, and tracking issues
+A lightweight pipeline for detecting, validating, tracking, and analyzing issues
 in user interactions. Designed for small teams with limited resources.
 
 AGENTS:
@@ -29,9 +29,17 @@ Agent 3: Resolution Tracker (resolution_tracker.py)
     - Generates weekly health reports
     - Run: python -m agents.resolution_tracker
 
+Agent 4: Code Analyzer (code_analyzer.py)
+    Analyzes issues and generates actionable fix prompts.
+    - Maps issue types to likely code locations
+    - Identifies root causes using rules + optional AI
+    - Generates Claude Code prompts for fixes
+    - Dashboard integration for one-click analysis
+    - Run: python -m agents.code_analyzer
+
 PIPELINE:
 =========
-Run all three agents in sequence:
+Run all four agents in sequence:
     python agents/run_pipeline.py
     python agents/run_pipeline.py --hours 48 --snapshot  # With daily snapshot
 
@@ -39,6 +47,7 @@ Quick runners:
     python agents/run_monitor.py       # Agent 1 only
     python agents/run_validator.py     # Agent 2 only
     python agents/run_tracker.py       # Agent 3 dashboard
+    python -m agents.code_analyzer     # Agent 4 only
 
 Scheduled job (recommended daily):
     python agents/run_pipeline.py --snapshot
@@ -65,6 +74,13 @@ Agent 3 - Tracker:
     POST /admin/tracker/snapshot         - Save daily snapshot
     GET  /admin/tracker/resolution-types - Available resolution types
 
+Agent 4 - Code Analyzer:
+    GET  /admin/analyzer/issue/{id}      - Get/generate analysis for issue
+    GET  /admin/analyzer/pattern/{id}    - Get/generate analysis for pattern
+    GET  /admin/analyzer/run             - Run code analyzer on unanalyzed issues
+    POST /admin/analyzer/{id}/applied    - Mark analysis fix as applied
+    GET  /admin/analyzer/stats           - Code analyzer statistics
+
 DATABASE TABLES:
 ================
 Agent 1:
@@ -80,6 +96,10 @@ Agent 3:
     issue_resolutions    - How issues were resolved
     pattern_resolutions  - How patterns were addressed
     health_snapshots     - Daily health metrics
+
+Agent 4:
+    code_analysis        - Root cause analyses and Claude prompts
+    code_analysis_runs   - Analysis run audit trail
 
 RESOLUTION TYPES:
 =================
@@ -97,3 +117,4 @@ RESOLUTION TYPES:
 from agents.interaction_monitor import analyze_interactions, get_pending_issues
 from agents.issue_validator import validate_issues, analyze_patterns
 from agents.resolution_tracker import calculate_health_metrics, resolve_issue, generate_weekly_report
+from agents.code_analyzer import analyze_issue, run_code_analysis, get_existing_analysis

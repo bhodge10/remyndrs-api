@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """
 Multi-Agent Monitoring Pipeline Runner
-Runs all three agents in sequence:
+Runs all four agents in sequence:
   Agent 1: Interaction Monitor - Detect anomalies
   Agent 2: Issue Validator - Validate and categorize
   Agent 3: Resolution Tracker - Track health and report
+  Agent 4: Code Analyzer - Identify root causes and generate fix prompts
 
 Usage:
     python agents/run_pipeline.py              # Full pipeline
@@ -29,6 +30,7 @@ def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False, sa
     from agents.interaction_monitor import analyze_interactions, generate_report as monitor_report
     from agents.issue_validator import validate_issues, generate_report as validator_report, analyze_patterns
     from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot, get_open_issues, detect_regressions
+    from agents.code_analyzer import run_code_analysis, generate_report as analyzer_report
 
     print("=" * 70)
     print("  REMYNDRS MONITORING PIPELINE")
@@ -150,6 +152,34 @@ def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False, sa
     print()
 
     # ========================================
+    # AGENT 4: Code Analyzer
+    # ========================================
+    print("┌" + "─" * 68 + "┐")
+    print("│ AGENT 4: Code Analyzer" + " " * 44 + "│")
+    print("└" + "─" * 68 + "┘")
+
+    # Run code analysis on unanalyzed issues
+    analyzer_results = run_code_analysis(use_ai=use_ai, dry_run=dry_run)
+
+    print(f"\n  ✓ Issues analyzed: {analyzer_results['issues_analyzed']}")
+    print(f"  ✓ Analyses generated: {analyzer_results['analyses_generated']}")
+
+    if analyzer_results.get('analyses'):
+        print("\n  Code analyses created:")
+        for analysis in analyzer_results['analyses'][:3]:
+            confidence = analysis.get('confidence_score', 0)
+            conf_icon = '🟢' if confidence >= 80 else '🟡' if confidence >= 60 else '🔴'
+            print(f"    {conf_icon} Issue #{analysis.get('issue_id', 'N/A')}: {analysis['root_cause_summary'][:50]}...")
+
+        if len(analyzer_results['analyses']) > 3:
+            print(f"    ... and {len(analyzer_results['analyses']) - 3} more")
+
+    if analyzer_results.get('errors'):
+        print(f"\n  ⚠️  Errors: {len(analyzer_results['errors'])}")
+
+    print()
+
+    # ========================================
     # SUMMARY
     # ========================================
     print("┌" + "─" * 68 + "┐")
@@ -197,6 +227,7 @@ def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False, sa
     return {
         'monitor': monitor_results,
         'validator': validator_results,
+        'analyzer': analyzer_results,
         'health': health,
         'patterns': patterns
     }

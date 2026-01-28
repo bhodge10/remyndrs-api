@@ -97,6 +97,17 @@ beat_schedule = {
         },
     },
 
+    # Run code analyzer (Agent 4) every 8 hours
+    # Generates root cause analyses and Claude Code prompts for open issues
+    "monitoring-agent4-analyze": {
+        "task": "tasks.monitoring_tasks.run_code_analyzer",
+        "schedule": timedelta(hours=8),
+        "kwargs": {"use_ai": True},
+        "options": {
+            "expires": 1800,  # 30 minute expiry
+        },
+    },
+
     # Save daily health snapshot at midnight UTC
     # Ensures consistent trend data even if pipeline fails
     "monitoring-daily-snapshot": {
@@ -128,6 +139,7 @@ beat_schedule = {
 # check_critical_issues     | Every 1 hour     | Quick alert for urgent issues
 # run_interaction_monitor   | Every 4 hours    | Agent 1: Detect anomalies
 # run_issue_validator       | Every 6 hours    | Agent 2: Validate (no AI)
+# run_code_analyzer         | Every 8 hours    | Agent 4: Root cause analysis
 # run_monitoring_pipeline   | Daily 6 AM UTC   | Full pipeline with AI
 # save_daily_health_snapshot| Daily 12:05 AM   | Trend tracking
 # generate_weekly_report    | Monday 8 AM UTC  | Weekly summary
