@@ -158,8 +158,62 @@ def init_analyzer_tables():
         logger.info("Code analyzer tables initialized")
 
 
+def get_conversation_context(phone_number: str, log_id: int, context_size: int = 10) -> List[Dict]:
+    """
+    Get conversation context - messages leading up to and including the issue.
+
+    Args:
+        phone_number: User's phone number
+        log_id: The log ID of the issue (to find messages up to this point)
+        context_size: Number of messages to retrieve (default 10)
+
+    Returns:
+        List of messages in chronological order (oldest first)
+    """
+    from database import get_db_connection, return_db_connection
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get messages from the same phone number up to and including the issue log
+        # Order by created_at DESC to get most recent first, then reverse for chronological
+        cursor.execute('''
+            SELECT id, message_in, message_out, intent, created_at
+            FROM logs
+            WHERE phone_number = %s
+              AND id <= %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        ''', (phone_number, log_id, context_size))
+
+        rows = cursor.fetchall()
+
+        # Reverse to get chronological order (oldest first)
+        messages = []
+        for row in reversed(rows):
+            messages.append({
+                'log_id': row[0],
+                'user': row[1],
+                'bot': row[2],
+                'intent': row[3],
+                'timestamp': row[4].isoformat() if row[4] else None,
+                'is_issue': row[0] == log_id  # Mark which message is the issue
+            })
+
+        return messages
+
+    except Exception as e:
+        logger.error(f"Error getting conversation context: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_issue_details(issue_id: int) -> Optional[Dict]:
-    """Get full issue details for analysis"""
+    """Get full issue details for analysis including conversation context"""
     with get_monitoring_cursor() as cursor:
         cursor.execute('''
             SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
@@ -175,7 +229,7 @@ def get_issue_details(issue_id: int) -> Optional[Dict]:
         if not row:
             return None
 
-        return {
+        issue = {
             'id': row[0],
             'log_id': row[1],
             'phone_number': row[2],
@@ -188,8 +242,19 @@ def get_issue_details(issue_id: int) -> Optional[Dict]:
             'false_positive': row[9],
             'message_in': row[10],
             'message_out': row[11],
-            'intent': row[12]
+            'intent': row[12],
+            'conversation': []
         }
+
+        # Get conversation context if we have phone number and log_id
+        if issue['phone_number'] and issue['log_id']:
+            issue['conversation'] = get_conversation_context(
+                issue['phone_number'],
+                issue['log_id'],
+                context_size=10
+            )
+
+        return issue
 
 
 def get_pattern_details(pattern_id: int) -> Optional[Dict]:
@@ -427,6 +492,23 @@ def generate_ai_analysis(issue: Dict) -> Dict:
     issue_type = issue.get('issue_type', 'unknown')
     mapping = ISSUE_CODE_MAPPINGS.get(issue_type, DEFAULT_CODE_MAPPING)
     details = issue.get('details') or {}
+    conversation = issue.get('conversation', [])
+
+    # Build conversation context for AI
+    conversation_text = ""
+    if conversation:
+        conversation_text = "\nCONVERSATION HISTORY (oldest to newest):\n"
+        for i, msg in enumerate(conversation, 1):
+            marker = " [THIS IS THE ISSUE]" if msg.get('is_issue') else ""
+            conversation_text += f"\n{i}. User: \"{msg.get('user', 'N/A')}\"{marker}\n"
+            conversation_text += f"   Bot: \"{msg.get('bot', 'N/A')}\"\n"
+            if msg.get('intent'):
+                conversation_text += f"   Intent: {msg['intent']}\n"
+    else:
+        conversation_text = f"""
+USER MESSAGE: "{issue.get('message_in', 'N/A')}"
+BOT RESPONSE: "{issue.get('message_out', 'N/A')}"
+"""
 
     prompt = f"""Analyze this issue from an SMS reminder service and identify the root cause.
 
@@ -435,17 +517,20 @@ ISSUE DETAILS:
 - Severity: {issue.get('severity', 'unknown')}
 - Intent detected: {issue.get('intent', 'N/A')}
 - Pattern matched: {details.get('pattern_matched', 'N/A')}
-
-USER MESSAGE: "{issue.get('message_in', 'N/A')}"
-BOT RESPONSE: "{issue.get('message_out', 'N/A')}"
-
+{conversation_text}
 LIKELY CODE AREAS: {', '.join(mapping['files'])}
 KNOWN ISSUES IN THIS AREA: {mapping['description']}
+
+Review the conversation history to understand the full context. The issue may be caused by:
+- Previous messages setting incorrect state
+- Multi-turn conversation handling problems
+- Context not being preserved between messages
+- User getting confused by earlier bot responses
 
 Provide a brief analysis in JSON format:
 {{
     "root_cause_summary": "One sentence summary of the likely root cause",
-    "root_cause_details": "2-3 sentences with specific details about what went wrong",
+    "root_cause_details": "2-3 sentences with specific details about what went wrong, referencing the conversation flow if relevant",
     "likely_files": ["file1.py", "file2.py"],
     "confidence": 50-100,
     "recommended_fix": "Brief description of how to fix it"
@@ -495,6 +580,24 @@ Provide a brief analysis in JSON format:
         return generate_rule_based_analysis(issue)
 
 
+def format_conversation_chain(conversation: List[Dict]) -> str:
+    """Format conversation chain for display in prompts"""
+    if not conversation:
+        return "No conversation history available."
+
+    lines = []
+    for i, msg in enumerate(conversation, 1):
+        marker = " **[ISSUE]**" if msg.get('is_issue') else ""
+        lines.append(f"### Message {i}{marker}")
+        lines.append(f"**User:** {msg.get('user', 'N/A')}")
+        lines.append(f"**Bot:** {msg.get('bot', 'N/A')}")
+        if msg.get('intent'):
+            lines.append(f"*Intent: {msg['intent']}*")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def generate_claude_prompt(issue: Dict, mapping: Dict,
                            root_cause_summary: str = '',
                            recommended_fix: str = '') -> str:
@@ -503,13 +606,25 @@ def generate_claude_prompt(issue: Dict, mapping: Dict,
     details = issue.get('details') or {}
     message_in = issue.get('message_in', 'N/A')
     message_out = issue.get('message_out', 'N/A')
+    conversation = issue.get('conversation', [])
 
     prompt = f"""## Issue Summary
 {issue_type.replace('_', ' ').title()}: {root_cause_summary}
 
-User: "{message_in}"
-Bot: "{message_out}"
+## Conversation Context
+"""
 
+    # Add full conversation chain if available
+    if conversation and len(conversation) > 1:
+        prompt += f"*Showing {len(conversation)} messages leading up to the issue:*\n\n"
+        prompt += format_conversation_chain(conversation)
+    else:
+        # Fallback to single message display
+        prompt += f"""**User:** "{message_in}"
+**Bot:** "{message_out}"
+"""
+
+    prompt += f"""
 ## Root Cause Analysis
 {root_cause_summary}
 """
@@ -679,7 +794,7 @@ def run_code_analysis(hours: int = 24, use_ai: bool = True, dry_run: bool = Fals
     }
 
     try:
-        # Get unanalyzed issues
+        # Get unanalyzed issues (basic info)
         issues = get_unanalyzed_issues(limit=20)
         results['issues_analyzed'] = len(issues)
 
@@ -688,8 +803,14 @@ def run_code_analysis(hours: int = 24, use_ai: bool = True, dry_run: bool = Fals
             return results
 
         # Analyze each issue
-        for issue in issues:
+        for basic_issue in issues:
             try:
+                # Fetch full issue details including conversation context
+                issue = get_issue_details(basic_issue['id'])
+                if not issue:
+                    logger.warning(f"Could not fetch details for issue #{basic_issue['id']}")
+                    issue = basic_issue  # Fall back to basic info
+
                 if use_ai:
                     analysis = generate_ai_analysis(issue)
                 else:
@@ -697,19 +818,19 @@ def run_code_analysis(hours: int = 24, use_ai: bool = True, dry_run: bool = Fals
 
                 if not dry_run:
                     analysis_id = save_analysis(
-                        issue_id=issue['id'],
+                        issue_id=basic_issue['id'],
                         **analysis
                     )
                     analysis['id'] = analysis_id
 
-                analysis['issue_id'] = issue['id']
+                analysis['issue_id'] = basic_issue['id']
                 results['analyses'].append(analysis)
                 results['analyses_generated'] += 1
 
             except Exception as e:
-                logger.error(f"Failed to analyze issue #{issue['id']}: {e}")
+                logger.error(f"Failed to analyze issue #{basic_issue['id']}: {e}")
                 results['errors'].append({
-                    'issue_id': issue['id'],
+                    'issue_id': basic_issue['id'],
                     'error': str(e)
                 })
 
