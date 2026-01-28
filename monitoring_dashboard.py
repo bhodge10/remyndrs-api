@@ -1157,15 +1157,14 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 const list = document.getElementById('issueList');
                 const issues = data.issues || [];
 
-                // Filter to unresolved issues only
-                const openIssues = issues.filter(i => !i.resolution);
-                document.getElementById('issueCount').textContent = openIssues.length;
+                // SQL already filters to open issues (validated, not false positive, not resolved)
+                document.getElementById('issueCount').textContent = issues.length;
 
                 // Store for modal access
                 issuesData = {{}};
-                openIssues.forEach(i => issuesData[i.id] = i);
+                issues.forEach(i => issuesData[i.id] = i);
 
-                if (openIssues.length === 0) {{
+                if (issues.length === 0) {{
                     list.innerHTML = `
                         <div class="empty-state">
                             <div class="icon">✅</div>
@@ -1175,7 +1174,7 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                     return;
                 }}
 
-                list.innerHTML = openIssues.map(issue => `
+                list.innerHTML = issues.map(issue => `
                     <div class="issue-item" onclick="showIssueDetail(${{issue.id}})">
                         <div class="issue-severity ${{issue.severity}}"></div>
                         <div class="issue-content">
