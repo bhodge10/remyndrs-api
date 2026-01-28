@@ -1307,7 +1307,8 @@ async def get_monitoring_issues(
                 LIMIT %s
             ''', (limit,))
         else:
-            # Show open issues: not false positive, not resolved
+            # Show open issues: validated, not false positive, not resolved
+            # Must match health card criteria from resolution_tracker.py
             c.execute('''
                 SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
                        mi.severity, mi.details, mi.detected_at, mi.validated,
@@ -1315,7 +1316,9 @@ async def get_monitoring_issues(
                        l.message_in, l.message_out
                 FROM monitoring_issues mi
                 LEFT JOIN logs l ON mi.log_id = l.id
-                WHERE mi.false_positive = FALSE AND mi.resolution IS NULL
+                WHERE mi.validated = TRUE
+                  AND mi.false_positive = FALSE
+                  AND mi.resolved_at IS NULL
                 ORDER BY
                     CASE mi.severity
                         WHEN 'critical' THEN 0
