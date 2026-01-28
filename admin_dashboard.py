@@ -1871,6 +1871,10 @@ async def get_analyzer_stats(admin: str = Depends(verify_admin)):
     """Get code analyzer statistics"""
     conn = None
     try:
+        # Ensure tables exist
+        from agents.code_analyzer import init_analyzer_tables
+        init_analyzer_tables()
+
         conn = get_monitoring_connection()
         c = conn.cursor()
 
