@@ -170,15 +170,50 @@ def get_conversation_context(phone_number: str, log_id: int, context_size: int =
     Returns:
         List of messages in chronological order (oldest first)
     """
-    from database import get_db_connection, return_db_connection
+    from database import get_db_connection, return_db_connection, get_monitoring_connection, return_monitoring_connection
 
+    messages = []
+
+    # Try monitoring database first (used in staging where logs may be there)
+    try:
+        conn = get_monitoring_connection()
+        cursor = conn.cursor()
+
+        # Get messages from the same phone number up to and including the issue log
+        cursor.execute('''
+            SELECT id, message_in, message_out, intent, created_at
+            FROM logs
+            WHERE phone_number = %s
+              AND id <= %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        ''', (phone_number, log_id, context_size))
+
+        rows = cursor.fetchall()
+        return_monitoring_connection(conn)
+
+        if rows:
+            # Reverse to get chronological order (oldest first)
+            for row in reversed(rows):
+                messages.append({
+                    'log_id': row[0],
+                    'user': row[1],
+                    'bot': row[2],
+                    'intent': row[3],
+                    'timestamp': row[4].isoformat() if row[4] else None,
+                    'is_issue': row[0] == log_id
+                })
+            return messages
+
+    except Exception as e:
+        logger.warning(f"Could not get conversation from monitoring DB: {e}")
+
+    # Fall back to main database
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Get messages from the same phone number up to and including the issue log
-        # Order by created_at DESC to get most recent first, then reverse for chronological
         cursor.execute('''
             SELECT id, message_in, message_out, intent, created_at
             FROM logs
@@ -191,7 +226,6 @@ def get_conversation_context(phone_number: str, log_id: int, context_size: int =
         rows = cursor.fetchall()
 
         # Reverse to get chronological order (oldest first)
-        messages = []
         for row in reversed(rows):
             messages.append({
                 'log_id': row[0],
@@ -199,7 +233,7 @@ def get_conversation_context(phone_number: str, log_id: int, context_size: int =
                 'bot': row[2],
                 'intent': row[3],
                 'timestamp': row[4].isoformat() if row[4] else None,
-                'is_issue': row[0] == log_id  # Mark which message is the issue
+                'is_issue': row[0] == log_id
             })
 
         return messages
