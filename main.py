@@ -551,7 +551,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         confirmation_msg = pending_confirmation.get('confirmation')
 
                         user_tz_str = get_user_timezone(phone_number)
-                        reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date, user_tz_str)
+                        tz = pytz.timezone(user_tz_str)
+                        naive_dt = datetime.strptime(reminder_date, '%Y-%m-%d %H:%M:%S')
+                        local_time_str = naive_dt.strftime('%H:%M')
+                        aware_dt = tz.localize(naive_dt)
+                        utc_dt = aware_dt.astimezone(pytz.UTC)
+                        reminder_date_utc = utc_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                        reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date_utc, local_time_str, user_tz_str)
 
                         if reminder_id:
                             reply_text = confirmation_msg or f"Got it! I'll remind you about {reminder_text}."
@@ -563,31 +570,44 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     elif action == 'reminder_relative':
                         # Relative time reminder
                         reminder_text = pending_confirmation.get('reminder_text')
-                        offset_minutes = pending_confirmation.get('offset_minutes')
-                        offset_days = pending_confirmation.get('offset_days')
-                        offset_weeks = pending_confirmation.get('offset_weeks')
-                        offset_months = pending_confirmation.get('offset_months')
-
                         user_tz_str = get_user_timezone(phone_number)
-                        tz = pytz.timezone(user_tz_str)
-                        now_local = datetime.now(tz)
 
-                        if offset_minutes:
-                            reminder_dt = now_local + timedelta(minutes=offset_minutes)
-                        elif offset_days:
-                            reminder_dt = now_local + timedelta(days=offset_days)
-                        elif offset_weeks:
-                            reminder_dt = now_local + timedelta(weeks=offset_weeks)
-                        elif offset_months:
-                            reminder_dt = now_local + timedelta(days=offset_months * 30)
-                        else:
-                            reminder_dt = now_local + timedelta(hours=1)
+                        # Use pre-calculated UTC datetime if available (avoids time drift)
+                        reminder_date_utc = pending_confirmation.get('reminder_datetime_utc')
+                        local_time_str = pending_confirmation.get('local_time')
 
-                        reminder_date_str = reminder_dt.strftime('%Y-%m-%d %H:%M:%S')
-                        reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date_str, user_tz_str)
+                        if not reminder_date_utc or not local_time_str:
+                            # Fallback: recalculate from offsets
+                            offset_minutes = pending_confirmation.get('offset_minutes')
+                            offset_days = pending_confirmation.get('offset_days')
+                            offset_weeks = pending_confirmation.get('offset_weeks')
+                            offset_months = pending_confirmation.get('offset_months')
+
+                            tz = pytz.timezone(user_tz_str)
+                            now_local = datetime.now(tz)
+
+                            if offset_minutes:
+                                reminder_dt = now_local + timedelta(minutes=offset_minutes)
+                            elif offset_days:
+                                reminder_dt = now_local + timedelta(days=offset_days)
+                            elif offset_weeks:
+                                reminder_dt = now_local + timedelta(weeks=offset_weeks)
+                            elif offset_months:
+                                reminder_dt = now_local + timedelta(days=offset_months * 30)
+                            else:
+                                reminder_dt = now_local + timedelta(hours=1)
+
+                            local_time_str = reminder_dt.strftime('%H:%M')
+                            reminder_date_utc = reminder_dt.astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')
+
+                        reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date_utc, local_time_str, user_tz_str)
 
                         if reminder_id:
-                            readable_date = reminder_dt.strftime('%A, %B %d, %Y at %-I:%M %p')
+                            tz = pytz.timezone(user_tz_str)
+                            utc_dt = datetime.strptime(reminder_date_utc, '%Y-%m-%d %H:%M:%S')
+                            utc_dt = pytz.UTC.localize(utc_dt)
+                            local_dt = utc_dt.astimezone(tz)
+                            readable_date = local_dt.strftime('%A, %B %d, %Y at %-I:%M %p')
                             reply_text = f"Got it! I'll remind you on {readable_date} {format_reminder_confirmation(reminder_text)}."
                             log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", True)
                         else:
