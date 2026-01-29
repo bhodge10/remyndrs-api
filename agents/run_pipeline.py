@@ -32,7 +32,7 @@ def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False,
     """Run the complete monitoring pipeline"""
     from agents.interaction_monitor import analyze_interactions, generate_report as monitor_report
     from agents.issue_validator import validate_issues, generate_report as validator_report, analyze_patterns
-    from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot, get_open_issues, detect_regressions
+    from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot, get_open_issues, detect_regressions, auto_resolve_stale_issues
 
     print("=" * 70)
     print("  REMYNDRS MONITORING PIPELINE")
@@ -145,6 +145,15 @@ def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False,
             print(f"\n  ⚠️  REGRESSIONS DETECTED: {len(regressions)}")
             for r in regressions[:3]:
                 print(f"    • {r['pattern_name']}: {r['new_issues_since']} new issues since fix")
+
+        # Auto-resolve stale issues
+        auto_resolved = auto_resolve_stale_issues()
+        if auto_resolved:
+            print(f"\n  ✅ AUTO-RESOLVED: {len(auto_resolved)} stale issues")
+            for ar in auto_resolved[:3]:
+                print(f"    • #{ar['issue_id']} {ar['issue_type']} [{ar['severity']}]")
+            if len(auto_resolved) > 3:
+                print(f"    ... and {len(auto_resolved) - 3} more")
 
     # Save snapshot if requested
     if save_snapshot and not dry_run:

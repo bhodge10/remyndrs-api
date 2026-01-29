@@ -64,7 +64,7 @@ def run_monitoring_pipeline(self, hours: int = 24, use_ai: bool = True, save_sna
 
         from agents.interaction_monitor import analyze_interactions
         from agents.issue_validator import validate_issues
-        from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot, detect_regressions
+        from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot, detect_regressions, auto_resolve_stale_issues
 
         results = {
             'started_at': datetime.utcnow().isoformat(),
@@ -101,13 +101,15 @@ def run_monitoring_pipeline(self, hours: int = 24, use_ai: bool = True, save_sna
         logger.info("Running Agent 3: Resolution Tracker")
         health = calculate_health_metrics(days=7)
         regressions = detect_regressions()
+        auto_resolved = auto_resolve_stale_issues()
 
         results['agent3'] = {
             'health_score': health['health_score'],
             'health_status': health['health_status'],
             'issue_rate': health['issue_rate'],
             'open_issues': health['open_issues'],
-            'regressions': len(regressions)
+            'regressions': len(regressions),
+            'auto_resolved': len(auto_resolved)
         }
 
         if save_snapshot:
@@ -115,6 +117,9 @@ def run_monitoring_pipeline(self, hours: int = 24, use_ai: bool = True, save_sna
             logger.info("Daily health snapshot saved")
 
         logger.info(f"Agent 3 complete: health={health['health_score']:.0f}/100 ({health['health_status']})")
+
+        if auto_resolved:
+            logger.info(f"Agent 3 auto-resolved {len(auto_resolved)} stale issues")
 
         # Log summary
         results['completed_at'] = datetime.utcnow().isoformat()
