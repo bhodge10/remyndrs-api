@@ -515,7 +515,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # Skip this if it's a new reminder request, undo command, or has pending confirmations
         pending_delete_check = get_pending_reminder_delete(phone_number)
         pending_confirm_check = get_pending_reminder_confirmation(phone_number)
-        has_pending_state = pending_delete_check or pending_confirm_check
+        has_pending_state = pending_delete_check or (pending_confirm_check and pending_confirm_check.get('type') != 'summary_undo')
 
         if not is_new_reminder_request and not is_undo_command and not has_pending_state:
             handled, response_text = handle_daily_summary_response(phone_number, incoming_msg)
@@ -530,7 +530,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # Check if user is responding to a confirmation request for a low-confidence reminder
         pending_confirmation = get_pending_reminder_confirmation(phone_number)
-        if pending_confirmation and not is_new_reminder_request:
+        if pending_confirmation and pending_confirmation.get('type') != 'summary_undo' and not is_new_reminder_request:
             msg_lower = incoming_msg.strip().lower()
 
             # User confirms the reminder is correct
@@ -2684,7 +2684,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
         # Check for low-confidence reminder confirmation
         pending_confirm_check = get_pending_reminder_confirmation(phone_number)
-        if pending_confirm_check:
+        if pending_confirm_check and pending_confirm_check.get('type') != 'summary_undo':
             pending_states['reminder_confirmation'] = pending_confirm_check
 
         # If user wants to cancel, clear all pending states
