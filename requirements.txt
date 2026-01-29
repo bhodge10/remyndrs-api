@@ -12,6 +12,10 @@ celery[redis]>=5.3.0
 redis>=5.0.0
 stripe>=7.0.0
 
+# Agent 4: Fix Planner dependencies
+anthropic>=0.18.0
+pyperclip>=1.8.0
+
 # Testing dependencies
 pytest>=7.4.0
 pytest-asyncio>=0.21.0

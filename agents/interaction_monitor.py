@@ -74,6 +74,20 @@ PARSING_FAILURE_PATTERNS = [
     r'not sure (what|how) to',
 ]
 
+# "Not found" responses - system tried an action but couldn't find the target
+# These often indicate misclassified intent (e.g., user asked to change a setting
+# but system searched for a reminder instead)
+NOT_FOUND_PATTERNS = [
+    r'no pending reminders found matching',
+    r'no reminders found matching',
+    r'no memories found matching',
+    r'couldn\'t find a list called',
+    r'couldn\'t find \'.*?\' in your lists',
+    r'couldn\'t find \'.*?\' to unmark',
+    r'couldn\'t find that reminder',
+    r'item #\d+ not found',
+]
+
 
 # ============================================================================
 # DATABASE SCHEMA
@@ -259,6 +273,30 @@ def detect_failed_action(log: dict) -> Optional[dict]:
     return None
 
 
+def detect_not_found_response(log: dict) -> Optional[dict]:
+    """Detect when system responded with 'not found' after attempting an action.
+
+    These indicate the system tried to act on something that doesn't exist,
+    which is often a sign of misclassified intent (e.g., user asked to change
+    a setting but the system searched for a reminder instead).
+    """
+    msg_out = log['message_out'].lower()
+
+    for pattern in NOT_FOUND_PATTERNS:
+        if re.search(pattern, msg_out, re.IGNORECASE):
+            return {
+                'issue_type': 'action_not_found',
+                'severity': 'medium',
+                'details': {
+                    'pattern_matched': pattern,
+                    'user_message': log['message_in'][:200],
+                    'our_response': log['message_out'][:200],
+                    'intent': log.get('intent')
+                }
+            }
+    return None
+
+
 def detect_low_confidence_rejection(log: dict, confidence_logs: list) -> Optional[dict]:
     """Detect when user rejected a low-confidence interpretation"""
     # Look for rejections in confidence logs for this user around this time
@@ -424,6 +462,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
             detect_parsing_failure,
             detect_timezone_issue,
             detect_failed_action,
+            detect_not_found_response,
         ]
 
         seen_issues = set()  # Avoid duplicates
@@ -549,6 +588,7 @@ def generate_report(results: dict) -> str:
                 'parsing_failure': '🔍',
                 'confidence_rejection': '🎯',
                 'repeated_attempts': '🔄',
+                'action_not_found': '🔎',
             }.get(issue_type, '•')
             lines.append(f"  {icon} {issue_type}: {count}")
         lines.append("")

@@ -309,6 +309,23 @@ WHEN TO USE update_reminder:
 - "change my 9am reminder to 10am" → search_term: text of the 9am reminder, new_time: "10:00 AM"
 - "update the call mom reminder to 5pm" → search_term: "call mom", new_time: "5:00 PM"
 IMPORTANT: Use update_reminder when user wants to CHANGE/MODIFY/RESCHEDULE/MOVE an existing reminder to a new time. Do NOT delete the reminder.
+IMPORTANT: Do NOT use update_reminder for changing the daily summary time or other settings. Use update_settings instead.
+
+For UPDATING SETTINGS/PREFERENCES (daily summary time, enable/disable summary):
+{{
+    "action": "update_settings",
+    "setting": "daily_summary_time" | "daily_summary_enabled",
+    "value": "the new value (e.g., '8:00 AM' for time, 'true'/'false' for enabled)",
+    "confirmation": "Updated your daily summary time to [time]"
+}}
+WHEN TO USE update_settings:
+- "change my daily summary time to 8am" → setting: "daily_summary_time", value: "8:00 AM"
+- "move my summary to 7pm" → setting: "daily_summary_time", value: "7:00 PM"
+- "change my summary time to 6:30am" → setting: "daily_summary_time", value: "6:30 AM"
+- "turn off my daily summary" → setting: "daily_summary_enabled", value: "false"
+- "turn on my daily summary" → setting: "daily_summary_enabled", value: "true"
+- "I want my summary at 9am" → setting: "daily_summary_time", value: "9:00 AM"
+IMPORTANT: "daily summary" refers to the daily summary SETTING, NOT a reminder. Any request to change/update/modify the daily summary time or enable/disable it should use update_settings, NOT update_reminder or delete_reminder.
 
 For DELETING/FORGETTING A MEMORY:
 {{

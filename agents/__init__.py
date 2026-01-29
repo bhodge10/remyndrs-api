@@ -29,16 +29,26 @@ Agent 3: Resolution Tracker (resolution_tracker.py)
     - Generates weekly health reports
     - Run: python -m agents.resolution_tracker
 
+Agent 4: Fix Planner (fix_planner.py)
+    Generates Claude Code prompts for fixing validated issues.
+    - Analyzes unresolved issues from Agent 2/3
+    - Identifies affected source files based on issue type/pattern
+    - Extracts relevant code context
+    - Generates paste-ready prompts for Claude Code
+    - Run: python -m agents.fix_planner
+
 PIPELINE:
 =========
-Run all three agents in sequence:
+Run all agents in sequence:
     python agents/run_pipeline.py
     python agents/run_pipeline.py --hours 48 --snapshot  # With daily snapshot
+    python agents/run_pipeline.py --fix-planner          # Include Agent 4
 
 Quick runners:
     python agents/run_monitor.py       # Agent 1 only
     python agents/run_validator.py     # Agent 2 only
     python agents/run_tracker.py       # Agent 3 dashboard
+    python agents/run_fix_planner.py   # Agent 4 - generate fix prompts
 
 Scheduled job (recommended daily):
     python agents/run_pipeline.py --snapshot
@@ -81,6 +91,10 @@ Agent 3:
     pattern_resolutions  - How patterns were addressed
     health_snapshots     - Daily health metrics
 
+Agent 4:
+    fix_proposals        - Generated Claude Code prompts
+    fix_proposal_runs    - Fix planner audit trail
+
 RESOLUTION TYPES:
 =================
     code_fix        🔧  Bug fix or code improvement
@@ -97,3 +111,4 @@ RESOLUTION TYPES:
 from agents.interaction_monitor import analyze_interactions, get_pending_issues
 from agents.issue_validator import validate_issues, analyze_patterns
 from agents.resolution_tracker import calculate_health_metrics, resolve_issue, generate_weekly_report
+from agents.fix_planner import run_fix_planner, get_unresolved_issues, generate_claude_prompt

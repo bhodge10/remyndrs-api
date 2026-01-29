@@ -1,17 +1,19 @@
 #!/usr/bin/env python
 """
 Multi-Agent Monitoring Pipeline Runner
-Runs all three agents in sequence:
+Runs all agents in sequence:
   Agent 1: Interaction Monitor - Detect anomalies
   Agent 2: Issue Validator - Validate and categorize
   Agent 3: Resolution Tracker - Track health and report
+  Agent 4: Fix Planner - Generate Claude Code prompts (optional)
 
 Usage:
-    python agents/run_pipeline.py              # Full pipeline
+    python agents/run_pipeline.py              # Full pipeline (Agents 1-3)
     python agents/run_pipeline.py --hours 48   # Custom time range
     python agents/run_pipeline.py --no-ai      # Skip AI validation
     python agents/run_pipeline.py --report     # Dry run (no DB writes)
     python agents/run_pipeline.py --snapshot   # Save daily health snapshot
+    python agents/run_pipeline.py --fix-planner  # Include Agent 4 (fix prompts)
 """
 
 import sys
@@ -24,7 +26,9 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, '.')
 
 
-def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False, save_snapshot: bool = False):
+def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False,
+                 save_snapshot: bool = False, include_fix_planner: bool = False,
+                 fix_limit: int = 5):
     """Run the complete monitoring pipeline"""
     from agents.interaction_monitor import analyze_interactions, generate_report as monitor_report
     from agents.issue_validator import validate_issues, generate_report as validator_report, analyze_patterns
@@ -150,6 +154,38 @@ def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False, sa
     print()
 
     # ========================================
+    # AGENT 4: Fix Planner (optional)
+    # ========================================
+    fix_planner_results = None
+    if include_fix_planner and health['open_issues'] > 0:
+        print("┌" + "─" * 68 + "┐")
+        print("│ AGENT 4: Fix Planner" + " " * 46 + "│")
+        print("└" + "─" * 68 + "┘")
+        print(f"  Generating fix prompts for up to {fix_limit} issues...")
+        print()
+
+        from agents.fix_planner import run_fix_planner as run_fp
+
+        fix_planner_results = run_fp(
+            limit=fix_limit,
+            use_ai=use_ai,
+            dry_run=dry_run
+        )
+
+        print(f"  ✓ Issues analyzed: {fix_planner_results['issues_analyzed']}")
+        print(f"  ✓ Prompts generated: {fix_planner_results['proposals_generated']}")
+
+        if fix_planner_results['proposals']:
+            print("\n  Generated proposals:")
+            for p in fix_planner_results['proposals'][:5]:
+                files = p['affected_files'][:2]
+                files_str = ', '.join(files) + ('...' if len(p['affected_files']) > 2 else '')
+                print(f"    • Issue #{p['issue_id']}: {files_str}")
+            print("\n  Run 'python agents/run_fix_planner.py --list' to view prompts")
+
+        print()
+
+    # ========================================
     # SUMMARY
     # ========================================
     print("┌" + "─" * 68 + "┐")
@@ -198,13 +234,14 @@ def run_pipeline(hours: int = 24, use_ai: bool = True, dry_run: bool = False, sa
         'monitor': monitor_results,
         'validator': validator_results,
         'health': health,
-        'patterns': patterns
+        'patterns': patterns,
+        'fix_planner': fix_planner_results
     }
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Run the complete monitoring pipeline (Agent 1 + Agent 2 + Agent 3)'
+        description='Run the complete monitoring pipeline (Agent 1 + Agent 2 + Agent 3 + optional Agent 4)'
     )
     parser.add_argument(
         '--hours', type=int, default=24,
@@ -212,7 +249,7 @@ def main():
     )
     parser.add_argument(
         '--no-ai', action='store_true',
-        help='Disable AI validation in Agent 2'
+        help='Disable AI validation in Agent 2 and Agent 4'
     )
     parser.add_argument(
         '--report', action='store_true',
@@ -222,6 +259,14 @@ def main():
         '--snapshot', action='store_true',
         help='Save daily health snapshot (for scheduled runs)'
     )
+    parser.add_argument(
+        '--fix-planner', action='store_true',
+        help='Include Agent 4 (Fix Planner) to generate Claude Code prompts'
+    )
+    parser.add_argument(
+        '--fix-limit', type=int, default=5,
+        help='Max issues to process in Agent 4 (default: 5)'
+    )
 
     args = parser.parse_args()
 
@@ -229,7 +274,9 @@ def main():
         hours=args.hours,
         use_ai=not args.no_ai,
         dry_run=args.report,
-        save_snapshot=args.snapshot
+        save_snapshot=args.snapshot,
+        include_fix_planner=args.fix_planner,
+        fix_limit=args.fix_limit
     )
 
 

@@ -60,6 +60,11 @@ FALSE_POSITIVE_PATTERNS = {
         r'upgrade to premium',
         r'already have a list',
     ],
+    'action_not_found': [
+        # Legitimate "not found" cases (user explicitly referencing something that doesn't exist)
+        r'^(delete|remove)\b.*\breminder\b',  # User deleting a reminder that doesn't exist is expected
+        r'^(show|view|check)\b.*\blist\b',    # User checking a list that doesn't exist is expected
+    ],
 }
 
 # Issue patterns that indicate the same root cause
@@ -83,6 +88,12 @@ ROOT_CAUSE_SIGNATURES = {
     'delivery_reliability': {
         'indicators': ['didn\'t get', 'never received', 'missed', 'not sent'],
         'description': 'Users reporting missed reminder deliveries'
+    },
+    'intent_misclassification': {
+        'indicators': ['no pending reminders found', 'no reminders found matching',
+                       'no memories found matching', 'couldn\'t find a list',
+                       'change', 'update', 'modify', 'settings', 'summary time'],
+        'description': 'System attempted wrong action type for user request (e.g., searched reminders when user wanted settings change)'
     },
 }
 
