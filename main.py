@@ -550,22 +550,27 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         reminder_date = pending_confirmation.get('reminder_date')
                         confirmation_msg = pending_confirmation.get('confirmation')
 
-                        user_tz_str = get_user_timezone(phone_number)
-                        tz = pytz.timezone(user_tz_str)
-                        naive_dt = datetime.strptime(reminder_date, '%Y-%m-%d %H:%M:%S')
-                        local_time_str = naive_dt.strftime('%H:%M')
-                        aware_dt = tz.localize(naive_dt)
-                        utc_dt = aware_dt.astimezone(pytz.UTC)
-                        reminder_date_utc = utc_dt.strftime('%Y-%m-%d %H:%M:%S')
-
-                        reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date_utc, local_time_str, user_tz_str)
-
-                        if reminder_id:
-                            reply_text = confirmation_msg or f"Got it! I'll remind you about {reminder_text}."
-                            log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", True)
-                        else:
-                            reply_text = "Sorry, I couldn't save that reminder. Please try again."
+                        if not reminder_date:
+                            logger.error(f"Missing reminder_date in pending confirmation. Keys: {list(pending_confirmation.keys())}")
+                            reply_text = "Sorry, something went wrong with that reminder. Please try creating it again."
                             log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", False)
+                        else:
+                            user_tz_str = get_user_timezone(phone_number)
+                            tz = pytz.timezone(user_tz_str)
+                            naive_dt = datetime.strptime(reminder_date, '%Y-%m-%d %H:%M:%S')
+                            local_time_str = naive_dt.strftime('%H:%M')
+                            aware_dt = tz.localize(naive_dt)
+                            utc_dt = aware_dt.astimezone(pytz.UTC)
+                            reminder_date_utc = utc_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                            reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date_utc, local_time_str, user_tz_str)
+
+                            if reminder_id:
+                                reply_text = confirmation_msg or f"Got it! I'll remind you about {reminder_text}."
+                                log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", True)
+                            else:
+                                reply_text = "Sorry, I couldn't save that reminder. Please try again."
+                                log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", False)
 
                     elif action == 'reminder_relative':
                         # Relative time reminder
@@ -631,6 +636,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             reply_text = "Sorry, I couldn't save that recurring reminder. Please try again."
                             log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", False)
                     else:
+                        logger.error(f"Unrecognized pending confirmation action: '{action}'. Keys: {list(pending_confirmation.keys())}")
                         reply_text = "Sorry, something went wrong. Please try again."
                         log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", False)
 
@@ -641,7 +647,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     return Response(content=str(resp), media_type="application/xml")
 
                 except Exception as e:
-                    logger.error(f"Error processing confirmed reminder: {e}")
+                    logger.error(f"Error processing confirmed reminder: {e}. Action: {pending_confirmation.get('action')}, Keys: {list(pending_confirmation.keys())}", exc_info=True)
                     create_or_update_user(phone_number, pending_reminder_confirmation=None)
                     resp = MessagingResponse()
                     resp.message(staging_prefix("Sorry, something went wrong. Please try again."))
@@ -3173,6 +3179,8 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     pending_data = json.dumps({
                         'action': 'reminder_relative',
                         'reminder_text': reminder_text,
+                        'reminder_datetime_utc': reminder_date_utc,
+                        'local_time': reminder_dt_local.strftime('%H:%M'),
                         'offset_minutes': offset_minutes,
                         'offset_days': offset_days,
                         'offset_weeks': offset_weeks,
