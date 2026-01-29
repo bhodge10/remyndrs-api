@@ -694,6 +694,25 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
             border-top: 1px solid #333;
         }}
 
+        .resolve-group {{
+            display: flex;
+            gap: 5px;
+        }}
+
+        .resolve-select {{
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 0.85em;
+        }}
+
+        .resolve-select option {{
+            background: #1e272e;
+            color: #fff;
+        }}
+
         .issue-item {{
             cursor: pointer;
             transition: background 0.2s;
@@ -886,6 +905,19 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 </div>
             </div>
             <div class="modal-footer">
+                <div class="resolve-group">
+                    <select id="resolveType" class="resolve-select">
+                        <option value="code_fix">Code Fix</option>
+                        <option value="prompt_update">AI Prompt Update</option>
+                        <option value="config_change">Configuration Change</option>
+                        <option value="documentation">Documentation</option>
+                        <option value="user_education">User Education</option>
+                        <option value="wont_fix">Won't Fix</option>
+                        <option value="duplicate">Duplicate</option>
+                        <option value="cannot_reproduce">Cannot Reproduce</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" onclick="resolveIssue()">Mark Resolved</button>
+                </div>
                 <button class="btn btn-secondary" onclick="markFalsePositive()">Mark False Positive</button>
                 <button class="btn btn-primary" onclick="closeIssueModal()">Close</button>
             </div>
@@ -1055,6 +1087,23 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                 loadIssues();
             }} catch (e) {{
                 showToast('Failed to update', 'error');
+            }}
+        }}
+
+        // Resolve issue with selected type
+        async function resolveIssue() {{
+            if (!currentIssueId) return;
+            const resolutionType = document.getElementById('resolveType').value;
+            try {{
+                await fetchAPI(`/admin/tracker/resolve/${{currentIssueId}}`, {{
+                    method: 'POST',
+                    body: JSON.stringify({{ resolution_type: resolutionType }})
+                }});
+                showToast('Issue resolved', 'success');
+                closeIssueModal();
+                loadIssues();
+            }} catch (e) {{
+                showToast('Failed to resolve issue', 'error');
             }}
         }}
 
