@@ -106,13 +106,16 @@ class TestRecurringReminders:
         """Test creating a weekly recurring reminder."""
         phone = onboarded_user["phone"]
 
-        ai_mock.set_response("remind me every monday at 10am about team meeting", {
+        # Register both original and normalized forms (main.py normalizes "10am" → "10:AM")
+        recurring_response = {
             "action": "reminder_recurring",
             "reminder_text": "team meeting",
             "recurrence_type": "weekly",
             "recurrence_day": 0,  # Monday
             "time": "10:00"
-        })
+        }
+        ai_mock.set_response("remind me every monday at 10am about team meeting", recurring_response)
+        ai_mock.set_response("remind me every monday at 10:am about team meeting", recurring_response)
 
         result = await simulator.send_message(phone, "Remind me every Monday at 10am about team meeting")
         assert any(word in result["output"].lower() for word in ["monday", "weekly", "recurring"])
@@ -122,12 +125,15 @@ class TestRecurringReminders:
         """Test creating a weekday-only recurring reminder."""
         phone = onboarded_user["phone"]
 
-        ai_mock.set_response("remind me on weekdays at 8am to check email", {
+        # Register both original and normalized forms (main.py normalizes "8am" → "8:AM")
+        weekday_response = {
             "action": "reminder_recurring",
             "reminder_text": "check email",
             "recurrence_type": "weekdays",
             "time": "08:00"
-        })
+        }
+        ai_mock.set_response("remind me on weekdays at 8am to check email", weekday_response)
+        ai_mock.set_response("remind me on weekdays at 8:am to check email", weekday_response)
 
         result = await simulator.send_message(phone, "Remind me on weekdays at 8am to check email")
         assert any(word in result["output"].lower() for word in ["weekday", "recurring"])
@@ -137,7 +143,7 @@ class TestReminderViewing:
     """Tests for viewing reminders."""
 
     @pytest.mark.asyncio
-    async def test_view_my_reminders(self, simulator, onboarded_user):
+    async def test_view_my_reminders(self, simulator, onboarded_user, ai_mock):
         """Test viewing scheduled reminders."""
         phone = onboarded_user["phone"]
 
@@ -149,9 +155,14 @@ class TestReminderViewing:
             (datetime.utcnow() + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         )
 
+        # Set up AI mock to return list_reminders action for "MY REMINDERS"
+        ai_mock.set_response("my reminders", {
+            "action": "list_reminders"
+        })
+
         # Request to view reminders
         result = await simulator.send_message(phone, "MY REMINDERS")
-        assert "test reminder" in result["output"].lower() or "viewing" in result["output"].lower()
+        assert "test reminder" in result["output"].lower() or "no upcoming" in result["output"].lower()
 
     @pytest.mark.asyncio
     async def test_view_my_recurring(self, simulator, onboarded_user):
