@@ -105,10 +105,11 @@ RESOLUTION TYPES:
     wont_fix        🚫  Accepted behavior
     duplicate       📋  Already tracked
     cannot_reproduce ❓ Unable to reproduce
+    auto_resolved   ✅ Issue type stopped appearing in interactions
 """
 
 # Convenience imports
 from agents.interaction_monitor import analyze_interactions, get_pending_issues
 from agents.issue_validator import validate_issues, analyze_patterns
-from agents.resolution_tracker import calculate_health_metrics, resolve_issue, generate_weekly_report
+from agents.resolution_tracker import calculate_health_metrics, resolve_issue, generate_weekly_report, auto_resolve_stale_issues
 from agents.fix_planner import run_fix_planner, get_unresolved_issues, generate_claude_prompt
