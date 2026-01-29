@@ -344,6 +344,8 @@ def handle_reminder_relative(
             pending_data = json.dumps({
                 'action': 'reminder_relative',
                 'reminder_text': reminder_text,
+                'reminder_datetime_utc': reminder_date_utc,
+                'local_time': reminder_dt_local.strftime('%H:%M'),
                 'offset_minutes': offset_minutes,
                 'offset_days': offset_days,
                 'offset_weeks': offset_weeks,

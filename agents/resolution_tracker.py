@@ -14,6 +14,8 @@ Usage:
     python -m agents.resolution_tracker --resolve 123    # Resolve issue #123
     python -m agents.resolution_tracker --report weekly  # Weekly report
     python -m agents.resolution_tracker --trends         # Show trend analysis
+    python -m agents.resolution_tracker --auto-resolve   # Auto-resolve stale issues
+    python -m agents.resolution_tracker --auto-resolve --quiet-hours 48  # Custom quiet period
 """
 
 import sys
@@ -74,6 +76,11 @@ RESOLUTION_TYPES = {
         'label': 'Cannot Reproduce',
         'description': 'Unable to reproduce the issue',
         'icon': '❓'
+    },
+    'auto_resolved': {
+        'label': 'Auto-Resolved',
+        'description': 'Issue type stopped appearing in interactions',
+        'icon': '✅'
     },
 }
 
@@ -509,6 +516,88 @@ def detect_regressions() -> List[Dict]:
     return regressions
 
 
+def auto_resolve_stale_issues(quiet_hours: int = 72, min_age_hours: int = 48) -> List[Dict]:
+    """Auto-resolve issues whose issue_type has stopped appearing in recent interactions.
+
+    An issue is eligible for auto-resolution when:
+    1. It is validated, not a false positive, and still open
+    2. It is older than min_age_hours
+    3. No new issues of the same issue_type have been detected in the last quiet_hours
+
+    Args:
+        quiet_hours: Hours of silence required before auto-resolving (default: 72)
+        min_age_hours: Minimum issue age in hours before eligible (default: 48)
+
+    Returns:
+        List of dicts describing each auto-resolved issue
+    """
+    auto_resolved = []
+
+    with get_monitoring_cursor() as cursor:
+        # Find open validated issues older than min_age_hours, grouped by issue_type
+        cursor.execute('''
+            SELECT DISTINCT issue_type
+            FROM monitoring_issues
+            WHERE validated = TRUE
+              AND false_positive = FALSE
+              AND resolved_at IS NULL
+              AND detected_at < NOW() - INTERVAL '%s hours'
+        ''', (min_age_hours,))
+
+        stale_types = [row[0] for row in cursor.fetchall()]
+
+        for issue_type in stale_types:
+            # Check if any new issues of this type appeared within the quiet period
+            cursor.execute('''
+                SELECT COUNT(*)
+                FROM monitoring_issues
+                WHERE issue_type = %s
+                  AND false_positive = FALSE
+                  AND detected_at > NOW() - INTERVAL '%s hours'
+            ''', (issue_type, quiet_hours))
+
+            recent_count = cursor.fetchone()[0]
+
+            if recent_count > 0:
+                continue
+
+            # No recent occurrences — auto-resolve all open issues of this type
+            cursor.execute('''
+                SELECT id, issue_type, severity, detected_at
+                FROM monitoring_issues
+                WHERE issue_type = %s
+                  AND validated = TRUE
+                  AND false_positive = FALSE
+                  AND resolved_at IS NULL
+                  AND detected_at < NOW() - INTERVAL '%s hours'
+            ''', (issue_type, min_age_hours))
+
+            issues_to_resolve = cursor.fetchall()
+
+            for row in issues_to_resolve:
+                issue_id = row[0]
+                success = resolve_issue(
+                    issue_id,
+                    resolution_type='auto_resolved',
+                    description=f'No new {issue_type} issues detected in {quiet_hours}h',
+                    resolved_by='agent3_auto'
+                )
+                if success:
+                    auto_resolved.append({
+                        'issue_id': issue_id,
+                        'issue_type': row[1],
+                        'severity': row[2],
+                        'detected_at': row[3].isoformat() if row[3] else None,
+                    })
+
+    if auto_resolved:
+        logger.info(f"Auto-resolved {len(auto_resolved)} stale issues")
+    else:
+        logger.info("No stale issues eligible for auto-resolution")
+
+    return auto_resolved
+
+
 # ============================================================================
 # REPORTS
 # ============================================================================
@@ -879,6 +968,18 @@ def main():
         '--json', action='store_true',
         help='Output as JSON'
     )
+    parser.add_argument(
+        '--auto-resolve', action='store_true',
+        help='Auto-resolve stale issues that stopped appearing'
+    )
+    parser.add_argument(
+        '--quiet-hours', type=int, default=72,
+        help='Hours of silence before auto-resolving (default: 72, use with --auto-resolve)'
+    )
+    parser.add_argument(
+        '--min-age-hours', type=int, default=48,
+        help='Minimum issue age in hours before eligible for auto-resolution (default: 48, use with --auto-resolve)'
+    )
 
     args = parser.parse_args()
 
@@ -944,6 +1045,25 @@ def main():
             print("-" * 60)
             for i in issues:
                 print(f"  [{i['severity']:8}] #{i['id']:4} {i['issue_type']:20} (...{i['phone_number'][-4:]})")
+        return
+
+    # Auto-resolve stale issues
+    if args.auto_resolve:
+        results = auto_resolve_stale_issues(
+            quiet_hours=args.quiet_hours,
+            min_age_hours=args.min_age_hours
+        )
+        if args.json:
+            print(json.dumps(results, indent=2, default=str))
+        else:
+            if results:
+                print(f"\n✅ Auto-resolved {len(results)} stale issues:")
+                print("-" * 60)
+                for r in results:
+                    print(f"  #{r['issue_id']:4} {r['issue_type']:20} [{r['severity']}]")
+            else:
+                print("\nNo stale issues eligible for auto-resolution.")
+                print(f"  (quiet period: {args.quiet_hours}h, min age: {args.min_age_hours}h)")
         return
 
     # Default: show dashboard

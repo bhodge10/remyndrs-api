@@ -129,6 +129,13 @@ Uses `SELECT FOR UPDATE SKIP LOCKED` for distributed reminder claiming. Stale ta
 - **Premium:** Unlimited reminders, 20 lists, 30 items/list, recurring reminders
 - **Family:** Premium features for 4-10 members
 
+### Low-Confidence Reminder Confirmation Flow
+When AI confidence is below threshold, reminders enter a pending confirmation state stored in `pending_reminder_confirmation` on the user record. Two code paths handle this:
+- **Pending data storage:** `routes/handlers/reminders.py` stores pending JSON (action type, text, datetime, offsets, confidence)
+- **Confirmation handling:** `main.py` (search `pending_confirmation`) processes YES/NO responses and calls `save_reminder_with_local_time()`
+
+**Important:** `save_reminder_with_local_time()` requires 5 positional args: `(phone_number, reminder_text, reminder_date_utc, local_time, timezone)`. The `local_time` param is HH:MM format and `reminder_date` must be UTC. For relative reminders, the pre-calculated UTC datetime and local_time should be stored in pending data to avoid time drift.
+
 ### Field Encryption
 Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION_KEY` and `HASH_KEY` env vars.
 
@@ -136,7 +143,7 @@ Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION
 
 Required: `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `DATABASE_URL`
 
-Optional: `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, `HASH_KEY`, `STRIPE_*` keys, `SMTP_*` for email
+Optional: `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, `HASH_KEY`, `STRIPE_*` keys, `SMTP_*` for email, `ANTHROPIC_API_KEY` (for Agent 4 AI file identification)
 
 ## Rate Limiting
 
@@ -152,7 +159,7 @@ Automated issue detection and health tracking for the SMS service.
 - Click any issue to see full message context (user message + bot response)
 - "Mark False Positive" button to dismiss non-issues
 
-### Three Agents
+### Four Agents
 1. **Agent 1 - Interaction Monitor** (`agents/interaction_monitor.py`)
    - Detects anomalies: user confusion, parsing failures, error responses, timezone issues
    - Scans `logs` table for patterns indicating problems
@@ -167,6 +174,13 @@ Automated issue detection and health tracking for the SMS service.
    - Tracks issue resolutions and detects regressions
    - Generates weekly reports
 
+4. **Agent 4 - Fix Planner** (`agents/fix_planner.py`)
+   - Analyzes validated, unresolved issues
+   - Identifies affected source files based on issue type/pattern
+   - Extracts relevant code context
+   - Generates paste-ready Claude Code prompts for fixes
+   - Optional AI file identification with Claude API (`--ai` flag)
+
 ### Celery Schedule (automatic)
 - **Hourly:** Critical issue check
 - **Every 4 hours:** Agent 1 (interaction monitor)
@@ -177,6 +191,8 @@ Automated issue detection and health tracking for the SMS service.
 ### Manual Triggers
 - Dashboard "Run Full Pipeline" button
 - API: `GET /admin/pipeline/run?hours=24`
+- Agent 4: `python -m agents.fix_planner --issue 123` or `python agents/run_fix_planner.py`
+- Full pipeline with fix planner: `python agents/run_pipeline.py --fix-planner`
 
 ### Alerts
 Configured via dashboard Alert Settings section:
@@ -185,4 +201,4 @@ Configured via dashboard Alert Settings section:
 - **SMS:** For critical issues only (health < 50)
 
 ### Database Tables
-`monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`
+`monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`

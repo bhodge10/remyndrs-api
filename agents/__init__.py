@@ -37,17 +37,27 @@ Agent 4: Code Analyzer (code_analyzer.py)
     - Dashboard integration for one-click analysis
     - Run: python -m agents.code_analyzer
 
+Fix Planner (fix_planner.py)
+    Generates Claude Code prompts for fixing validated issues.
+    - Analyzes unresolved issues from Agent 2/3
+    - Identifies affected source files based on issue type/pattern
+    - Extracts relevant code context
+    - Generates paste-ready prompts for Claude Code
+    - Run: python -m agents.fix_planner
+
 PIPELINE:
 =========
-Run all four agents in sequence:
+Run all agents in sequence:
     python agents/run_pipeline.py
     python agents/run_pipeline.py --hours 48 --snapshot  # With daily snapshot
+    python agents/run_pipeline.py --fix-planner          # Include Agent 4
 
 Quick runners:
     python agents/run_monitor.py       # Agent 1 only
     python agents/run_validator.py     # Agent 2 only
     python agents/run_tracker.py       # Agent 3 dashboard
     python -m agents.code_analyzer     # Agent 4 only
+    python agents/run_fix_planner.py   # Fix planner - generate fix prompts
 
 Scheduled job (recommended daily):
     python agents/run_pipeline.py --snapshot
@@ -100,6 +110,8 @@ Agent 3:
 Agent 4:
     code_analysis        - Root cause analyses and Claude prompts
     code_analysis_runs   - Analysis run audit trail
+    fix_proposals        - Generated Claude Code prompts
+    fix_proposal_runs    - Fix planner audit trail
 
 RESOLUTION TYPES:
 =================
@@ -111,10 +123,12 @@ RESOLUTION TYPES:
     wont_fix        🚫  Accepted behavior
     duplicate       📋  Already tracked
     cannot_reproduce ❓ Unable to reproduce
+    auto_resolved   ✅ Issue type stopped appearing in interactions
 """
 
 # Convenience imports
 from agents.interaction_monitor import analyze_interactions, get_pending_issues
 from agents.issue_validator import validate_issues, analyze_patterns
-from agents.resolution_tracker import calculate_health_metrics, resolve_issue, generate_weekly_report
+from agents.resolution_tracker import calculate_health_metrics, resolve_issue, generate_weekly_report, auto_resolve_stale_issues
 from agents.code_analyzer import analyze_issue, run_code_analysis, get_existing_analysis
+from agents.fix_planner import run_fix_planner, get_unresolved_issues, generate_claude_prompt
