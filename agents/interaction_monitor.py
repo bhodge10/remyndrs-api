@@ -112,10 +112,42 @@ def init_monitoring_tables():
         ''')
 
         # Unique constraint to prevent duplicate issues for same log
+        # First, check if index exists
         cursor.execute('''
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_monitoring_issues_log_type
-            ON monitoring_issues(log_id, issue_type) WHERE log_id IS NOT NULL
+            SELECT 1 FROM pg_indexes
+            WHERE indexname = 'idx_monitoring_issues_log_type'
         ''')
+        if not cursor.fetchone():
+            # Find duplicate issue IDs to delete (keep the one with highest id)
+            cursor.execute('''
+                SELECT a.id FROM monitoring_issues a
+                JOIN monitoring_issues b ON a.log_id = b.log_id
+                  AND a.issue_type = b.issue_type
+                  AND a.id < b.id
+                WHERE a.log_id IS NOT NULL
+            ''')
+            duplicate_ids = [row[0] for row in cursor.fetchall()]
+
+            if duplicate_ids:
+                # First delete references from issue_pattern_links
+                cursor.execute('''
+                    DELETE FROM issue_pattern_links
+                    WHERE issue_id = ANY(%s)
+                ''', (duplicate_ids,))
+                logger.info(f"Removed {cursor.rowcount} pattern links for duplicate issues")
+
+                # Now delete the duplicate monitoring issues
+                cursor.execute('''
+                    DELETE FROM monitoring_issues
+                    WHERE id = ANY(%s)
+                ''', (duplicate_ids,))
+                logger.info(f"Removed {cursor.rowcount} duplicate monitoring issues")
+
+            # Now create the unique index
+            cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_monitoring_issues_log_type
+                ON monitoring_issues(log_id, issue_type) WHERE log_id IS NOT NULL
+            ''')
 
         # Monitoring runs table (audit trail)
         cursor.execute('''

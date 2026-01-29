@@ -129,6 +129,13 @@ Uses `SELECT FOR UPDATE SKIP LOCKED` for distributed reminder claiming. Stale ta
 - **Premium:** Unlimited reminders, 20 lists, 30 items/list, recurring reminders
 - **Family:** Premium features for 4-10 members
 
+### Low-Confidence Reminder Confirmation Flow
+When AI confidence is below threshold, reminders enter a pending confirmation state stored in `pending_reminder_confirmation` on the user record. Two code paths handle this:
+- **Pending data storage:** `routes/handlers/reminders.py` stores pending JSON (action type, text, datetime, offsets, confidence)
+- **Confirmation handling:** `main.py` (search `pending_confirmation`) processes YES/NO responses and calls `save_reminder_with_local_time()`
+
+**Important:** `save_reminder_with_local_time()` requires 5 positional args: `(phone_number, reminder_text, reminder_date_utc, local_time, timezone)`. The `local_time` param is HH:MM format and `reminder_date` must be UTC. For relative reminders, the pre-calculated UTC datetime and local_time should be stored in pending data to avoid time drift.
+
 ### Field Encryption
 Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION_KEY` and `HASH_KEY` env vars.
 

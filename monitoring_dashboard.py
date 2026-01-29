@@ -794,6 +794,19 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
                     </div>
                 </div>
 
+                <!-- Resolution Tracker -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>🔧 Resolution Tracker</h2>
+                        <button class="btn btn-secondary btn-sm" onclick="loadResolutionTracker()">
+                            ↻ Refresh
+                        </button>
+                    </div>
+                    <div id="resolutionTracker">
+                        <div class="loading"><div class="spinner"></div></div>
+                    </div>
+                </div>
+
                 <!-- Alert Settings -->
                 <div class="card">
                     <div class="card-header">
@@ -1107,6 +1120,73 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        // Load resolution tracker
+        async function loadResolutionTracker() {{
+            try {{
+                const data = await fetchAPI('/admin/tracker/report');
+                const container = document.getElementById('resolutionTracker');
+
+                const current = data.current_health || {{}};
+                const recommendations = data.recommendations || [];
+
+                // Resolution types breakdown (array of objects with type, count, label)
+                const resolutionBreakdown = data.resolution_breakdown || [];
+                const resolutionList = resolutionBreakdown
+                    .filter(r => r.count > 0)
+                    .map(r => `<span class="badge">${{r.label || r.type}}: ${{r.count}}</span>`)
+                    .join(' ') || '<span style="color: #666;">No resolutions yet</span>';
+
+                // Week over week change (health_change is at top level of report)
+                const healthChange = data.health_change || 0;
+                const changeIcon = healthChange > 0 ? '📈' : healthChange < 0 ? '📉' : '➡️';
+                const changeColor = healthChange > 0 ? '#27ae60' : healthChange < 0 ? '#e74c3c' : '#888';
+
+                // Top recommendations (uses title and description fields)
+                const topRecs = recommendations.slice(0, 3).map(rec => `
+                    <div style="padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 8px; font-size: 0.85em;">
+                        <span style="color: ${{rec.priority === 'high' ? '#e74c3c' : rec.priority === 'medium' ? '#f39c12' : '#27ae60'}};">●</span>
+                        <strong>${{rec.title || 'Recommendation'}}</strong>: ${{rec.description || rec.action || ''}}
+                    </div>
+                `).join('') || '<div style="color: #666; font-size: 0.9em;">No recommendations</div>';
+
+                container.innerHTML = `
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <span style="color: #888; font-size: 0.85em;">Week over Week</span>
+                            <span style="color: ${{changeColor}}; font-weight: 500;">
+                                ${{changeIcon}} ${{healthChange > 0 ? '+' : ''}}${{healthChange.toFixed(1)}}%
+                            </span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <span style="color: #888; font-size: 0.85em;">Issues This Week</span>
+                            <span style="font-weight: 500;">${{current.total_issues || 0}}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: #888; font-size: 0.85em;">Resolved</span>
+                            <span style="font-weight: 500; color: #27ae60;">${{current.resolved_issues || 0}}</span>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <div style="color: #888; font-size: 0.85em; margin-bottom: 8px;">Resolution Types</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+                            ${{resolutionList}}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div style="color: #888; font-size: 0.85em; margin-bottom: 8px;">Recommendations</div>
+                        ${{topRecs}}
+                    </div>
+                `;
+
+            }} catch (e) {{
+                console.error('Failed to load resolution tracker:', e);
+                document.getElementById('resolutionTracker').innerHTML =
+                    '<div class="empty-state">Failed to load data</div>';
+            }}
+        }}
+
         // Load alert settings
         async function loadAlertSettings() {{
             try {{
@@ -1268,6 +1348,7 @@ async def monitoring_dashboard(admin: str = Depends(verify_admin)):
             loadIssues();
             loadPatterns();
             loadTrend();
+            loadResolutionTracker();
             loadAlertSettings();
 
             // Auto-refresh every 60 seconds
