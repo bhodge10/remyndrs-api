@@ -343,7 +343,7 @@ def close_ticket(ticket_id: int, notify_user: bool = True) -> bool:
             # Send SMS notification to user
             if notify_user and phone_number:
                 try:
-                    sms_message = f"[Support Ticket #{ticket_id}] Your support ticket has been closed. Thank you for contacting Remyndrs support! Text SUPPORT: anytime to open a new ticket."
+                    sms_message = f"[Support Ticket #{ticket_id}] Your support ticket has been closed. Thank you for contacting Remyndrs support! Text SUPPORT anytime to open a new ticket."
                     send_sms(phone_number, sms_message)
                     logger.info(f"Sent closure notification for ticket #{ticket_id}")
                 except Exception as e:

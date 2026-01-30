@@ -120,6 +120,64 @@ def parse_snooze_duration(text):
         return 15
 
 
+def parse_command(message: str, known_commands: list = None):
+    """
+    Parse commands from SMS messages with improved format.
+
+    Supports both new format (COMMAND message) and old format (COMMAND: message) for backward compatibility.
+
+    Args:
+        message: The incoming SMS message
+        known_commands: List of known command names (case-insensitive).
+                       Defaults to: START, STOP, HELP, SUPPORT, FEEDBACK, BUG, QUESTION
+
+    Returns:
+        tuple: (command, message_text) where:
+            - command is uppercase command name or None if no match
+            - message_text is the rest of the message after the command
+
+    Examples:
+        "SUPPORT I need help" -> ("SUPPORT", "I need help")
+        "SUPPORT: I need help" -> ("SUPPORT", "I need help")  # backward compatible
+        "support message" -> ("SUPPORT", "message")  # case insensitive
+        "SUPPORT" -> ("SUPPORT", "")  # command only, no message
+        "Remind me tomorrow" -> (None, "Remind me tomorrow")  # not a command
+    """
+    if not message:
+        return (None, "")
+
+    # Default known commands if not provided
+    if known_commands is None:
+        known_commands = ["START", "STOP", "HELP", "SUPPORT", "FEEDBACK", "BUG", "QUESTION"]
+
+    # Normalize known commands to uppercase
+    known_commands = [cmd.upper() for cmd in known_commands]
+
+    # Strip leading/trailing whitespace
+    message = message.strip()
+
+    # Split on first whitespace or colon
+    parts = re.split(r'[\s:]+', message, maxsplit=1)
+
+    if not parts:
+        return (None, message)
+
+    potential_command = parts[0].upper()
+
+    # Check if first word matches a known command
+    if potential_command in known_commands:
+        # Extract message (everything after first word/colon)
+        if len(parts) > 1:
+            message_text = parts[1].strip()
+        else:
+            message_text = ""
+
+        return (potential_command, message_text)
+
+    # Not a recognized command
+    return (None, message)
+
+
 # Initialize application
 logger.info("🚀 SMS Memory Service starting...")
 app = FastAPI()
@@ -410,7 +468,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             if msg_upper == "EXIT":
                 exit_support_mode(phone_number)
                 resp = MessagingResponse()
-                resp.message(staging_prefix(f"You've exited support mode. Your ticket #{ticket_id} is still open - text 'SUPPORT: message' anytime to continue the conversation."))
+                resp.message(staging_prefix(f"You've exited support mode. Your ticket #{ticket_id} is still open - text 'SUPPORT message' anytime to continue the conversation."))
                 log_interaction(phone_number, incoming_msg, f"Exited support mode (ticket #{ticket_id})", "support_exit", True)
                 return Response(content=str(resp), media_type="application/xml")
 
@@ -421,7 +479,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 result = close_ticket_by_phone(phone_number)
                 if result['success']:
                     resp = MessagingResponse()
-                    resp.message(staging_prefix(f"Your support ticket #{ticket_id} has been closed. Thank you for contacting us! Text 'SUPPORT: message' anytime to open a new ticket."))
+                    resp.message(staging_prefix(f"Your support ticket #{ticket_id} has been closed. Thank you for contacting us! Text 'SUPPORT message' anytime to open a new ticket."))
                     log_interaction(phone_number, incoming_msg, f"Closed support ticket #{ticket_id}", "support_close", True)
                     return Response(content=str(resp), media_type="application/xml")
 
@@ -1680,8 +1738,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # FEEDBACK HANDLING
         # ==========================================
-        if incoming_msg.upper().startswith("FEEDBACK:"):
-            feedback_message = incoming_msg[9:].strip()  # Extract everything after "feedback:"
+        command, message_text = parse_command(incoming_msg, known_commands=["FEEDBACK"])
+        if command == "FEEDBACK":
+            feedback_message = message_text.strip()
             if feedback_message:
                 # Save feedback to database
                 from database import get_db_connection, return_db_connection
@@ -1708,7 +1767,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         return_db_connection(conn)
             else:
                 resp = MessagingResponse()
-                resp.message("Please include your feedback after 'Feedback:'. For example: 'Feedback: I love this app!'")
+                resp.message("Please include your feedback after 'Feedback'. For example: 'Feedback I love this app!'")
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
@@ -1779,22 +1838,19 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # SUPPORT HANDLING (Premium users, or all users in beta mode)
         # ==========================================
-        if incoming_msg.upper().startswith("SUPPORT:") or incoming_msg.upper().startswith("SUPPORT "):
+        command, message_text = parse_command(incoming_msg, known_commands=["SUPPORT"])
+        if command == "SUPPORT":
             from services.support_service import is_premium_user, add_support_message
             from config import BETA_MODE
 
             # Check if user is premium (or beta mode allows all users)
             if not BETA_MODE and not is_premium_user(phone_number):
                 resp = MessagingResponse()
-                resp.message("Support chat is available for premium members. Use 'Feedback: [message]' to send us feedback, or upgrade to premium for direct support.")
+                resp.message("Support chat is available for premium members. Use 'Feedback [message]' to send us feedback, or upgrade to premium for direct support.")
                 log_interaction(phone_number, incoming_msg, "Support denied - not premium", "support_denied", False)
                 return Response(content=str(resp), media_type="application/xml")
 
-            # Extract message after "support:" or "support "
-            if incoming_msg.upper().startswith("SUPPORT:"):
-                support_message = incoming_msg[8:].strip()
-            else:
-                support_message = incoming_msg[8:].strip()
+            support_message = message_text.strip()
 
             if support_message:
                 result = add_support_message(phone_number, support_message, 'inbound')
@@ -1809,7 +1865,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     return Response(content=str(resp), media_type="application/xml")
             else:
                 resp = MessagingResponse()
-                resp.message("Please include your message after 'Support:'. For example: 'Support: I need help with reminders'")
+                resp.message("Please include your message after 'Support'. For example: 'Support I need help with reminders'")
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
