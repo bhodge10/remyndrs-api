@@ -8,16 +8,26 @@ Remyndrs is an SMS-based AI memory and reminder service built with Python/FastAP
 
 **Stack:** Python 3.11.9, FastAPI, PostgreSQL, Celery + Redis (Upstash), OpenAI GPT-4o-mini, Twilio SMS, Stripe billing
 
-## Session Start/End
+## Git Workflow
 
-**START of session (run first!):**
+**Branching model:** Feature branches off `main`. No long-lived staging branch.
+
+**Starting a session:**
 ```bash
-git fetch --all && git pull origin main
+git checkout main && git pull origin main
 ```
 
-**END of session (before switching computers):**
-- Commit and push all changes to git
-- Never deploy directly to Render - always push to git and let auto-deploy handle it
+**Making changes:**
+```bash
+git checkout -b feature/short-description
+# ... work and commit ...
+git push -u origin feature/short-description
+# Open PR → merge to main → delete branch
+```
+
+**Ending a session:** Push your feature branch so work isn't lost.
+
+**Important:** Never deploy directly to Render — always push to git and let auto-deploy handle it.
 
 ## Common Commands
 
