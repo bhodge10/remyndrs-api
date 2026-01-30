@@ -1619,7 +1619,19 @@ async def get_system_health(days: int = 7, admin: str = Depends(verify_admin)):
         init_validator_tables()   # Pattern tables (issue_patterns)
         init_tracker_tables()     # Tracker tables (health_snapshots, issue_resolutions, pattern_resolutions)
         metrics = calculate_health_metrics(days=days)
-        return JSONResponse(content=metrics)
+        # Convert Decimal values for JSON serialization
+        from decimal import Decimal
+        def sanitize(obj):
+            if isinstance(obj, dict):
+                return {k: sanitize(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize(i) for i in obj]
+            elif isinstance(obj, Decimal):
+                return float(obj)
+            elif hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            return obj
+        return JSONResponse(content=sanitize(metrics))
     except Exception as e:
         logger.error(f"Error getting health metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1695,12 +1707,15 @@ async def get_weekly_report(admin: str = Depends(verify_admin)):
         init_tracker_tables()
         report = generate_weekly_report()
 
-        # Convert datetime objects for JSON
+        # Convert datetime and Decimal objects for JSON
+        from decimal import Decimal
         def convert_dates(obj):
             if isinstance(obj, dict):
                 return {k: convert_dates(v) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [convert_dates(i) for i in obj]
+            elif isinstance(obj, Decimal):
+                return float(obj)
             elif hasattr(obj, 'isoformat'):
                 return obj.isoformat()
             return obj
@@ -1722,7 +1737,19 @@ async def get_health_trends(days: int = 30, admin: str = Depends(verify_admin)):
         init_validator_tables()
         init_tracker_tables()
         trend = get_health_trend(days=days)
-        return JSONResponse(content={"trend": trend, "days": days})
+        # Convert Decimal values for JSON serialization
+        from decimal import Decimal
+        def sanitize_trend(obj):
+            if isinstance(obj, dict):
+                return {k: sanitize_trend(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize_trend(i) for i in obj]
+            elif isinstance(obj, Decimal):
+                return float(obj)
+            elif hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            return obj
+        return JSONResponse(content=sanitize_trend({"trend": trend, "days": days}))
     except Exception as e:
         logger.error(f"Error getting trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1735,9 +1762,11 @@ async def save_daily_snapshot(admin: str = Depends(verify_admin)):
         from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot
         metrics = calculate_health_metrics(days=1)
         save_health_snapshot(metrics)
+        from decimal import Decimal
+        score = float(metrics['health_score']) if isinstance(metrics['health_score'], Decimal) else metrics['health_score']
         return JSONResponse(content={
             "success": True,
-            "health_score": metrics['health_score'],
+            "health_score": score,
             "message": "Daily snapshot saved"
         })
     except Exception as e:
