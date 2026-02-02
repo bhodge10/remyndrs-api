@@ -10,6 +10,7 @@ import asyncio
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import Response, HTMLResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.request_validator import RequestValidator
@@ -182,6 +183,14 @@ def parse_command(message: str, known_commands: list = None):
 logger.info("🚀 SMS Memory Service starting...")
 app = FastAPI()
 
+# CORS middleware - allow requests from remyndrs.com
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with ["https://remyndrs.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Request timeout middleware
 class TimeoutMiddleware(BaseHTTPMiddleware):
@@ -4452,19 +4461,6 @@ async def health_check():
     }
 
 
-@app.options("/api/signup")
-async def desktop_signup_preflight():
-    """Handle CORS preflight for desktop signup"""
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type"
-        }
-    )
-
-
 @app.post("/api/signup")
 async def desktop_signup(request: Request):
     """
@@ -4478,12 +4474,7 @@ async def desktop_signup(request: Request):
         if not phone_number:
             return JSONResponse(
                 status_code=400,
-                content={"success": False, "error": "Phone number is required"},
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type"
-                }
+                content={"success": False, "error": "Phone number is required"}
             )
 
         # Validate and format phone number
@@ -4499,12 +4490,7 @@ async def desktop_signup(request: Request):
         else:
             return JSONResponse(
                 status_code=400,
-                content={"success": False, "error": "Please enter a valid US phone number"},
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type"
-                }
+                content={"success": False, "error": "Please enter a valid US phone number"}
             )
 
         # Check if user already exists
@@ -4533,11 +4519,6 @@ Reply with your first name to get started, or text HELP for more info."""
             content={
                 "success": True,
                 "message": "Check your phone! We just sent you a text to get started."
-            },
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type"
             }
         )
 
@@ -4545,12 +4526,7 @@ Reply with your first name to get started, or text HELP for more info."""
         logger.error(f"Error in desktop signup: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"success": False, "error": "Something went wrong. Please try again or text us at (855) 552-1950"},
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type"
-            }
+            content={"success": False, "error": "Something went wrong. Please try again or text us at (855) 552-1950"}
         )
 
 
