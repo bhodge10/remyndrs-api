@@ -68,6 +68,7 @@ PARSING_FAILURE_PATTERNS = [
     r'i\'m not sure what you mean',
     r'i couldn\'t understand',
     r'i don\'t understand',
+    r'i didn\'t understand',
     r'i\'m having trouble understanding',
     r'could you (please )?rephrase',
     r'i\'m confused by',
