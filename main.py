@@ -1903,7 +1903,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     return Response(content=str(resp), media_type="application/xml")
 
                 first_name = user[1] or "there"
-                created_at = user[7] if len(user) > 7 else None
+                created_at = user[8] if len(user) > 8 else None  # CREATED_AT is index 8, not 7
 
                 # Get tier and usage info
                 usage = get_usage_summary(phone_number)
