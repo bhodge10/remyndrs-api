@@ -297,6 +297,150 @@ def detect_not_found_response(log: dict) -> Optional[dict]:
     return None
 
 
+def detect_context_loss(current_log: dict, previous_log: Optional[dict]) -> Optional[dict]:
+    """
+    Detect context loss when system responds with unrelated content.
+
+    Checks if previous message set up an expectation (e.g., "reply with a number")
+    but the current response ignores that context and addresses something else.
+    """
+    if not previous_log:
+        return None
+
+    # Check if previous bot message asked for numbered selection
+    prev_msg_out = previous_log['message_out'].lower()
+    selection_patterns = [
+        r'reply with a number',
+        r'which list.*reply.*number',
+        r'select.*\d+\.',  # Numbered list
+        r'\d+\..*\n.*\d+\.',  # Multiple numbered items
+        r'choose.*number',
+    ]
+
+    asked_for_number = any(re.search(pattern, prev_msg_out, re.IGNORECASE) for pattern in selection_patterns)
+
+    if not asked_for_number:
+        return None
+
+    # Check if user replied with a digit
+    user_replied_with_digit = current_log['message_in'].strip().isdigit()
+
+    if not user_replied_with_digit:
+        return None
+
+    # Check if current response is unrelated (doesn't reference the selection context)
+    current_msg_out = current_log['message_out'].lower()
+
+    # Indicators that response handled the selection correctly
+    handled_selection = any([
+        'added' in current_msg_out and 'list' in current_msg_out,
+        'deleted' in current_msg_out,
+        'removed' in current_msg_out,
+        current_log.get('intent', '').startswith('add_to_list'),
+        current_log.get('intent', '').startswith('delete_'),
+    ])
+
+    if handled_selection:
+        return None
+
+    # Context was lost - system responded with something unrelated
+    return {
+        'issue_type': 'context_loss',
+        'severity': 'high',
+        'details': {
+            'previous_bot_message': previous_log['message_out'][:200],
+            'user_message': current_log['message_in'][:200],
+            'our_response': current_log['message_out'][:200],
+            'expected_intent': 'list_selection or similar',
+            'actual_intent': current_log.get('intent'),
+            'description': 'System asked for number selection but responded with unrelated content'
+        }
+    }
+
+
+def detect_flow_violation(current_log: dict, previous_log: Optional[dict]) -> Optional[dict]:
+    """
+    Detect multi-turn flow violations where system ignores user's expected response.
+
+    This is a broader detector than context_loss, checking for various patterns
+    where the conversation flow is broken (YES/NO questions ignored, etc.).
+    """
+    if not previous_log:
+        return None
+
+    prev_msg_out = previous_log['message_out'].lower()
+    user_msg_in = current_log['message_in'].strip().upper()
+    current_msg_out = current_log['message_out'].lower()
+
+    # Pattern 1: Bot asked YES/NO question, user answered YES/NO, but bot ignored it
+    asked_yes_no = any([
+        'reply yes' in prev_msg_out and ('no' in prev_msg_out or 'cancel' in prev_msg_out),
+        'confirm' in prev_msg_out and 'yes' in prev_msg_out,
+        re.search(r'yes.*or.*no', prev_msg_out),
+    ])
+
+    if asked_yes_no and user_msg_in in ['YES', 'NO', 'CANCEL']:
+        # Check if response acknowledged the YES/NO
+        acknowledged = any([
+            'cancelled' in current_msg_out or 'canceled' in current_msg_out,
+            'got it' in current_msg_out,
+            'deleted' in current_msg_out,
+            'saved' in current_msg_out,
+            'confirmed' in current_msg_out,
+            user_msg_in.lower() in current_msg_out[:50],  # Bot echoes the response
+        ])
+
+        if not acknowledged:
+            return {
+                'issue_type': 'flow_violation',
+                'severity': 'high',
+                'details': {
+                    'previous_bot_message': previous_log['message_out'][:200],
+                    'user_message': current_log['message_in'][:200],
+                    'our_response': current_log['message_out'][:200],
+                    'violation_type': 'yes_no_ignored',
+                    'description': 'Bot asked YES/NO but ignored user response'
+                }
+            }
+
+    # Pattern 2: Bot asked for specific input format, user provided it, bot didn't process it
+    # Example: "Enter a time like 3pm" -> user: "3pm" -> bot: something unrelated
+    asked_for_time = any([
+        'time' in prev_msg_out and ('enter' in prev_msg_out or 'provide' in prev_msg_out),
+        'am or pm' in prev_msg_out or 'am or 1 pm' in prev_msg_out,
+    ])
+
+    if asked_for_time:
+        user_provided_time = any([
+            'am' in user_msg_in or 'pm' in user_msg_in,
+            re.search(r'\d+:\d+', current_log['message_in']),
+            re.search(r'\d+\s*(am|pm)', current_log['message_in'], re.IGNORECASE),
+        ])
+
+        if user_provided_time:
+            # Check if response processed the time
+            processed = any([
+                'remind' in current_msg_out and 'at' in current_msg_out,
+                'scheduled' in current_msg_out,
+                'set' in current_msg_out and ('reminder' in current_msg_out or 'summary' in current_msg_out),
+            ])
+
+            if not processed:
+                return {
+                    'issue_type': 'flow_violation',
+                    'severity': 'medium',
+                    'details': {
+                        'previous_bot_message': previous_log['message_out'][:200],
+                        'user_message': current_log['message_in'][:200],
+                        'our_response': current_log['message_out'][:200],
+                        'violation_type': 'time_format_ignored',
+                        'description': 'Bot asked for time but did not process user time input'
+                    }
+                }
+
+    return None
+
+
 def detect_low_confidence_rejection(log: dict, confidence_logs: list) -> Optional[dict]:
     """Detect when user rejected a low-confidence interpretation"""
     # Look for rejections in confidence logs for this user around this time
@@ -466,6 +610,7 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
         ]
 
         seen_issues = set()  # Avoid duplicates
+        previous_logs = {}  # Track previous log for each phone number
 
         for log in logs:
             for detector in detectors:
@@ -489,6 +634,34 @@ def analyze_interactions(hours: int = 24, dry_run: bool = False) -> dict:
                     issue['phone_number'] = log['phone_number']
                     results['issues_found'].append(issue)
                     results['summary']['confidence_rejection'] += 1
+
+            # Check context loss (requires previous log from same user)
+            phone = log['phone_number']
+            prev_log = previous_logs.get(phone)
+            if prev_log:
+                issue = detect_context_loss(log, prev_log)
+                if issue:
+                    issue_key = (log['id'], 'context_loss')
+                    if issue_key not in seen_issues:
+                        seen_issues.add(issue_key)
+                        issue['log_id'] = log['id']
+                        issue['phone_number'] = log['phone_number']
+                        results['issues_found'].append(issue)
+                        results['summary']['context_loss'] += 1
+
+                # Check flow violations (requires previous log from same user)
+                issue = detect_flow_violation(log, prev_log)
+                if issue:
+                    issue_key = (log['id'], 'flow_violation')
+                    if issue_key not in seen_issues:
+                        seen_issues.add(issue_key)
+                        issue['log_id'] = log['id']
+                        issue['phone_number'] = log['phone_number']
+                        results['issues_found'].append(issue)
+                        results['summary']['flow_violation'] += 1
+
+            # Update previous log for this phone number
+            previous_logs[phone] = log
 
         # Run aggregate pattern detectors
         repeated_issues = detect_repeated_attempts(logs_by_phone)
@@ -589,6 +762,8 @@ def generate_report(results: dict) -> str:
                 'confidence_rejection': '🎯',
                 'repeated_attempts': '🔄',
                 'action_not_found': '🔎',
+                'context_loss': '🔀',
+                'flow_violation': '⛔',
             }.get(issue_type, '•')
             lines.append(f"  {icon} {issue_type}: {count}")
         lines.append("")
