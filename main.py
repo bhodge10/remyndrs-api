@@ -4452,6 +4452,19 @@ async def health_check():
     }
 
 
+@app.options("/api/signup")
+async def desktop_signup_preflight():
+    """Handle CORS preflight for desktop signup"""
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        }
+    )
+
+
 @app.post("/api/signup")
 async def desktop_signup(request: Request):
     """
@@ -4465,7 +4478,12 @@ async def desktop_signup(request: Request):
         if not phone_number:
             return JSONResponse(
                 status_code=400,
-                content={"success": False, "error": "Phone number is required"}
+                content={"success": False, "error": "Phone number is required"},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type"
+                }
             )
 
         # Validate and format phone number
@@ -4481,19 +4499,21 @@ async def desktop_signup(request: Request):
         else:
             return JSONResponse(
                 status_code=400,
-                content={"success": False, "error": "Please enter a valid US phone number"}
+                content={"success": False, "error": "Please enter a valid US phone number"},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type"
+                }
             )
 
         # Check if user already exists
         from models.user import get_user
         existing_user = get_user(formatted_phone)
 
-        if existing_user and is_user_onboarded(formatted_phone):
-            # User already exists and is onboarded
-            message = "Welcome back! You already have an account. Just text us at (855) 552-1950 anytime to use Remyndrs!"
-        else:
-            # New user or incomplete onboarding - send welcome text
-            message = """👋 Welcome to Remyndrs!
+        # Always send new user message (for consistent testing experience)
+        # In production, you could customize this for returning users
+        message = """👋 Welcome to Remyndrs!
 
 I'm your AI-powered reminder assistant. I'll help you remember anything—from daily tasks to important dates.
 
@@ -4509,9 +4529,15 @@ Reply with your first name to get started, or text HELP for more info."""
         log_interaction(formatted_phone, "Desktop signup", "Signup SMS sent", "desktop_signup", True)
 
         return JSONResponse(
+            status_code=200,
             content={
                 "success": True,
                 "message": "Check your phone! We just sent you a text to get started."
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type"
             }
         )
 
@@ -4519,7 +4545,12 @@ Reply with your first name to get started, or text HELP for more info."""
         logger.error(f"Error in desktop signup: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"success": False, "error": "Something went wrong. Please try again or text us at (855) 552-1950"}
+            content={"success": False, "error": "Something went wrong. Please try again or text us at (855) 552-1950"},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type"
+            }
         )
 
 
