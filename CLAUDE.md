@@ -8,6 +8,28 @@ Remyndrs is an SMS-based AI memory and reminder service built with Python/FastAP
 
 **Stack:** Python 3.11.9, FastAPI, PostgreSQL, Celery + Redis (Upstash), OpenAI GPT-4o-mini, Twilio SMS, Stripe billing
 
+## Recommended Model for Development
+
+**Always use Claude Opus 4.5 for coding tasks.**
+
+When working with Claude Code on this repository, use the `/model` command to switch to Opus 4.5:
+```
+/model opus
+```
+
+**Why Opus 4.5 for coding:**
+- Superior code understanding and debugging capabilities
+- Better at identifying complex bugs and edge cases
+- More reliable for multi-file refactoring and architectural changes
+- Higher accuracy for critical fixes and feature implementation
+
+**When to use other models:**
+- Documentation updates: Sonnet is sufficient
+- Simple file reads or searches: Sonnet or Haiku
+- Quick questions: Sonnet
+
+For any substantive code changes, bug fixes, or feature development, **always use Opus 4.5**.
+
 ## Git Workflow
 
 **Branching model:** Feature branches off `main`. No long-lived staging branch.
