@@ -1971,7 +1971,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 'action': 'disabled'
             })
 
-            create_or_update_user(phone_number, daily_summary_enabled=False, pending_reminder_confirmation=undo_data)
+            # Clear daily_summary_prompted flag to exit the setup flow
+            create_or_update_user(
+                phone_number,
+                daily_summary_enabled=False,
+                daily_summary_prompted=False,
+                pending_reminder_confirmation=undo_data
+            )
 
             resp = MessagingResponse()
             resp.message(staging_prefix("Daily summary disabled. You'll no longer receive daily reminder summaries."))

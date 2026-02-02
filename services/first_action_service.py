@@ -311,6 +311,8 @@ def handle_daily_summary_response(phone_number, message):
         return True, send_welcome_with_delay(phone_number, "8:00 AM", timezone, current_time)
 
     if msg_lower in ['no', 'n', 'nope', 'nah', 'skip']:
+        # User declined - clear the prompted flag so they exit the flow
+        create_or_update_user(phone_number, daily_summary_prompted=False)
         return True, send_welcome_with_delay(phone_number, None, timezone, current_time)
 
     # Handle AM/PM clarification responses
