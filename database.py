@@ -415,6 +415,10 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_memory_delete TEXT",
             # Free trial support
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end_date TIMESTAMP",
+            # Trial expiration warning tracking
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_7d_sent BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_1d_sent BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_0d_sent BOOLEAN DEFAULT FALSE",
             # Feedback table (created via migration for existing deployments)
             """CREATE TABLE IF NOT EXISTS feedback (
                 id SERIAL PRIMARY KEY,

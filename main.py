@@ -367,9 +367,41 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if incoming_msg.upper() in ["RESET ACCOUNT", "RESTART"]:
             logger.info("RESET ACCOUNT matched - resetting user")
 
+            # Special full reset for developer testing (Brad's number)
+            # This gives a complete new user experience by deleting all data
+            # Normalize phone number for comparison (remove +1 prefix if present)
+            normalized_phone = phone_number.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+            is_developer = normalized_phone == "8593935374"
+
+            logger.info(f"Reset check - phone_number: '{phone_number}', normalized: '{normalized_phone}', is_developer: {is_developer}")
+
+            if is_developer:
+                logger.info("Developer full reset - deleting all user data")
+                try:
+                    from database import get_db_connection, return_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+
+                    # Delete all user data to simulate brand new user
+                    c.execute("DELETE FROM reminders WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM recurring_reminders WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM memories WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM list_items WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM lists WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM logs WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM users WHERE phone_number = %s", (phone_number,))
+
+                    conn.commit()
+                    return_db_connection(conn)
+                    logger.info("Full reset complete - all user data deleted")
+                except Exception as e:
+                    logger.error(f"Error during full reset: {e}")
+
+            # Standard reset (or after full delete for developer)
             # In staging, reset to step 0 to show the actual new user welcome message
             # In production, reset to step 1 (skips welcome, asks for name directly)
-            reset_step = 0 if ENVIRONMENT == "staging" else 1
+            reset_step = 0 if ENVIRONMENT == "staging" or is_developer else 1
 
             create_or_update_user(
                 phone_number,
@@ -384,16 +416,33 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 pending_reminder_text=None,
                 pending_reminder_time=None,
                 trial_end_date=None,
-                premium_status='free'
+                premium_status='free',
+                # Reset trial warning flags for new user experience
+                trial_warning_7d_sent=False,
+                trial_warning_1d_sent=False,
+                trial_warning_0d_sent=False,
+                # Reset daily summary flags
+                daily_summary_prompted=False,
+                daily_summary_enabled=False,
+                # Reset engagement nudge flags
+                five_minute_nudge_sent=False,
+                five_minute_nudge_scheduled_at=None,
+                post_onboarding_interactions=0,
+                # Reset trial info
+                trial_info_sent=False,
+                # Reset Stripe fields
+                stripe_customer_id=None,
+                stripe_subscription_id=None,
+                subscription_status=None
             )
 
             log_interaction(phone_number, incoming_msg, "Account reset", "reset", True)
 
-            # In staging, trigger the actual onboarding flow to show welcome message
-            if ENVIRONMENT == "staging":
+            # In staging or developer reset, trigger the actual onboarding flow to show welcome message
+            if ENVIRONMENT == "staging" or is_developer:
                 return handle_onboarding(phone_number, incoming_msg)
 
-            # In production, show abbreviated reset message
+            # In production (non-developer), show abbreviated reset message
             resp = MessagingResponse()
             resp.message("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?")
             return Response(content=str(resp), media_type="application/xml")
@@ -3163,6 +3212,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 save_reminder(phone_number, reminder_text, reminder_date)
                 reply_text = ai_response.get("confirmation", "Got it! I'll remind you.")
 
+            # Add usage counter for free tier users
+            from services.tier_service import add_usage_counter_to_message
+            reply_text = add_usage_counter_to_message(phone_number, reply_text)
+
             # Check if this is user's first action and prompt for daily summary
             if should_prompt_daily_summary(phone_number):
                 reply_text = get_daily_summary_prompt_message(reply_text)
@@ -3288,6 +3341,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 date_str = reminder_dt_local.strftime('%A, %B %d, %Y')
 
                 reply_text = f"Got it! I'll remind you on {date_str} at {time_str} {format_reminder_confirmation(reminder_text)}."
+
+                # Add usage counter for free tier users
+                from services.tier_service import add_usage_counter_to_message
+                reply_text = add_usage_counter_to_message(phone_number, reply_text)
 
                 # Check if this is user's first action and prompt for daily summary
                 if should_prompt_daily_summary(phone_number):

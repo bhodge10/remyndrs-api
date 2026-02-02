@@ -734,3 +734,124 @@ def send_engagement_nudge(self, phone_number: str):
         # Log other errors but don't retry - this is a non-critical message
         logger.error(f"Error in engagement nudge task for ...{phone_number[-4:]}: {exc}")
         return {"status": "error", "error": str(exc)}
+
+
+# =====================================================
+# TRIAL EXPIRATION WARNINGS
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def check_trial_expirations(self):
+    """
+    Check for users whose trials are expiring soon and send warnings.
+    Sends warnings on:
+    - Day 7: 7 days remaining
+    - Day 1: 1 day remaining
+    - Day 0: Trial expired (downgraded to free)
+
+    Runs daily via Celery Beat.
+    Tracks sent warnings to avoid duplicates.
+    """
+    import pytz
+    from datetime import datetime
+    from database import get_db_connection, return_db_connection
+    from models.user import create_or_update_user
+    from config import PREMIUM_MONTHLY_PRICE
+
+    logger.info("Starting trial expiration check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get all users with active trials (trial_end_date in the future and premium_status = 'premium')
+        # Also get their warning status columns
+        now_utc = datetime.utcnow()
+
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date,
+                   trial_warning_7d_sent, trial_warning_1d_sent, trial_warning_0d_sent
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date > %s - INTERVAL '8 days'
+              AND onboarding_complete = TRUE
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users with active or recently expired trials")
+            return {"warnings_sent": 0}
+
+        logger.info(f"Checking {len(users)} users with trials")
+
+        warnings_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date, warning_7d_sent, warning_1d_sent, warning_0d_sent = user
+
+            # Calculate days remaining
+            time_remaining = trial_end_date - now_utc
+            days_remaining = time_remaining.days
+
+            # Determine which warning to send
+            warning_to_send = None
+            update_field = None
+
+            if days_remaining == 7 and not warning_7d_sent:
+                # 7 days remaining warning
+                warning_to_send = f"""You have 7 days left in your Premium trial! ⏰
+
+After your trial, you'll move to the free plan (2 reminders/day).
+
+Want to keep unlimited reminders? Text UPGRADE to continue Premium for {PREMIUM_MONTHLY_PRICE}/month."""
+                update_field = 'trial_warning_7d_sent'
+
+            elif days_remaining == 1 and not warning_1d_sent:
+                # 1 day remaining warning
+                warning_to_send = f"""Tomorrow is your last day of Premium trial! ⏰
+
+After that, you'll be on the free plan (2 reminders/day).
+
+Text UPGRADE now to keep unlimited reminders for {PREMIUM_MONTHLY_PRICE}/month."""
+                update_field = 'trial_warning_1d_sent'
+
+            elif days_remaining <= 0 and not warning_0d_sent:
+                # Trial expired - downgrade message
+                warning_to_send = f"""Your Premium trial has ended. You're now on the free plan (2 reminders/day).
+
+All your data is safe!
+
+Want unlimited reminders again? Text UPGRADE anytime for {PREMIUM_MONTHLY_PRICE}/month."""
+                update_field = 'trial_warning_0d_sent'
+
+            # Send warning if needed
+            if warning_to_send and update_field:
+                try:
+                    send_sms(phone_number, warning_to_send)
+
+                    # Mark warning as sent
+                    create_or_update_user(phone_number, **{update_field: True})
+
+                    warnings_sent += 1
+                    logger.info(f"Sent trial warning (day {days_remaining}) to ...{phone_number[-4:]}")
+
+                except Exception as sms_error:
+                    logger.error(f"Failed to send trial warning to ...{phone_number[-4:]}: {sms_error}")
+                    continue
+
+        logger.info(f"Trial expiration check complete: {warnings_sent} warnings sent")
+        return {"warnings_sent": warnings_sent}
+
+    except Exception as exc:
+        logger.exception("Error in check_trial_expirations")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)

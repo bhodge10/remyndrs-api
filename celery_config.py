@@ -48,6 +48,14 @@ beat_schedule = {
         "task": "tasks.reminder_tasks.send_abandoned_onboarding_followups",
         "schedule": timedelta(hours=1),
     },
+    # Check trial expirations and send warnings daily at 9 AM UTC
+    "check-trial-expirations": {
+        "task": "tasks.reminder_tasks.check_trial_expirations",
+        "schedule": crontab(hour=9, minute=0),  # 9:00 AM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
 
     # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)
