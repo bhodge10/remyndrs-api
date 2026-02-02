@@ -140,7 +140,99 @@
         .cta-white:hover {
             box-shadow: 0 4px 12px rgba(255, 255, 255, 0.3);
         }
-        
+
+        /* Desktop Signup Form */
+        .signup-container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        .desktop-signup {
+            display: none; /* Hidden by default, shown on desktop via media query */
+        }
+
+        .mobile-signup {
+            display: block; /* Shown by default on mobile */
+        }
+
+        @media (min-width: 768px) {
+            .desktop-signup {
+                display: block;
+            }
+            .mobile-signup {
+                display: none;
+            }
+        }
+
+        .signup-form {
+            display: flex;
+            gap: 12px;
+            max-width: 450px;
+            margin: 0 auto 20px;
+        }
+
+        .phone-input {
+            flex: 1;
+            padding: 16px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .phone-input:focus {
+            outline: 3px solid rgba(255, 255, 255, 0.5);
+        }
+
+        .signup-button {
+            background: var(--success-green);
+            color: white;
+            padding: 16px 32px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            white-space: nowrap;
+        }
+
+        .signup-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(80, 182, 136, 0.4);
+        }
+
+        .signup-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .signup-message {
+            margin-top: 15px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .signup-message.success {
+            background: rgba(80, 182, 136, 0.2);
+            color: #2d5f45;
+            display: block;
+        }
+
+        .signup-message.error {
+            background: rgba(231, 76, 60, 0.2);
+            color: #c0392b;
+            display: block;
+        }
+
+        .signup-help {
+            font-size: 14px;
+            margin-top: 10px;
+            opacity: 0.9;
+        }
+
         /* QR Code Section - NEW */
         .qr-section {
             background: var(--bg-light);
@@ -793,12 +885,38 @@
             
             <!-- CURRENT SUBTITLE: -->
             <p>Your personal memory assistant via SMS. Just text it, and we'll remember it for you.</p>
-            
+
             <!-- ALTERNATIVE HEADLINE FOR A/B TESTING:
             <h1>Stop holding everything in your head.</h1>
             <p>Your external memory, via text. No app. No signup. Just text.</p>
             -->
-            <a href="sms:8555521950" class="cta-button">Text Us Now: (855) 552-1950</a>
+
+            <div class="signup-container">
+                <!-- Desktop Signup Form (shows on desktop only) -->
+                <div class="desktop-signup">
+                    <form class="signup-form" id="desktopSignupForm">
+                        <input
+                            type="tel"
+                            class="phone-input"
+                            id="phoneInput"
+                            placeholder="Enter your phone number"
+                            pattern="[0-9\-\(\)\s]+"
+                            required
+                        >
+                        <button type="submit" class="signup-button" id="submitButton">
+                            Get Started
+                        </button>
+                    </form>
+                    <div class="signup-message" id="signupMessage"></div>
+                    <p class="signup-help">We'll text you to get started - no app download needed!</p>
+                </div>
+
+                <!-- Mobile Signup (shows on mobile only) -->
+                <div class="mobile-signup">
+                    <a href="sms:8555521950" class="cta-button">Text Us Now: (855) 552-1950</a>
+                </div>
+            </div>
+
             <p class="sms-disclaimer">By texting, you consent to receive SMS messages from Remyndrs. Msg & data rates may apply. Reply STOP to unsubscribe.</p>
         </div>
     </section>
@@ -1206,6 +1324,73 @@
             document.addEventListener('touchstart', function(e) {
                 if (window.innerWidth <= 1024 && !e.target.closest('.case')) {
                     closeAllConversations();
+                }
+            });
+        });
+    </script>
+
+    <!-- Desktop Signup Form Handler -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('desktopSignupForm');
+            if (!form) return; // Exit if form doesn't exist
+
+            form.addEventListener('submit', async function(e) {
+                e.preventDefault();
+
+                const phoneInput = document.getElementById('phoneInput');
+                const submitButton = form.querySelector('.signup-button');
+                const messageDiv = document.getElementById('signupMessage');
+
+                const phone = phoneInput.value.trim();
+
+                // Basic validation
+                if (!phone) {
+                    messageDiv.className = 'signup-message error';
+                    messageDiv.textContent = 'Please enter your phone number';
+                    messageDiv.style.display = 'block';
+                    return;
+                }
+
+                // Disable button and show loading state
+                const originalButtonText = submitButton.textContent;
+                submitButton.disabled = true;
+                submitButton.textContent = 'Sending...';
+                messageDiv.style.display = 'none';
+
+                try {
+                    const response = await fetch('/api/signup', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ phone: phone })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok && data.success) {
+                        // Success
+                        messageDiv.className = 'signup-message success';
+                        messageDiv.textContent = data.message || 'Check your phone! We just sent you a text to get started.';
+                        messageDiv.style.display = 'block';
+                        phoneInput.value = ''; // Clear the form
+                    } else {
+                        // Error from server
+                        messageDiv.className = 'signup-message error';
+                        messageDiv.textContent = data.error || 'Something went wrong. Please try again.';
+                        messageDiv.style.display = 'block';
+                    }
+                } catch (error) {
+                    // Network or other error
+                    messageDiv.className = 'signup-message error';
+                    messageDiv.textContent = 'Something went wrong. Please try texting us directly at (855) 552-1950';
+                    messageDiv.style.display = 'block';
+                    console.error('Signup error:', error);
+                } finally {
+                    // Re-enable button
+                    submitButton.disabled = false;
+                    submitButton.textContent = originalButtonText;
                 }
             });
         });
