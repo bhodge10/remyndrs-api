@@ -1910,18 +1910,26 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 tier = usage['tier']
                 trial_info = get_trial_info(phone_number)
                 subscription = get_user_subscription(phone_number)
+
+                # Format member since date
+                if created_at:
+                    # Handle both datetime objects and timestamps
+                    if isinstance(created_at, datetime):
+                        member_since = created_at.strftime('%b %d, %Y')
+                    elif isinstance(created_at, (int, float)):
+                        # Unix timestamp - convert to datetime
+                        member_since = datetime.fromtimestamp(created_at).strftime('%b %d, %Y')
+                    else:
+                        member_since = str(created_at)
+                else:
+                    member_since = "Unknown"
+
             except Exception as e:
                 logger.error(f"Error in STATUS command for {phone_number}: {e}", exc_info=True)
                 resp = MessagingResponse()
                 resp.message("Unable to retrieve account status. Please try again later.")
                 log_interaction(phone_number, incoming_msg, f"Status error: {str(e)}", "status_error", False)
                 return Response(content=str(resp), media_type="application/xml")
-
-            # Format member since date
-            if created_at:
-                member_since = created_at.strftime('%b %d, %Y')
-            else:
-                member_since = "Unknown"
 
             # Build status message
             status_lines = [f"📊 Account Status\n"]
