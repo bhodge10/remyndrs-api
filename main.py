@@ -1886,6 +1886,100 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # STATUS COMMAND (Account Overview)
+        # ==========================================
+        if incoming_msg.upper() in ["STATUS", "MY ACCOUNT", "ACCOUNT INFO", "USAGE"]:
+            from services.tier_service import get_usage_summary, get_trial_info
+            from services.stripe_service import get_user_subscription
+            from datetime import datetime
+
+            # Get user info
+            user = get_user(phone_number)
+            if not user:
+                resp = MessagingResponse()
+                resp.message("Unable to retrieve account info. Please try again.")
+                log_interaction(phone_number, incoming_msg, "Status - user not found", "status_error", False)
+                return Response(content=str(resp), media_type="application/xml")
+
+            first_name = user[1] or "there"
+            created_at = user[7] if len(user) > 7 else None
+
+            # Get tier and usage info
+            usage = get_usage_summary(phone_number)
+            tier = usage['tier']
+            trial_info = get_trial_info(phone_number)
+            subscription = get_user_subscription(phone_number)
+
+            # Format member since date
+            if created_at:
+                member_since = created_at.strftime('%b %d, %Y')
+            else:
+                member_since = "Unknown"
+
+            # Build status message
+            status_lines = [f"📊 Account Status\n"]
+
+            # Plan info with trial status
+            if trial_info['is_trial']:
+                days_left = trial_info['days_remaining']
+                day_word = "day" if days_left == 1 else "days"
+                status_lines.append(f"Plan: Premium (Trial - {days_left} {day_word} left)")
+            else:
+                status_lines.append(f"Plan: {tier.title()}")
+
+            status_lines.append(f"Member since: {member_since}")
+
+            # Next billing (if premium and not trial)
+            if tier == 'premium' and not trial_info['is_trial']:
+                # Get next billing date from Stripe if available
+                if subscription.get('current_period_end'):
+                    try:
+                        from datetime import datetime
+                        next_billing = datetime.fromtimestamp(subscription['current_period_end'])
+                        status_lines.append(f"Next billing: {next_billing.strftime('%b %d, %Y')}")
+                    except:
+                        pass
+
+            # Usage stats
+            status_lines.append(f"\nThis Month:")
+
+            # Reminders today (free tier) or total reminders
+            if tier == 'free':
+                reminders_today = usage['reminders_today']
+                reminders_limit = usage['reminders_limit']
+                status_lines.append(f"• {reminders_today} of {reminders_limit} reminders today")
+            else:
+                reminders_today = usage['reminders_today']
+                status_lines.append(f"• {reminders_today} reminders created today")
+
+            # Lists
+            lists_count = usage['lists']
+            lists_limit = usage['lists_limit']
+            status_lines.append(f"• {lists_count} of {lists_limit} lists")
+
+            # Memories
+            memories_count = usage['memories']
+            memories_limit = usage['memories_limit']
+            if memories_limit is None:
+                status_lines.append(f"• {memories_count} memories saved")
+            else:
+                status_lines.append(f"• {memories_count} of {memories_limit} memories")
+
+            # Quick actions
+            status_lines.append(f"\nQuick Actions:")
+            if tier == 'free':
+                status_lines.append(f"• Text UPGRADE for unlimited")
+            else:
+                status_lines.append(f"• Text ACCOUNT to manage billing")
+
+            message = "\n".join(status_lines)
+
+            resp = MessagingResponse()
+            resp.message(message)
+            log_interaction(phone_number, incoming_msg, "Status sent", "status", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # SUPPORT HANDLING (Premium users, or all users in beta mode)
         # ==========================================
         command, message_text = parse_command(incoming_msg, known_commands=["SUPPORT"])

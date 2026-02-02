@@ -419,6 +419,8 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_7d_sent BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_1d_sent BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_0d_sent BOOLEAN DEFAULT FALSE",
+            # Mid-trial value reminder (Day 7 engagement message)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS mid_trial_reminder_sent BOOLEAN DEFAULT FALSE",
             # Feedback table (created via migration for existing deployments)
             """CREATE TABLE IF NOT EXISTS feedback (
                 id SERIAL PRIMARY KEY,

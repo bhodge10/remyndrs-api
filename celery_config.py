@@ -56,6 +56,14 @@ beat_schedule = {
             "expires": 3600,  # 1 hour expiry
         },
     },
+    # Send mid-trial value reminders daily at 10 AM UTC
+    "send-mid-trial-value-reminders": {
+        "task": "tasks.reminder_tasks.send_mid_trial_value_reminders",
+        "schedule": crontab(hour=10, minute=0),  # 10:00 AM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
 
     # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)
