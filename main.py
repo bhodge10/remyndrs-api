@@ -1918,11 +1918,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         member_since = created_at.strftime('%b %d, %Y')
                     elif isinstance(created_at, (int, float)):
                         # Unix timestamp - convert to datetime
-                        member_since = datetime.fromtimestamp(created_at).strftime('%b %d, %Y')
+                        # If timestamp is 0 or very old (before 2020), show "Recently"
+                        if created_at < 1577836800:  # Jan 1, 2020 timestamp
+                            member_since = "Recently"
+                        else:
+                            member_since = datetime.fromtimestamp(created_at).strftime('%b %d, %Y')
                     else:
                         member_since = str(created_at)
                 else:
-                    member_since = "Unknown"
+                    member_since = "Recently"
 
             except Exception as e:
                 logger.error(f"Error in STATUS command for {phone_number}: {e}", exc_info=True)
