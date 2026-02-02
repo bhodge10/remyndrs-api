@@ -159,6 +159,22 @@ Optional: `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_K
 
 15 messages per 60-second window per user (configurable in `config.py`).
 
+## Recent Bug Fixes & Improvements
+
+### Context Loss Bug Fix (Feb 2026)
+**Issue:** When users were selecting a list by number (e.g., replying "1" to "Which list?"), the daily summary handler was intercepting the response and asking "Did you mean 1 AM or 1 PM?" instead of adding items to the selected list.
+
+**Root Cause:** The `has_pending_state` check in `main.py:576` didn't include `pending_list_item`, allowing the daily summary handler to run during list selection flows.
+
+**Fix:** Added `pending_list_item` to the pending state checks, ensuring the daily summary handler skips when users are in the middle of list operations.
+
+**Files Changed:**
+- `main.py:576` - Added `pending_list_item` check to `has_pending_state`
+- `agents/interaction_monitor.py` - Added context loss and flow violation detectors
+- `agents/interaction_monitor.py:576` - Fixed log ordering (DESC → ASC) for chronological analysis
+
+**Prevention:** New monitoring detectors (`context_loss`, `flow_violation`) now automatically catch similar handler ordering issues.
+
 ## Multi-Agent Monitoring System
 
 Automated issue detection and health tracking for the SMS service.
@@ -172,7 +188,10 @@ Automated issue detection and health tracking for the SMS service.
 ### Four Agents
 1. **Agent 1 - Interaction Monitor** (`agents/interaction_monitor.py`)
    - Detects anomalies: user confusion, parsing failures, error responses, timezone issues
+   - **Context Loss Detection:** Catches when bot asks for input (e.g., "reply with number") but responds with unrelated content
+   - **Flow Violation Detection:** Detects when bot ignores YES/NO responses or expected input formats
    - Scans `logs` table for patterns indicating problems
+   - Processes logs chronologically to detect multi-turn conversation issues
 
 2. **Agent 2 - Issue Validator** (`agents/issue_validator.py`)
    - Validates issues from Agent 1, filters false positives
@@ -209,6 +228,19 @@ Configured via dashboard Alert Settings section:
 - **Teams:** Requires `TEAMS_WEBHOOK_URL` env var
 - **Email:** Requires `SMTP_*` env vars and recipient list
 - **SMS:** For critical issues only (health < 50)
+
+### Issue Types Detected
+- **user_confusion** - User expresses confusion ("huh?", "what?", "not working")
+- **error_response** - System sends error message ("sorry", "couldn't process", "try again")
+- **parsing_failure** - System can't understand user intent
+- **timezone_issue** - User reports wrong time/timezone
+- **failed_action** - Action explicitly failed (success=False)
+- **action_not_found** - System tried to act on non-existent item
+- **confidence_rejection** - User rejected low-confidence interpretation
+- **repeated_attempts** - User sends same message 3+ times (frustration)
+- **delivery_failure** - Reminder failed to send
+- **context_loss** 🔀 - Bot asks for input but responds with unrelated content (e.g., asks "which list?" → user says "1" → bot talks about time)
+- **flow_violation** ⛔ - Bot ignores expected response (e.g., asks YES/NO → user says "YES" → bot ignores it)
 
 ### Database Tables
 `monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
