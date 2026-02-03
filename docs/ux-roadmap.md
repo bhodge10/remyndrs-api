@@ -53,7 +53,9 @@
 
 ## Prioritized Action Plan
 
-### PHASE 1: Critical Fixes
+**Status (Feb 2026):** No SMS UX phases started yet. Website roadmap phases 1-2 are mostly complete (see `docs/website-roadmap.md`).
+
+### PHASE 1: Critical Fixes (NOT STARTED)
 **Impact: High | Effort: Low | Expected: +15% trial conversion**
 
 #### 1. Trial Expiration Warnings

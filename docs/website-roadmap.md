@@ -15,17 +15,18 @@
 ### 1. Desktop Signup Friction (COMPLETED - Feb 2026)
 **Status:** Implemented and deployed via `/api/signup` endpoint.
 Desktop conversion expected to increase from 3% to 12%+ (+300%).
+Additionally, all `sms:` links site-wide replaced with desktop alternatives (scroll-to-hero, scroll-to-contact, clipboard share). See `DESKTOP-SMS-CHANGES.md` for details.
 
-### 2. Missing Trust Indicators (CRITICAL - P0)
-**Issues:**
-- Privacy policy returns 404
-- No terms of service visible
+### 2. Missing Trust Indicators (PARTIALLY COMPLETED - Feb 2026)
+**Completed:**
+- Privacy policy page (`privacy.html`) created
+- Terms of service page (`terms.html`) created
+
+**Remaining:**
 - No "About Us" or team info
 - Privacy messaging buried mid-page
 - Only 1 testimonial
 - No security badges/certifications
-
-**Priority:** Create `/privacy` and `/terms` pages ASAP (removes major trust barrier)
 
 ### 3. Unclear Post-Trial Journey (HIGH - P0)
 Users don't know what happens on day 15. Add explicit messaging:
@@ -38,8 +39,8 @@ Replace vague features ("Smart Reminders", "Always Accessible", "Constantly Lear
 ### 5. Pricing Confusion (MODERATE - P1)
 Clarify: monthly billing (not upfront), when promo price ends, remove fake scarcity unless real-time.
 
-### 6. No FAQ Section (MODERATE - P1)
-Add top 10 FAQs: SMS costs, post-trial behavior, cancellation, data privacy, carrier support, international use, AI parsing, shared lists, phone loss, data export.
+### 6. No FAQ Section (COMPLETED - Feb 2026)
+**Status:** `faq.html` created with comprehensive FAQ content. Desktop contact links integrated.
 
 ---
 
@@ -47,14 +48,14 @@ Add top 10 FAQs: SMS costs, post-trial behavior, cancellation, data privacy, car
 
 ### PHASE 1: Trust & Legal (CRITICAL)
 
-1. **Create Privacy Policy Page** - `/privacy` (currently 404)
-2. **Create Terms of Service** - `/terms`
+1. **Create Privacy Policy Page** - DONE (`privacy.html`)
+2. **Create Terms of Service** - DONE (`terms.html`)
 3. **Add Trust Indicators to Hero** - encryption badge, user count, phone compatibility
 
 ### PHASE 2: Conversion Optimization (HIGH IMPACT)
 
-4. **Desktop Signup Flow** - COMPLETED (Feb 2026)
-5. **Add FAQ Section** - After "How It Works", before Pricing, accordion format
+4. **Desktop Signup Flow** - DONE (Feb 2026). All SMS links site-wide also replaced with desktop alternatives.
+5. **Add FAQ Section** - DONE (`faq.html`)
 6. **Clarify Pricing Copy** - Explicit post-trial explanation, remove fake scarcity, add annual option
 7. **Expand Social Proof** - 3-5 more testimonials, metrics, trust badges
 
@@ -75,7 +76,7 @@ Add top 10 FAQs: SMS costs, post-trial behavior, cancellation, data privacy, car
 ## Quick Wins
 
 1. Make phone number clickable: `<a href="sms:+18555521950&body=START">`
-2. Fix 404 privacy page (even a placeholder)
+2. ~~Fix 404 privacy page~~ - DONE
 3. Improve CTA copy: "Get Started" -> "Start Free Trial - No Credit Card"
 
 ---
