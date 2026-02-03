@@ -420,8 +420,44 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 conn = get_db_connection()
                 c = conn.cursor()
 
-                # Delete tables with foreign keys first
-                c.execute("DELETE FROM conversation_analysis WHERE phone_number = %s", (phone_number,))
+                # Clean up monitoring agent FK chain (these tables reference logs via monitoring_issues)
+                # Use savepoints since monitoring tables may not exist in all environments
+                c.execute("SELECT id FROM logs WHERE phone_number = %s", (phone_number,))
+                log_ids = [row[0] for row in c.fetchall()]
+
+                if log_ids:
+                    # Get monitoring_issues IDs that reference this user's logs
+                    mi_ids = []
+                    try:
+                        c.execute("SAVEPOINT mi_lookup")
+                        c.execute("SELECT id FROM monitoring_issues WHERE log_id = ANY(%s)", (log_ids,))
+                        mi_ids = [row[0] for row in c.fetchall()]
+                    except Exception:
+                        c.execute("ROLLBACK TO SAVEPOINT mi_lookup")
+
+                    if mi_ids:
+                        for table in ['code_analysis', 'issue_pattern_links', 'fix_proposals', 'issue_resolutions']:
+                            try:
+                                c.execute(f"SAVEPOINT del_{table}")
+                                c.execute(f"DELETE FROM {table} WHERE issue_id = ANY(%s)", (mi_ids,))
+                            except Exception:
+                                c.execute(f"ROLLBACK TO SAVEPOINT del_{table}")
+                        try:
+                            c.execute("SAVEPOINT del_mi")
+                            c.execute("DELETE FROM monitoring_issues WHERE id = ANY(%s)", (mi_ids,))
+                        except Exception:
+                            c.execute("ROLLBACK TO SAVEPOINT del_mi")
+
+                    # conversation_analysis also references logs(id)
+                    c.execute("DELETE FROM conversation_analysis WHERE log_id = ANY(%s)", (log_ids,))
+
+                # Delete remaining monitoring/analysis rows by phone_number
+                for table in ['conversation_analysis', 'monitoring_issues']:
+                    try:
+                        c.execute(f"SAVEPOINT del_{table}_ph")
+                        c.execute(f"DELETE FROM {table} WHERE phone_number = %s", (phone_number,))
+                    except Exception:
+                        c.execute(f"ROLLBACK TO SAVEPOINT del_{table}_ph")
                 c.execute("DELETE FROM support_messages WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM support_tickets WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM confidence_logs WHERE phone_number = %s", (phone_number,))
