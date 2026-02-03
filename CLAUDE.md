@@ -123,12 +123,44 @@ SMS → Twilio webhook (/sms) → main.py validates → ai_service.py processes 
 
 ## Deployment
 
-Deployed on Render with three services:
+Deployed on Render with four services:
 1. **sms-reminders-api** - FastAPI web service
-2. **sms-reminders-worker** - Celery worker
-3. **sms-reminders-beat** - Celery Beat scheduler
+2. **sms-reminders-worker** - Celery worker (processes reminder tasks)
+3. **sms-reminders-beat** - Celery Beat scheduler (triggers periodic tasks)
+4. **sms-reminders-monitoring** - Celery worker for monitoring pipeline (dedicated queue)
 
 Config in `render.yaml`. Auto-deploys on push to main.
+
+**Deployment Time:**
+- Current: ~5-7 minutes (optimized from 8-12 minutes)
+- All 4 services deploy simultaneously
+- Each service rebuilds independently (no shared cache on free tier)
+- Production dependencies: `requirements-prod.txt` (15 packages, no test frameworks)
+- Development dependencies: `requirements.txt` includes `-r requirements-prod.txt` + pytest
+
+**Important Deployment Notes:**
+1. **DATABASE_URL Syncing:** If database is recreated, the DATABASE_URL environment variable in all services must be manually updated via Render dashboard. The `fromDatabase` auto-sync in render.yaml only works during initial blueprint deployment or manual blueprint re-sync.
+
+2. **Overlapping Deploys:** Render's default policy cancels previous deployments when a new one starts. This is normal and saves time by not deploying intermediate commits.
+
+3. **CORS for API Endpoints:** FastAPI endpoints that need to be called from remyndrs.com must use CORSMiddleware. Do NOT use manual `@app.options()` handlers as they can fail. Example:
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or ["https://remyndrs.com"] for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+**Website Hosting:**
+- **remyndrs.com** hosted on Netlify
+- Static files served directly
+- API calls go directly to `https://sms-reminders-api-1gmm.onrender.com` (CORS enabled)
+- Alternative: Use Netlify `_redirects` file to proxy API calls (cleaner URLs, backend abstraction)
 
 ## Testing
 
@@ -196,6 +228,75 @@ Optional: `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_K
 - `agents/interaction_monitor.py:576` - Fixed log ordering (DESC → ASC) for chronological analysis
 
 **Prevention:** New monitoring detectors (`context_loss`, `flow_violation`) now automatically catch similar handler ordering issues.
+
+### Desktop Signup Flow Implementation (Feb 2026)
+**Feature:** Implemented desktop signup flow to eliminate device switching friction for desktop website visitors.
+
+**Problem:** Desktop users had to scan QR code or manually type phone number, causing ~50% bounce rate and 3% conversion (vs 12% mobile).
+
+**Solution:** Added phone number input form on remyndrs.com that sends SMS directly to start onboarding.
+
+**Implementation:**
+
+**Backend (main.py:4455-4510):**
+- Added `POST /api/signup` endpoint
+- Phone validation for US numbers (10 or 11 digits)
+- E.164 formatting (+1XXXXXXXXXX)
+- Sends welcome SMS with onboarding prompt
+- Logs interaction as `desktop_signup` for analytics
+- Uses FastAPI CORSMiddleware for proper cross-origin support
+
+**Frontend (remyndrs.com):**
+- Responsive design: form on desktop (≥768px), SMS link on mobile
+- JavaScript form handler with fetch API
+- Direct API call to Render backend (Netlify proxy not required)
+- Success/error message display with proper UX
+
+**CORS Configuration:**
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows remyndrs.com to call Render API
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+**Key Learning:** FastAPI's CORSMiddleware is the proper way to handle CORS. Manual `@app.options()` handlers can fail. The middleware automatically handles preflight OPTIONS requests and adds proper headers to all responses.
+
+**Deployment Optimization (PR #61):**
+- Split `requirements.txt` into `requirements-prod.txt` (production only) and `requirements.txt` (dev + prod)
+- Removed pytest, pytest-asyncio, pytest-cov from production builds
+- Reduced deployment time from 8-12 minutes to 5-7 minutes (~40% improvement)
+- Note: 4 services deploy simultaneously (API + 3 workers), each rebuilds independently
+
+**Database Connectivity Issue:**
+- Services had stale DATABASE_URL pointing to old database hostname
+- Fixed by manually updating DATABASE_URL in all 4 services via Render dashboard
+- Root cause: Database was recreated but environment variables didn't auto-sync
+- Blueprint auto-sync only works during initial deployment or manual re-sync
+
+**Expected Impact:**
+- Desktop conversion rate: **3% → 12%+** (+300% improvement)
+- Matches mobile conversion rate
+- Eliminates device switching friction
+- +200% overall website conversion improvement
+
+**Files Changed:**
+- `main.py` - Added `/api/signup` endpoint, CORSMiddleware
+- `requirements-prod.txt` - Created production-only dependencies file
+- `requirements.txt` - Now includes `-r requirements-prod.txt` + dev dependencies
+- `render.yaml` - Updated all services to use `requirements-prod.txt`
+- `C:\Users\BradHodge\OneDrive - Simple IT\Remyndrs\Website\index.html` - Updated JavaScript to call Render API directly
+
+**PRs:**
+- PR #59: Desktop signup flow implementation
+- PR #60: Initial CORS headers attempt
+- PR #61: Deployment optimization
+- PR #62: Fixed CORS with proper middleware
 
 ## Multi-Agent Monitoring System
 
@@ -695,10 +796,13 @@ Top 10 FAQs to include:
 **Impact:** +200% desktop conversion rate
 **Effort:** 3-4 days
 
-##### 4. Desktop Signup Flow (2-3 days)
-**Frontend:** Add phone number input form in hero
-**Backend:** Create SMS signup link endpoint
-**Flow:** User enters phone → receives SMS with unique link → completes onboarding
+##### 4. Desktop Signup Flow ✅ COMPLETED (Feb 2026)
+**Status:** Implemented and deployed
+**Frontend:** Phone number input form on remyndrs.com (responsive design)
+**Backend:** `/api/signup` endpoint with phone validation and SMS sending
+**Flow:** User enters phone → receives SMS with welcome message → starts onboarding
+**Result:** Desktop conversion expected to increase from 3% to 12%+ (+300%)
+**See:** "Desktop Signup Flow Implementation" in Recent Bug Fixes & Improvements section above
 
 ##### 5. Add FAQ Section (1 day)
 **Placement:** After "How It Works", before Pricing
