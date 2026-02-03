@@ -4731,6 +4731,116 @@ Reply with your first name to get started, or text HELP for more info."""
         )
 
 
+@app.post("/api/contact")
+async def website_contact(request: Request):
+    """
+    Website contact form endpoint - receives messages from desktop users
+    who can't use SMS links directly.
+    """
+    try:
+        data = await request.json()
+        phone_number = data.get('phone')
+        contact_type = data.get('type', '').lower()
+        message = data.get('message', '').strip()
+
+        if not phone_number:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Phone number is required"}
+            )
+
+        if contact_type not in ('support', 'feedback', 'question', 'bug'):
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Invalid contact type"}
+            )
+
+        if not message:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Message is required"}
+            )
+
+        # Validate and format phone number
+        import re
+        digits_only = re.sub(r'\D', '', phone_number)
+
+        if len(digits_only) == 10:
+            formatted_phone = f"+1{digits_only}"
+        elif len(digits_only) == 11 and digits_only[0] == '1':
+            formatted_phone = f"+{digits_only}"
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Please enter a valid US phone number"}
+            )
+
+        # Build the feedback message with type prefix
+        if contact_type == 'feedback':
+            db_message = message
+        elif contact_type == 'bug':
+            db_message = f"[BUG] {message}"
+        elif contact_type == 'question':
+            db_message = f"[QUESTION] {message}"
+        elif contact_type == 'support':
+            db_message = f"[SUPPORT] {message}"
+
+        # Save to feedback table
+        from database import get_db_connection, return_db_connection
+        conn = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute(
+                'INSERT INTO feedback (user_phone, message) VALUES (%s, %s)',
+                (formatted_phone, db_message)
+            )
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Error saving contact form submission: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Something went wrong. Please try again."}
+            )
+        finally:
+            if conn:
+                return_db_connection(conn)
+
+        # Send confirmation SMS
+        from services.sms_service import send_sms
+        type_labels = {
+            'support': 'support request',
+            'feedback': 'feedback',
+            'question': 'question',
+            'bug': 'bug report'
+        }
+        type_label = type_labels[contact_type]
+
+        try:
+            confirmation_msg = f"We received your {type_label}. To continue the conversation, text us anytime at this number."
+            send_sms(formatted_phone, confirmation_msg)
+        except Exception as e:
+            logger.error(f"Error sending contact confirmation SMS: {e}")
+            # Don't fail the request if SMS fails - the feedback was already saved
+
+        log_interaction(formatted_phone, f"[WEB CONTACT] {db_message}", "Contact form confirmation sent", f"web_contact_{contact_type}", True)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "message": f"Your {type_label} has been received! Check your phone for a confirmation text."
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error in website contact form: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "Something went wrong. Please try again or text us at (855) 552-1950"}
+        )
+
+
 @app.get("/contact.vcf")
 async def get_contact_vcf():
     """Serve Remyndrs contact card (VCF) for saving to phone contacts"""
