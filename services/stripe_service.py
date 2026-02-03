@@ -520,9 +520,11 @@ def get_upgrade_message(phone_number: str) -> str:
 
 {PREMIUM_MONTHLY_PRICE}/month
 - Unlimited reminders per day
-- Recurring reminders (daily, weekly, monthly)
-- Unlimited lists & memories
-- Priority support
+- 20 lists (30 items each)
+- Unlimited saved memories
+- Recurring reminders
+- Priority support tickets
+- Advanced AI features
 - Cancel anytime
 
 Text PREMIUM to get your upgrade link."""
