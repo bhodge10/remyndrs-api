@@ -501,6 +501,8 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS post_onboarding_interactions INTEGER DEFAULT 0",
             # Trial info messaging (one-time after first real interaction)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_info_sent BOOLEAN DEFAULT FALSE",
+            # DELETE ACCOUNT: two-step confirmation flag
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_delete_account BOOLEAN DEFAULT FALSE",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
