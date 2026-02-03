@@ -9,7 +9,7 @@ import pytz
 import asyncio
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Form, Request, HTTPException
-from fastapi.responses import Response, HTMLResponse, FileResponse
+from fastapi.responses import Response, HTMLResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from twilio.twiml.messaging_response import MessagingResponse
