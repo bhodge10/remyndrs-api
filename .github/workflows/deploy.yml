@@ -1,0 +1,37 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Trigger Render Deployment
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy API Service
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_API }}"
+
+      - name: Deploy Worker Service
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_WORKER }}"
+
+      - name: Deploy Beat Service
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_BEAT }}"
+
+      - name: Deploy Monitoring Service
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_MONITORING }}"

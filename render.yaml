@@ -34,7 +34,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.9"
     healthCheckPath: /
-    autoDeploy: true
+    autoDeploy: false  # Controlled by GitHub Actions
 
   # Celery Worker - Processes reminder tasks from queue
   - type: worker
@@ -61,7 +61,7 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.11.9"
-    autoDeploy: true
+    autoDeploy: false  # Controlled by GitHub Actions
 
   # Celery Beat - Schedules periodic reminder checks
   - type: worker
@@ -88,7 +88,7 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.11.9"
-    autoDeploy: true
+    autoDeploy: false  # Controlled by GitHub Actions
 
   # Monitoring Worker - Dedicated worker for monitoring agent pipeline
   - type: worker
@@ -117,4 +117,4 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.11.9"
-    autoDeploy: true
+    autoDeploy: false  # Controlled by GitHub Actions
