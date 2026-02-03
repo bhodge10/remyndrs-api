@@ -370,19 +370,131 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         increment_message_count(phone_number)
 
         # ==========================================
-        # RESET ACCOUNT COMMAND (works for everyone)
+        # DELETE ACCOUNT COMMAND (two-step confirmation)
         # ==========================================
-        logger.info(f"Checking reset: '{incoming_msg.upper()}' in ['RESET ACCOUNT', 'RESTART'] = {incoming_msg.upper() in ['RESET ACCOUNT', 'RESTART']}")
-        if incoming_msg.upper() in ["RESET ACCOUNT", "RESTART"]:
-            logger.info("RESET ACCOUNT matched - resetting user")
+        if incoming_msg.upper() == "DELETE ACCOUNT":
+            logger.info(f"DELETE ACCOUNT requested by {mask_phone_number(phone_number)}")
+            create_or_update_user(phone_number, pending_delete_account=True)
+            resp = MessagingResponse()
+            resp.message(
+                "This will permanently delete all your data (reminders, memories, lists) "
+                "and cancel your Premium subscription if active. This cannot be undone.\n\n"
+                "To confirm, text YES DELETE ACCOUNT.\nTo cancel, text anything else."
+            )
+            log_interaction(phone_number, incoming_msg, "Delete account confirmation requested", "delete_account_request", True)
+            return Response(content=str(resp), media_type="application/xml")
 
-            # Special full reset for developer testing (Brad's number)
-            # This gives a complete new user experience by deleting all data
-            # Normalize phone number for comparison (remove +1 prefix if present)
-            normalized_phone = phone_number.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-            is_developer = normalized_phone == "8593935374"
+        # Handle YES DELETE ACCOUNT confirmation
+        if incoming_msg.upper() == "YES DELETE ACCOUNT":
+            user = get_user(phone_number)
+            # Check pending_delete_account flag
+            if user:
+                from database import get_db_connection, return_db_connection
+                conn_check = get_db_connection()
+                c_check = conn_check.cursor()
+                c_check.execute('SELECT pending_delete_account FROM users WHERE phone_number = %s', (phone_number,))
+                result = c_check.fetchone()
+                return_db_connection(conn_check)
+                pending = result[0] if result else False
+            else:
+                pending = False
 
-            logger.info(f"Reset check - phone_number: '{phone_number}', normalized: '{normalized_phone}', is_developer: {is_developer}")
+            if not pending:
+                resp = MessagingResponse()
+                resp.message("No pending account deletion. If you want to delete your account, text DELETE ACCOUNT first.")
+                return Response(content=str(resp), media_type="application/xml")
+
+            logger.info(f"DELETE ACCOUNT confirmed by {mask_phone_number(phone_number)} - deleting all data")
+
+            try:
+                # Cancel Stripe subscription if active
+                from services.stripe_service import cancel_stripe_subscription
+                cancel_result = cancel_stripe_subscription(phone_number)
+                if cancel_result.get('success'):
+                    logger.info(f"Stripe subscription cancelled for {mask_phone_number(phone_number)}")
+                elif cancel_result.get('error'):
+                    logger.warning(f"Stripe cancellation issue for {mask_phone_number(phone_number)}: {cancel_result['error']}")
+
+                # Delete all user data
+                from database import get_db_connection, return_db_connection
+                conn = get_db_connection()
+                c = conn.cursor()
+
+                c.execute("DELETE FROM reminders WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM recurring_reminders WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM memories WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM list_items WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM lists WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM logs WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM feedback WHERE user_phone = %s", (phone_number,))
+
+                conn.commit()
+                return_db_connection(conn)
+
+                # Mark user as opted out (STOP equivalent)
+                mark_user_opted_out(phone_number)
+
+                # Clear user record fields
+                create_or_update_user(
+                    phone_number,
+                    first_name=None,
+                    last_name=None,
+                    email=None,
+                    zip_code=None,
+                    onboarding_complete=False,
+                    onboarding_step=0,
+                    pending_delete=False,
+                    pending_delete_account=False,
+                    pending_reminder_text=None,
+                    pending_reminder_time=None,
+                    trial_end_date=None,
+                    premium_status='free',
+                    stripe_customer_id=None,
+                    stripe_subscription_id=None,
+                    subscription_status=None,
+                )
+
+                resp = MessagingResponse()
+                resp.message(
+                    "Your account has been deleted and your subscription cancelled. "
+                    "All data has been removed. If you ever want to come back, text START."
+                )
+                log_interaction(phone_number, "YES DELETE ACCOUNT", "Account deleted", "delete_account_confirmed", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            except Exception as e:
+                logger.error(f"Error during account deletion: {e}", exc_info=True)
+                create_or_update_user(phone_number, pending_delete_account=False)
+                resp = MessagingResponse()
+                resp.message("Sorry, there was an error deleting your account. Please try again or contact support@remyndrs.com.")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # Clear pending_delete_account if user sends anything else while it's pending
+        user_check_delete = get_user(phone_number)
+        if user_check_delete:
+            from database import get_db_connection, return_db_connection
+            conn_check = get_db_connection()
+            c_check = conn_check.cursor()
+            c_check.execute('SELECT pending_delete_account FROM users WHERE phone_number = %s', (phone_number,))
+            result = c_check.fetchone()
+            return_db_connection(conn_check)
+            if result and result[0]:
+                create_or_update_user(phone_number, pending_delete_account=False)
+                resp = MessagingResponse()
+                resp.message("Account deletion cancelled. Your data is safe!")
+                log_interaction(phone_number, incoming_msg, "Delete account cancelled", "delete_account_cancelled", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # RESET ACCOUNT COMMAND (developer only)
+        # ==========================================
+        # Normalize phone number for comparison (remove +1 prefix if present)
+        normalized_phone = phone_number.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+        is_developer = normalized_phone == "8593935374"
+
+        if incoming_msg.upper() in ["RESET ACCOUNT", "RESTART"] and (is_developer or ENVIRONMENT == "staging"):
+            logger.info(f"RESET ACCOUNT matched - resetting user (developer={is_developer}, env={ENVIRONMENT})")
 
             if is_developer:
                 logger.info("Developer full reset - deleting all user data")
@@ -407,9 +519,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 except Exception as e:
                     logger.error(f"Error during full reset: {e}")
 
-            # Standard reset (or after full delete for developer)
             # In staging, reset to step 0 to show the actual new user welcome message
-            # In production, reset to step 1 (skips welcome, asks for name directly)
             reset_step = 0 if ENVIRONMENT == "staging" or is_developer else 1
 
             create_or_update_user(
@@ -447,11 +557,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             log_interaction(phone_number, incoming_msg, "Account reset", "reset", True)
 
-            # In staging or developer reset, trigger the actual onboarding flow to show welcome message
+            # Trigger the actual onboarding flow to show welcome message
             if ENVIRONMENT == "staging" or is_developer:
                 return handle_onboarding(phone_number, incoming_msg)
 
-            # In production (non-developer), show abbreviated reset message
             resp = MessagingResponse()
             resp.message("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?")
             return Response(content=str(resp), media_type="application/xml")
@@ -1827,6 +1936,56 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             else:
                 resp = MessagingResponse()
                 resp.message("Please include your feedback after 'Feedback'. For example: 'Feedback I love this app!'")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # BUG REPORT HANDLING (route to feedback)
+        # ==========================================
+        command, message_text = parse_command(incoming_msg, known_commands=["BUG"])
+        if command == "BUG":
+            bug_message = message_text.strip()
+            if bug_message:
+                from database import get_db_connection, return_db_connection
+                conn = None
+                try:
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute(
+                        'INSERT INTO feedback (user_phone, message) VALUES (%s, %s)',
+                        (phone_number, f"[BUG] {bug_message}")
+                    )
+                    conn.commit()
+                    resp = MessagingResponse()
+                    resp.message("Thank you for reporting this bug! Our team will look into it.")
+                    log_interaction(phone_number, incoming_msg, "Bug report received", "bug_report", True)
+                    return Response(content=str(resp), media_type="application/xml")
+                except Exception as e:
+                    logger.error(f"Error saving bug report: {e}")
+                    resp = MessagingResponse()
+                    resp.message("Sorry, there was an error saving your bug report. Please try again later.")
+                    return Response(content=str(resp), media_type="application/xml")
+                finally:
+                    if conn:
+                        return_db_connection(conn)
+            else:
+                resp = MessagingResponse()
+                resp.message("Please describe the bug after 'Bug'. For example: 'Bug my reminder didn't go off'")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # QUESTION HANDLING (route to AI with full message)
+        # ==========================================
+        command, message_text = parse_command(incoming_msg, known_commands=["QUESTION"])
+        if command == "QUESTION":
+            question_text = message_text.strip()
+            if question_text:
+                # Route the question to AI processing as natural language
+                # Fall through to AI processing at the bottom with the full question text
+                incoming_msg = question_text
+                logger.info(f"QUESTION command - routing to AI: {question_text[:50]}...")
+            else:
+                resp = MessagingResponse()
+                resp.message("Please include your question after 'Question'. For example: 'Question how do lists work?'")
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================

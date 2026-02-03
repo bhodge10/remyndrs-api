@@ -27,6 +27,7 @@ ALLOWED_USER_FIELDS = {
     'pending_reminder_confirmation',
     'five_minute_nudge_scheduled_at', 'five_minute_nudge_sent', 'post_onboarding_interactions',
     'trial_info_sent',
+    'pending_delete_account',
 }
 
 

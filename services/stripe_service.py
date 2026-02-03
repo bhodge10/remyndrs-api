@@ -439,6 +439,33 @@ def get_user_subscription(phone_number: str) -> dict:
             return_db_connection(conn)
 
 
+def cancel_stripe_subscription(phone_number: str) -> dict:
+    """
+    Cancel a user's Stripe subscription immediately.
+
+    Returns:
+        dict with 'success' bool and optional 'error' message
+    """
+    if not STRIPE_ENABLED:
+        return {'success': False, 'error': 'Payment system is not configured'}
+
+    subscription = get_user_subscription(phone_number)
+    sub_id = subscription.get('subscription_id')
+
+    if not sub_id:
+        # No active subscription to cancel
+        return {'success': True, 'message': 'No active subscription'}
+
+    try:
+        stripe.Subscription.cancel(sub_id)
+        update_user_subscription(phone_number, TIER_FREE, None, 'cancelled')
+        logger.info(f"Cancelled Stripe subscription {sub_id} for {phone_number[-4:]}")
+        return {'success': True}
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error cancelling subscription for {phone_number[-4:]}: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 # =====================================================
 # SMS NOTIFICATIONS
 # =====================================================
