@@ -524,7 +524,6 @@ def get_upgrade_message(phone_number: str) -> str:
 - Unlimited saved memories
 - Recurring reminders
 - Priority support tickets
-- Advanced AI features
 - Cancel anytime
 
 Text PREMIUM to get your upgrade link."""
