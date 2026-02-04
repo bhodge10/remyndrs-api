@@ -137,7 +137,7 @@ def validate_daily_summary_time(time_input):
     # Check for command-like messages that should NOT be handled as daily summary responses
     # These should fall through to normal AI processing
     command_patterns = [
-        'remind', 'delete', 'remove', 'add', 'show', 'list', 'memory', 'cancel',
+        'remind', 'timer', 'alarm', 'set ', 'delete', 'remove', 'add', 'show', 'list', 'memory', 'cancel',
         'nevermind', 'never mind', 'forget', 'help', 'stop', 'what', 'where', 'when',
         'who', 'how', 'my ', 'the ', 'undo', 'snooze', 'check', 'uncheck', 'create'
     ]

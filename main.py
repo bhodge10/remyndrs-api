@@ -331,6 +331,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 raise HTTPException(status_code=403, detail="Invalid signature")
 
         incoming_msg = Body.strip()
+
+        # Normalize compact time formats: "125pm" → "1:25 pm", "1215pm" → "12:15 pm"
+        incoming_msg = re.sub(
+            r'\b(\d{1,2})(\d{2})\s*(am|pm|a\.m\.|p\.m\.)\b',
+            r'\1:\2 \3',
+            incoming_msg,
+            flags=re.IGNORECASE
+        )
+
         phone_number = From
 
         # Staging Fallback: If enabled in production, fail for test numbers to trigger Twilio fallback URL
@@ -810,7 +819,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # Check if message is a NEW reminder request - if so, don't treat as clarification response
         # This prevents "remind me tomorrow at 10am" from being caught by daily summary handler
-        is_new_reminder_request = bool(re.search(r'\bremind\b', incoming_msg, re.IGNORECASE))
+        is_new_reminder_request = bool(re.search(r'\b(remind|timer|alarm)\b', incoming_msg, re.IGNORECASE))
 
         # Check for undo/correction commands that should bypass all pending states
         msg_lower_strip = incoming_msg.strip().lower()
