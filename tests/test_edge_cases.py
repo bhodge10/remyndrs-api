@@ -179,18 +179,34 @@ class TestFeedbackAndSupport:
 
     @pytest.mark.asyncio
     async def test_feedback_submission(self, simulator, onboarded_user):
-        """Test submitting feedback."""
+        """Test submitting feedback with new format (no colon)."""
         phone = onboarded_user["phone"]
 
-        result = await simulator.send_message(phone, "FEEDBACK: The app is great!")
+        result = await simulator.send_message(phone, "FEEDBACK The app is great!")
+        assert any(word in result["output"].lower() for word in ["feedback", "thank", "received"])
+
+    @pytest.mark.asyncio
+    async def test_feedback_backward_compatible(self, simulator, onboarded_user):
+        """Test submitting feedback with old format (colon) for backward compatibility."""
+        phone = onboarded_user["phone"]
+
+        result = await simulator.send_message(phone, "FEEDBACK: Still works with colon!")
         assert any(word in result["output"].lower() for word in ["feedback", "thank", "received"])
 
     @pytest.mark.asyncio
     async def test_support_premium_only(self, simulator, onboarded_user):
-        """Test that SUPPORT is for premium users."""
+        """Test that SUPPORT is for premium users (new format)."""
         phone = onboarded_user["phone"]
 
-        result = await simulator.send_message(phone, "SUPPORT: I need help")
+        result = await simulator.send_message(phone, "SUPPORT I need help")
+        # Should either enter support mode (premium) or show upgrade prompt
+
+    @pytest.mark.asyncio
+    async def test_support_backward_compatible(self, simulator, onboarded_user):
+        """Test SUPPORT with old format (colon) for backward compatibility."""
+        phone = onboarded_user["phone"]
+
+        result = await simulator.send_message(phone, "SUPPORT: I need help with old format")
         # Should either enter support mode (premium) or show upgrade prompt
 
 

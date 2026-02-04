@@ -48,6 +48,22 @@ beat_schedule = {
         "task": "tasks.reminder_tasks.send_abandoned_onboarding_followups",
         "schedule": timedelta(hours=1),
     },
+    # Check trial expirations and send warnings daily at 9 AM UTC
+    "check-trial-expirations": {
+        "task": "tasks.reminder_tasks.check_trial_expirations",
+        "schedule": crontab(hour=9, minute=0),  # 9:00 AM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
+    # Send mid-trial value reminders daily at 10 AM UTC
+    "send-mid-trial-value-reminders": {
+        "task": "tasks.reminder_tasks.send_mid_trial_value_reminders",
+        "schedule": crontab(hour=10, minute=0),  # 10:00 AM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
 
     # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)
@@ -97,6 +113,17 @@ beat_schedule = {
         },
     },
 
+    # Run code analyzer (Agent 4) every 8 hours
+    # Generates root cause analyses and Claude Code prompts for open issues
+    "monitoring-agent4-analyze": {
+        "task": "tasks.monitoring_tasks.run_code_analyzer",
+        "schedule": timedelta(hours=8),
+        "kwargs": {"use_ai": True},
+        "options": {
+            "expires": 1800,  # 30 minute expiry
+        },
+    },
+
     # Save daily health snapshot at midnight UTC
     # Ensures consistent trend data even if pipeline fails
     "monitoring-daily-snapshot": {
@@ -118,8 +145,8 @@ beat_schedule = {
     },
 }
 
-# Note: All tasks use the default 'celery' queue for simplicity.
-# For future scaling, you can add task_routes to distribute tasks across queues.
+# Note: Monitoring tasks are routed to the 'monitoring' queue via task_routes in celery_app.py.
+# Reminder tasks remain on the default 'celery' queue.
 
 # Monitoring task schedule summary:
 # ─────────────────────────────────────────────────────────────────────
@@ -128,6 +155,7 @@ beat_schedule = {
 # check_critical_issues     | Every 1 hour     | Quick alert for urgent issues
 # run_interaction_monitor   | Every 4 hours    | Agent 1: Detect anomalies
 # run_issue_validator       | Every 6 hours    | Agent 2: Validate (no AI)
+# run_code_analyzer         | Every 8 hours    | Agent 4: Root cause analysis
 # run_monitoring_pipeline   | Daily 6 AM UTC   | Full pipeline with AI
 # save_daily_health_snapshot| Daily 12:05 AM   | Trend tracking
 # generate_weekly_report    | Monday 8 AM UTC  | Weekly summary

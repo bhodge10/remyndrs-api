@@ -12,7 +12,7 @@ services:
   - type: web
     name: sms-reminders-api
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements-prod.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
@@ -34,14 +34,14 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.9"
     healthCheckPath: /
-    autoDeploy: true
+    autoDeploy: false  # Controlled by GitHub Actions
 
   # Celery Worker - Processes reminder tasks from queue
   - type: worker
     name: sms-reminders-worker
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m celery -A celery_app worker --loglevel=info --concurrency=2
+    buildCommand: pip install --upgrade pip && pip install -r requirements-prod.txt
+    startCommand: python -m celery -A celery_app worker --loglevel=info --concurrency=2 -Q celery -n worker@%h
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -61,13 +61,13 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.11.9"
-    autoDeploy: true
+    autoDeploy: false  # Controlled by GitHub Actions
 
   # Celery Beat - Schedules periodic reminder checks
   - type: worker
     name: sms-reminders-beat
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements-prod.txt
     startCommand: python -m celery -A celery_app beat --loglevel=info
     envVars:
       - key: DATABASE_URL
@@ -88,4 +88,33 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.11.9"
-    autoDeploy: true
+    autoDeploy: false  # Controlled by GitHub Actions
+
+  # Monitoring Worker - Dedicated worker for monitoring agent pipeline
+  - type: worker
+    name: sms-reminders-monitoring
+    runtime: python
+    buildCommand: pip install --upgrade pip && pip install -r requirements-prod.txt
+    startCommand: python -m celery -A celery_app worker --loglevel=info --concurrency=2 -Q monitoring -n monitoring@%h
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sms-reminders-db
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+    autoDeploy: false  # Controlled by GitHub Actions

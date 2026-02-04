@@ -367,3 +367,33 @@ def get_usage_summary(phone_number: str) -> dict:
         'recurring_allowed': limits['recurring_reminders'],
         'support_allowed': limits['support_tickets'],
     }
+
+
+def add_usage_counter_to_message(phone_number: str, base_message: str) -> str:
+    """Add usage counter to confirmation message for free tier users.
+
+    Example: "✓ Reminder saved! (1 of 2 today)"
+    """
+    tier = get_user_tier(phone_number)
+
+    # Only show counter for free tier users
+    if tier != TIER_FREE:
+        return base_message
+
+    limits = get_tier_limits(tier)
+    daily_limit = limits['reminders_per_day']
+
+    # No counter if unlimited
+    if daily_limit is None:
+        return base_message
+
+    current_count = get_reminders_created_today(phone_number)
+
+    # Add counter to message
+    counter_text = f" ({current_count} of {daily_limit} today)"
+
+    # If at limit, add upgrade prompt
+    if current_count >= daily_limit:
+        counter_text += "\n\n⏰ Daily limit reached! Resets at midnight, or text UPGRADE for unlimited."
+
+    return base_message + counter_text

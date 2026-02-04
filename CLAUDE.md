@@ -1,6 +1,10 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with this repository.
+
+For detailed roadmaps, see:
+- `docs/ux-roadmap.md` - SMS app UX improvement plan
+- `docs/website-roadmap.md` - Website (remyndrs.com) improvement plan
 
 ## Project Overview
 
@@ -8,51 +12,43 @@ Remyndrs is an SMS-based AI memory and reminder service built with Python/FastAP
 
 **Stack:** Python 3.11.9, FastAPI, PostgreSQL, Celery + Redis (Upstash), OpenAI GPT-4o-mini, Twilio SMS, Stripe billing
 
-## Session Start/End
+## Git Workflow
 
-**START of session (run first!):**
+**Branching model:** Feature branches off `main`. No long-lived staging branch.
+
 ```bash
-git fetch --all && git pull origin main
+# Starting a session
+git checkout main && git pull origin main
+
+# Making changes
+git checkout -b feature/short-description
+# ... work and commit ...
+git push -u origin feature/short-description
+# Open PR -> merge to main -> delete branch
 ```
 
-**END of session (before switching computers):**
-- Commit and push all changes to git
-- Never deploy directly to Render - always push to git and let auto-deploy handle it
+Never deploy directly to Render -- always push to git and let auto-deploy handle it.
 
 ## Common Commands
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+pip install -r requirements.txt          # Install dependencies
+uvicorn main:app --reload                # Run FastAPI server
+celery -A celery_app worker --loglevel=info  # Run Celery worker
+celery -A celery_app beat --loglevel=info    # Run Celery Beat
 
-# Run FastAPI server
-uvicorn main:app --reload
-
-# Run Celery worker (processes reminder tasks)
-celery -A celery_app worker --loglevel=info
-
-# Run Celery Beat (schedules periodic tasks)
-celery -A celery_app beat --loglevel=info
-
-# Run all tests
-python run_tests.py
-
-# Run quick tests (skip slow)
-python run_tests.py --quick
-
-# Run specific test categories
-python run_tests.py --onboarding
+python run_tests.py                      # Run all tests
+python run_tests.py --quick              # Skip slow tests
+python run_tests.py --onboarding         # Specific category
 python run_tests.py --reminders
 python run_tests.py --lists
 python run_tests.py --memories
 python run_tests.py --edge
 python run_tests.py --tasks
 python run_tests.py --scenarios
+python run_tests.py --coverage           # With coverage
 
-# Run with coverage
-python run_tests.py --coverage
-
-# Run single test
+# Single test
 pytest tests/test_reminders.py::TestReminderCreation::test_reminder_with_specific_time
 ```
 
@@ -60,18 +56,18 @@ pytest tests/test_reminders.py::TestReminderCreation::test_reminder_with_specifi
 
 ### Request Flow
 ```
-SMS → Twilio webhook (/sms) → main.py validates → ai_service.py processes with OpenAI
-  → models/*.py persists to PostgreSQL → sms_service.py sends confirmation
-  → Celery Beat (every 30s) checks due reminders → sends at user's timezone
+SMS -> Twilio webhook (/sms) -> main.py validates -> ai_service.py processes with OpenAI
+  -> models/*.py persists to PostgreSQL -> sms_service.py sends confirmation
+  -> Celery Beat (every 30s) checks due reminders -> sends at user's timezone
 ```
 
 ### Layered Structure
-- **HTTP Layer:** `main.py` (routes), `admin_dashboard.py` (admin metrics/broadcast), `cs_portal.py` (customer support)
+- **HTTP Layer:** `main.py` (routes), `admin_dashboard.py` (admin), `cs_portal.py` (support)
 - **Route Handlers:** `routes/handlers/` - modular handlers for reminders, lists, memories, pending states
 - **Business Logic:** `services/` - AI processing, payments, onboarding, metrics
-- **Data Access:** `models/` - user, reminder, memory, list operations (with type hints)
+- **Data Access:** `models/` - user, reminder, memory, list operations
 - **Background Tasks:** `tasks/reminder_tasks.py` - Celery periodic jobs
-- **Utils:** timezone conversions, encryption, input validation, `db_helpers.py` for encryption queries
+- **Utils:** timezone conversions, encryption, input validation, `db_helpers.py`
 
 ### Key Files
 | File | Purpose |
@@ -91,16 +87,25 @@ SMS → Twilio webhook (/sms) → main.py validates → ai_service.py processes 
 
 ## Deployment
 
-Deployed on Render with three services:
+Deployed on Render with four services:
 1. **sms-reminders-api** - FastAPI web service
 2. **sms-reminders-worker** - Celery worker
 3. **sms-reminders-beat** - Celery Beat scheduler
+4. **sms-reminders-monitoring** - Celery worker for monitoring pipeline
 
 Config in `render.yaml`. Auto-deploys on push to main.
 
+- Production dependencies: `requirements-prod.txt` (no test frameworks)
+- Development dependencies: `requirements.txt` includes `-r requirements-prod.txt` + pytest
+- If database is recreated, manually update `DATABASE_URL` in all 4 Render services
+
+**CORS:** Use FastAPI's `CORSMiddleware`. Do NOT use manual `@app.options()` handlers.
+
+**Website:** remyndrs.com hosted on Netlify. API calls go to `https://sms-reminders-api-1gmm.onrender.com`.
+
 ## Testing
 
-Tests use `ConversationSimulator` to simulate SMS interactions without real messages. Key fixtures:
+Tests use `ConversationSimulator` to simulate SMS interactions. Key fixtures:
 - `simulator` - simulates user SMS interactions
 - `sms_capture` - captures outbound SMS for verification
 - `ai_mock` - mocks AI responses for predictable testing
@@ -109,12 +114,10 @@ Tests use `ConversationSimulator` to simulate SMS interactions without real mess
 
 Test phone number: `+15559876543`
 
-### Test Safety
-Tests are configured to **never hit real Twilio or OpenAI APIs**:
+Tests **never hit real Twilio or OpenAI APIs**:
 - `conftest.py` has autouse fixtures that mock all SMS/AI calls
 - `sms_service.py` detects test environment and blocks real Twilio calls
 - Use `.env.test` with `ENVIRONMENT=test` and fake API keys
-- Run tests with: `py -3 -m pytest tests/test_onboarding.py -v`
 
 ### AI Mock AM/PM Normalization Gotcha
 `main.py` normalizes time strings before sending to AI (e.g., `10am` → `10:AM` at line ~2777). When writing tests with `ai_mock.set_response()`, register mock responses under **both** the original and normalized forms:
@@ -127,22 +130,21 @@ The mock uses exact-match on the lowercased message. If only the original form i
 ## Key Patterns
 
 ### Timezone Handling
-All timestamps stored in UTC, converted to user timezone on display. User timezone determined during onboarding from ZIP code.
+All timestamps stored in UTC, converted to user timezone on display. Timezone determined during onboarding from ZIP code.
 
 ### Reminder Atomicity
-Uses `SELECT FOR UPDATE SKIP LOCKED` for distributed reminder claiming. Stale tasks released every 5 minutes if worker crashes.
+Uses `SELECT FOR UPDATE SKIP LOCKED` for distributed reminder claiming. Stale tasks released every 5 minutes.
 
 ### Subscription Tiers
 - **Free:** 2 reminders/day, 5 lists, 10 items/list, 5 memories
 - **Premium:** Unlimited reminders, 20 lists, 30 items/list, recurring reminders
 - **Family:** Premium features for 4-10 members
 
-### Low-Confidence Reminder Confirmation Flow
-When AI confidence is below threshold, reminders enter a pending confirmation state stored in `pending_reminder_confirmation` on the user record. Two code paths handle this:
-- **Pending data storage:** `routes/handlers/reminders.py` stores pending JSON (action type, text, datetime, offsets, confidence)
-- **Confirmation handling:** `main.py` (search `pending_confirmation`) processes YES/NO responses and calls `save_reminder_with_local_time()`
-
-**Important:** `save_reminder_with_local_time()` requires 5 positional args: `(phone_number, reminder_text, reminder_date_utc, local_time, timezone)`. The `local_time` param is HH:MM format and `reminder_date` must be UTC. For relative reminders, the pre-calculated UTC datetime and local_time should be stored in pending data to avoid time drift.
+### Low-Confidence Reminder Confirmation
+When AI confidence is below threshold, reminders enter pending confirmation stored in `pending_reminder_confirmation` on the user record.
+- **Pending storage:** `routes/handlers/reminders.py` stores pending JSON
+- **Confirmation handling:** `main.py` (search `pending_confirmation`) processes YES/NO and calls `save_reminder_with_local_time()`
+- `save_reminder_with_local_time()` requires 5 args: `(phone_number, reminder_text, reminder_date_utc, local_time, timezone)` where `local_time` is HH:MM and `reminder_date` must be UTC
 
 ### AM/PM and Time-of-Day Recognition
 The system recognizes AM/PM in three forms:
@@ -165,9 +167,9 @@ Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION
 
 ## Environment Variables
 
-Required: `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `DATABASE_URL`
+**Required:** `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `DATABASE_URL`
 
-Optional: `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, `HASH_KEY`, `STRIPE_*` keys, `SMTP_*` for email, `ANTHROPIC_API_KEY` (for Agent 4 AI file identification)
+**Optional:** `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, `HASH_KEY`, `STRIPE_*` keys, `SMTP_*` for email, `ANTHROPIC_API_KEY` (Agent 4 AI file identification)
 
 ## Rate Limiting
 
@@ -175,60 +177,25 @@ Optional: `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_K
 
 ## Multi-Agent Monitoring System
 
-Automated issue detection and health tracking for the SMS service.
+Dashboard at `/admin/monitoring`. Four agents run on Celery schedules:
 
-### Dashboard
-- **URL:** `/admin/monitoring`
-- Visual dashboard showing health score, open issues, patterns, and trends
-- Click any issue to see full message context (user message + bot response)
-- "Mark False Positive" button to dismiss non-issues
+1. **Agent 1 - Interaction Monitor** (`agents/interaction_monitor.py`) - Detects anomalies: user confusion, parsing failures, error responses, context loss, flow violations
+2. **Agent 2 - Issue Validator** (`agents/issue_validator.py`) - Validates issues, filters false positives, optional AI analysis
+3. **Agent 3 - Resolution Tracker** (`agents/resolution_tracker.py`) - Health score (0-100), resolution tracking, weekly reports
+4. **Agent 4 - Fix Planner** (`agents/fix_planner.py`) - Identifies affected files, generates Claude Code prompts for fixes
 
-### Four Agents
-1. **Agent 1 - Interaction Monitor** (`agents/interaction_monitor.py`)
-   - Detects anomalies: user confusion, parsing failures, error responses, timezone issues
-   - Scans `logs` table for patterns indicating problems
+**Celery schedule:** Hourly critical check, every 4h Agent 1, every 6h Agent 2, daily 6AM UTC full pipeline, weekly Monday report.
 
-2. **Agent 2 - Issue Validator** (`agents/issue_validator.py`)
-   - Validates issues from Agent 1, filters false positives
-   - Optional AI analysis with GPT-4o-mini (`use_ai=True`)
-   - Identifies recurring patterns
+**Manual triggers:** Dashboard button, `GET /admin/pipeline/run?hours=24`, `python -m agents.fix_planner --issue 123`
 
-3. **Agent 3 - Resolution Tracker** (`agents/resolution_tracker.py`)
-   - Calculates health score (0-100)
-   - Tracks issue resolutions and detects regressions
-   - Generates weekly reports
+**Issue types:** `user_confusion`, `error_response`, `parsing_failure`, `timezone_issue`, `failed_action`, `action_not_found`, `confidence_rejection`, `repeated_attempts`, `delivery_failure`, `context_loss`, `flow_violation`
 
-4. **Agent 4 - Fix Planner** (`agents/fix_planner.py`)
-   - Analyzes validated, unresolved issues
-   - Identifies affected source files based on issue type/pattern
-   - Extracts relevant code context
-   - Generates paste-ready Claude Code prompts for fixes
-   - Optional AI file identification with Claude API (`--ai` flag)
+**DB tables:** `monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
 
-### Celery Schedule (automatic)
-- **Hourly:** Critical issue check
-- **Every 4 hours:** Agent 1 (interaction monitor)
-- **Every 6 hours:** Agent 2 (issue validator)
-- **Daily 6 AM UTC:** Full pipeline with AI
-- **Weekly Monday 8 AM UTC:** Weekly report
+## Recent Bug Fixes
 
-### Manual Triggers
-- Dashboard "Run Full Pipeline" button
-- API: `GET /admin/pipeline/run?hours=24`
-- Agent 4: `python -m agents.fix_planner --issue 123` or `python agents/run_fix_planner.py`
-- Full pipeline with fix planner: `python agents/run_pipeline.py --fix-planner`
+### Context Loss Fix (Feb 2026)
+List selection by number (e.g., "1") was intercepted by daily summary handler asking "1 AM or 1 PM?". Fixed by adding `pending_list_item` to `has_pending_state` check in `main.py:576`. New monitoring detectors (`context_loss`, `flow_violation`) prevent similar issues.
 
-### Alerts
-Configured via dashboard Alert Settings section:
-- **Teams:** Requires `TEAMS_WEBHOOK_URL` env var
-- **Email:** Requires `SMTP_*` env vars and recipient list
-- **SMS:** For critical issues only (health < 50)
-
-### Monitoring Table Initialization Order
-Dashboard API endpoints (`/admin/tracker/health`, `/admin/tracker/report`, `/admin/tracker/trends`) must initialize monitoring tables before querying them. Tables have foreign key dependencies and **must** be initialized in this order:
-1. `init_monitoring_tables()` — creates `monitoring_issues` (Agent 1)
-2. `init_validator_tables()` — creates `issue_patterns` (Agent 2, FK → `monitoring_issues`)
-3. `init_tracker_tables()` — creates `health_snapshots`, `issue_resolutions`, `pattern_resolutions` (Agent 3, FKs → `monitoring_issues`, `issue_patterns`)
-
-### Database Tables
-`monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
+### Desktop Signup Flow (Feb 2026)
+Added `POST /api/signup` endpoint for desktop visitors. Phone validation, E.164 formatting, sends welcome SMS. Frontend form on remyndrs.com with responsive design. Uses CORSMiddleware.

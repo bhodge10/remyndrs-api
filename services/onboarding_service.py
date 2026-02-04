@@ -223,25 +223,14 @@ You're on step {step} of 4 - just {remaining} more {question_word}!
             create_or_update_user(phone_number, onboarding_step=1)
             track_onboarding_progress(phone_number, 1)
 
-            # Check if user texted START specifically
-            if message_lower == 'start':
-                resp.message("""Welcome to Remyndrs! 👋
+            # Enhanced welcome message with clearer value proposition
+            resp.message("""Welcome to Remyndrs! 👋
 
-Thanks for texting START!
+I'm your AI-powered reminder assistant. I'll help you remember anything—from daily tasks to important dates.
 
-I help you remember anything - from grocery lists to important reminders.
+No app needed - just text me naturally and I'll handle the rest!
 
-Just 4 quick questions to get started (takes about 1 minute), then you're all set!
-
-What's your first name?""")
-            else:
-                resp.message("""Welcome to Remyndrs! 👋
-
-I help you remember anything - from grocery lists to important reminders.
-
-Just 4 quick questions to get started (takes about 1 minute), then you're all set!
-
-What's your first name?""")
+Let's get you set up in under a minute. What's your first name?""")
 
         elif step == 1:
             # Check if user sent START again (maybe trying to restart)

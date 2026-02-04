@@ -9,7 +9,8 @@ import pytz
 import asyncio
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Form, Request, HTTPException
-from fastapi.responses import Response, HTMLResponse, FileResponse
+from fastapi.responses import Response, HTMLResponse, FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.request_validator import RequestValidator
@@ -120,10 +121,76 @@ def parse_snooze_duration(text):
         return 15
 
 
+def parse_command(message: str, known_commands: list = None):
+    """
+    Parse commands from SMS messages with improved format.
+
+    Supports both new format (COMMAND message) and old format (COMMAND: message) for backward compatibility.
+
+    Args:
+        message: The incoming SMS message
+        known_commands: List of known command names (case-insensitive).
+                       Defaults to: START, STOP, HELP, SUPPORT, FEEDBACK, BUG, QUESTION
+
+    Returns:
+        tuple: (command, message_text) where:
+            - command is uppercase command name or None if no match
+            - message_text is the rest of the message after the command
+
+    Examples:
+        "SUPPORT I need help" -> ("SUPPORT", "I need help")
+        "SUPPORT: I need help" -> ("SUPPORT", "I need help")  # backward compatible
+        "support message" -> ("SUPPORT", "message")  # case insensitive
+        "SUPPORT" -> ("SUPPORT", "")  # command only, no message
+        "Remind me tomorrow" -> (None, "Remind me tomorrow")  # not a command
+    """
+    if not message:
+        return (None, "")
+
+    # Default known commands if not provided
+    if known_commands is None:
+        known_commands = ["START", "STOP", "HELP", "SUPPORT", "FEEDBACK", "BUG", "QUESTION"]
+
+    # Normalize known commands to uppercase
+    known_commands = [cmd.upper() for cmd in known_commands]
+
+    # Strip leading/trailing whitespace
+    message = message.strip()
+
+    # Split on first whitespace or colon
+    parts = re.split(r'[\s:]+', message, maxsplit=1)
+
+    if not parts:
+        return (None, message)
+
+    potential_command = parts[0].upper()
+
+    # Check if first word matches a known command
+    if potential_command in known_commands:
+        # Extract message (everything after first word/colon)
+        if len(parts) > 1:
+            message_text = parts[1].strip()
+        else:
+            message_text = ""
+
+        return (potential_command, message_text)
+
+    # Not a recognized command
+    return (None, message)
+
+
 # Initialize application
 logger.info("🚀 SMS Memory Service starting...")
 app = FastAPI()
 
+# CORS middleware - allow requests from remyndrs.com
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with ["https://remyndrs.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Request timeout middleware
 class TimeoutMiddleware(BaseHTTPMiddleware):
@@ -303,15 +370,242 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         increment_message_count(phone_number)
 
         # ==========================================
-        # RESET ACCOUNT COMMAND (works for everyone)
+        # DELETE ACCOUNT COMMAND (two-step confirmation)
         # ==========================================
-        logger.info(f"Checking reset: '{incoming_msg.upper()}' in ['RESET ACCOUNT', 'RESTART'] = {incoming_msg.upper() in ['RESET ACCOUNT', 'RESTART']}")
-        if incoming_msg.upper() in ["RESET ACCOUNT", "RESTART"]:
-            logger.info("RESET ACCOUNT matched - resetting user")
+        if incoming_msg.upper() == "DELETE ACCOUNT":
+            logger.info(f"DELETE ACCOUNT requested by {mask_phone_number(phone_number)}")
+            create_or_update_user(phone_number, pending_delete_account=True)
+            resp = MessagingResponse()
+            resp.message(
+                "This will permanently delete all your data (reminders, memories, lists) "
+                "and cancel your Premium subscription if active. This cannot be undone.\n\n"
+                "Want a copy of your data first? Text EXPORT to receive it by email.\n\n"
+                "To confirm deletion, text YES DELETE ACCOUNT.\nTo cancel, text anything else."
+            )
+            log_interaction(phone_number, incoming_msg, "Delete account confirmation requested", "delete_account_request", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # Handle YES DELETE ACCOUNT confirmation
+        if incoming_msg.upper() == "YES DELETE ACCOUNT":
+            user = get_user(phone_number)
+            # Check pending_delete_account flag
+            if user:
+                from database import get_db_connection, return_db_connection
+                conn_check = get_db_connection()
+                c_check = conn_check.cursor()
+                c_check.execute('SELECT pending_delete_account FROM users WHERE phone_number = %s', (phone_number,))
+                result = c_check.fetchone()
+                return_db_connection(conn_check)
+                pending = result[0] if result else False
+            else:
+                pending = False
+
+            if not pending:
+                resp = MessagingResponse()
+                resp.message("No pending account deletion. If you want to delete your account, text DELETE ACCOUNT first.")
+                return Response(content=str(resp), media_type="application/xml")
+
+            logger.info(f"DELETE ACCOUNT confirmed by {mask_phone_number(phone_number)} - deleting all data")
+
+            try:
+                # Cancel Stripe subscription if active
+                from services.stripe_service import cancel_stripe_subscription
+                cancel_result = cancel_stripe_subscription(phone_number)
+                if cancel_result.get('success'):
+                    logger.info(f"Stripe subscription cancelled for {mask_phone_number(phone_number)}")
+                elif cancel_result.get('error'):
+                    logger.warning(f"Stripe cancellation issue for {mask_phone_number(phone_number)}: {cancel_result['error']}")
+
+                # Delete all user data (order matters for foreign key constraints)
+                from database import get_db_connection, return_db_connection
+                conn = get_db_connection()
+                c = conn.cursor()
+
+                # Clean up monitoring agent FK chain (these tables reference logs via monitoring_issues)
+                # Use savepoints since monitoring tables may not exist in all environments
+                c.execute("SELECT id FROM logs WHERE phone_number = %s", (phone_number,))
+                log_ids = [row[0] for row in c.fetchall()]
+
+                if log_ids:
+                    # Get monitoring_issues IDs that reference this user's logs
+                    mi_ids = []
+                    try:
+                        c.execute("SAVEPOINT mi_lookup")
+                        c.execute("SELECT id FROM monitoring_issues WHERE log_id = ANY(%s)", (log_ids,))
+                        mi_ids = [row[0] for row in c.fetchall()]
+                    except Exception:
+                        c.execute("ROLLBACK TO SAVEPOINT mi_lookup")
+
+                    if mi_ids:
+                        for table in ['code_analysis', 'issue_pattern_links', 'fix_proposals', 'issue_resolutions']:
+                            try:
+                                c.execute(f"SAVEPOINT del_{table}")
+                                c.execute(f"DELETE FROM {table} WHERE issue_id = ANY(%s)", (mi_ids,))
+                            except Exception:
+                                c.execute(f"ROLLBACK TO SAVEPOINT del_{table}")
+                        try:
+                            c.execute("SAVEPOINT del_mi")
+                            c.execute("DELETE FROM monitoring_issues WHERE id = ANY(%s)", (mi_ids,))
+                        except Exception:
+                            c.execute("ROLLBACK TO SAVEPOINT del_mi")
+
+                    # conversation_analysis also references logs(id)
+                    c.execute("DELETE FROM conversation_analysis WHERE log_id = ANY(%s)", (log_ids,))
+
+                # Delete remaining monitoring/analysis rows by phone_number
+                for table in ['conversation_analysis', 'monitoring_issues']:
+                    try:
+                        c.execute(f"SAVEPOINT del_{table}_ph")
+                        c.execute(f"DELETE FROM {table} WHERE phone_number = %s", (phone_number,))
+                    except Exception:
+                        c.execute(f"ROLLBACK TO SAVEPOINT del_{table}_ph")
+                c.execute("DELETE FROM support_messages WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM support_tickets WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM confidence_logs WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM api_usage WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM customer_notes WHERE phone_number = %s", (phone_number,))
+
+                # Now delete the main tables
+                c.execute("DELETE FROM reminders WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM recurring_reminders WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM memories WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM list_items WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM lists WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM logs WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (phone_number,))
+                c.execute("DELETE FROM feedback WHERE user_phone = %s", (phone_number,))
+
+                conn.commit()
+                return_db_connection(conn)
+
+                # Mark user as opted out (STOP equivalent)
+                mark_user_opted_out(phone_number)
+
+                # Clear user record fields
+                create_or_update_user(
+                    phone_number,
+                    first_name=None,
+                    last_name=None,
+                    email=None,
+                    zip_code=None,
+                    onboarding_complete=False,
+                    onboarding_step=0,
+                    pending_delete=False,
+                    pending_delete_account=False,
+                    pending_reminder_text=None,
+                    pending_reminder_time=None,
+                    trial_end_date=None,
+                    premium_status='free',
+                    stripe_customer_id=None,
+                    stripe_subscription_id=None,
+                    subscription_status=None,
+                )
+
+                resp = MessagingResponse()
+                resp.message(
+                    "Your account has been deleted and your subscription cancelled. "
+                    "All data has been removed. If you ever want to come back, text START."
+                )
+                log_interaction(phone_number, "YES DELETE ACCOUNT", "Account deleted", "delete_account_confirmed", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            except Exception as e:
+                logger.error(f"Error during account deletion: {e}", exc_info=True)
+                create_or_update_user(phone_number, pending_delete_account=False)
+                resp = MessagingResponse()
+                resp.message("Sorry, there was an error deleting your account. Please try again or contact support@remyndrs.com.")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # Clear pending_delete_account if user sends anything else while it's pending
+        user_check_delete = get_user(phone_number)
+        if user_check_delete:
+            from database import get_db_connection, return_db_connection
+            conn_check = get_db_connection()
+            c_check = conn_check.cursor()
+            c_check.execute('SELECT pending_delete_account FROM users WHERE phone_number = %s', (phone_number,))
+            result = c_check.fetchone()
+            return_db_connection(conn_check)
+            if result and result[0]:
+                create_or_update_user(phone_number, pending_delete_account=False)
+                resp = MessagingResponse()
+                resp.message("Account deletion cancelled. Your data is safe!")
+                log_interaction(phone_number, incoming_msg, "Delete account cancelled", "delete_account_cancelled", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # CANCELLATION FEEDBACK HANDLING
+        # ==========================================
+        user_check_cancel = get_user(phone_number)
+        if user_check_cancel:
+            from database import get_db_connection, return_db_connection
+            conn_check = get_db_connection()
+            c_check = conn_check.cursor()
+            c_check.execute('SELECT pending_cancellation_feedback FROM users WHERE phone_number = %s', (phone_number,))
+            cancel_result = c_check.fetchone()
+            return_db_connection(conn_check)
+            if cancel_result and cancel_result[0]:
+                # User has pending cancellation feedback
+                msg_upper = incoming_msg.strip().upper()
+                if msg_upper == "SKIP":
+                    create_or_update_user(phone_number, pending_cancellation_feedback=False)
+                    # Don't return - let the message flow through normally
+                else:
+                    feedback_map = {
+                        '1': 'Too expensive',
+                        '2': 'Not using enough',
+                        '3': 'Missing a feature',
+                        '4': 'Other',
+                    }
+                    feedback_text = feedback_map.get(msg_upper, incoming_msg.strip())
+                    # Save as a categorized ticket
+                    from services.support_service import create_categorized_ticket
+                    create_categorized_ticket(
+                        phone_number,
+                        f"[CANCELLATION] {feedback_text}",
+                        'feedback',
+                        'sms'
+                    )
+                    create_or_update_user(phone_number, pending_cancellation_feedback=False)
+                    resp = MessagingResponse()
+                    resp.message("Thank you for the feedback! We'll use it to improve Remyndrs. Text UPGRADE anytime to resubscribe.")
+                    log_interaction(phone_number, incoming_msg, "Cancellation feedback received", "cancellation_feedback", True)
+                    return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # RESET ACCOUNT COMMAND (developer only)
+        # ==========================================
+        # Normalize phone number for comparison (remove +1 prefix if present)
+        normalized_phone = phone_number.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+        is_developer = normalized_phone == "8593935374"
+
+        if incoming_msg.upper() in ["RESET ACCOUNT", "RESTART"] and (is_developer or ENVIRONMENT == "staging"):
+            logger.info(f"RESET ACCOUNT matched - resetting user (developer={is_developer}, env={ENVIRONMENT})")
+
+            if is_developer:
+                logger.info("Developer full reset - deleting all user data")
+                try:
+                    from database import get_db_connection, return_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+
+                    # Delete all user data to simulate brand new user
+                    c.execute("DELETE FROM reminders WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM recurring_reminders WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM memories WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM list_items WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM lists WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM logs WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM users WHERE phone_number = %s", (phone_number,))
+
+                    conn.commit()
+                    return_db_connection(conn)
+                    logger.info("Full reset complete - all user data deleted")
+                except Exception as e:
+                    logger.error(f"Error during full reset: {e}")
 
             # In staging, reset to step 0 to show the actual new user welcome message
-            # In production, reset to step 1 (skips welcome, asks for name directly)
-            reset_step = 0 if ENVIRONMENT == "staging" else 1
+            reset_step = 0 if ENVIRONMENT == "staging" or is_developer else 1
 
             create_or_update_user(
                 phone_number,
@@ -326,16 +620,32 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 pending_reminder_text=None,
                 pending_reminder_time=None,
                 trial_end_date=None,
-                premium_status='free'
+                premium_status='free',
+                # Reset trial warning flags for new user experience
+                trial_warning_7d_sent=False,
+                trial_warning_1d_sent=False,
+                trial_warning_0d_sent=False,
+                # Reset daily summary flags
+                daily_summary_prompted=False,
+                daily_summary_enabled=False,
+                # Reset engagement nudge flags
+                five_minute_nudge_sent=False,
+                five_minute_nudge_scheduled_at=None,
+                post_onboarding_interactions=0,
+                # Reset trial info
+                trial_info_sent=False,
+                # Reset Stripe fields
+                stripe_customer_id=None,
+                stripe_subscription_id=None,
+                subscription_status=None
             )
 
             log_interaction(phone_number, incoming_msg, "Account reset", "reset", True)
 
-            # In staging, trigger the actual onboarding flow to show welcome message
-            if ENVIRONMENT == "staging":
+            # Trigger the actual onboarding flow to show welcome message
+            if ENVIRONMENT == "staging" or is_developer:
                 return handle_onboarding(phone_number, incoming_msg)
 
-            # In production, show abbreviated reset message
             resp = MessagingResponse()
             resp.message("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?")
             return Response(content=str(resp), media_type="application/xml")
@@ -410,7 +720,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             if msg_upper == "EXIT":
                 exit_support_mode(phone_number)
                 resp = MessagingResponse()
-                resp.message(staging_prefix(f"You've exited support mode. Your ticket #{ticket_id} is still open - text 'SUPPORT: message' anytime to continue the conversation."))
+                resp.message(staging_prefix(f"You've exited support mode. Your ticket #{ticket_id} is still open - text 'SUPPORT message' anytime to continue the conversation."))
                 log_interaction(phone_number, incoming_msg, f"Exited support mode (ticket #{ticket_id})", "support_exit", True)
                 return Response(content=str(resp), media_type="application/xml")
 
@@ -421,7 +731,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 result = close_ticket_by_phone(phone_number)
                 if result['success']:
                     resp = MessagingResponse()
-                    resp.message(staging_prefix(f"Your support ticket #{ticket_id} has been closed. Thank you for contacting us! Text 'SUPPORT: message' anytime to open a new ticket."))
+                    resp.message(staging_prefix(f"Your support ticket #{ticket_id} has been closed. Thank you for contacting us! Text 'SUPPORT message' anytime to open a new ticket."))
                     log_interaction(phone_number, incoming_msg, f"Closed support ticket #{ticket_id}", "support_close", True)
                     return Response(content=str(resp), media_type="application/xml")
 
@@ -512,10 +822,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # DAILY SUMMARY RESPONSE (after first action)
         # ==========================================
         # Check if user is responding to daily summary prompt
-        # Skip this if it's a new reminder request, undo command, or has pending confirmations
+        # Skip this if it's a new reminder request, undo command, or has pending confirmations/states
         pending_delete_check = get_pending_reminder_delete(phone_number)
         pending_confirm_check = get_pending_reminder_confirmation(phone_number)
-        has_pending_state = pending_delete_check or (pending_confirm_check and pending_confirm_check.get('type') != 'summary_undo')
+        pending_list_check = get_pending_list_item(phone_number)
+        has_pending_state = pending_delete_check or (pending_confirm_check and pending_confirm_check.get('type') != 'summary_undo') or pending_list_check
 
         if not is_new_reminder_request and not is_undo_command and not has_pending_state:
             handled, response_text = handle_daily_summary_response(phone_number, incoming_msg)
@@ -1680,41 +1991,103 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # FEEDBACK HANDLING
         # ==========================================
-        if incoming_msg.upper().startswith("FEEDBACK:"):
-            feedback_message = incoming_msg[9:].strip()  # Extract everything after "feedback:"
+        command, message_text = parse_command(incoming_msg, known_commands=["FEEDBACK"])
+        if command == "FEEDBACK":
+            feedback_message = message_text.strip()
             if feedback_message:
-                # Save feedback to database
-                from database import get_db_connection, return_db_connection
-                conn = None
-                try:
-                    conn = get_db_connection()
-                    c = conn.cursor()
-                    c.execute(
-                        'INSERT INTO feedback (user_phone, message) VALUES (%s, %s)',
-                        (phone_number, feedback_message)
-                    )
-                    conn.commit()
+                # Route through support tickets with category='feedback'
+                from services.support_service import create_categorized_ticket
+                result = create_categorized_ticket(phone_number, feedback_message, 'feedback', 'sms')
+                if result['success']:
                     resp = MessagingResponse()
                     resp.message("Thank you for your feedback! We appreciate you taking the time to share your thoughts with us.")
-                    log_interaction(phone_number, incoming_msg, "Feedback received", "feedback", True)
+                    log_interaction(phone_number, incoming_msg, f"Feedback ticket #{result['ticket_id']}", "feedback", True)
                     return Response(content=str(resp), media_type="application/xml")
-                except Exception as e:
-                    logger.error(f"Error saving feedback: {e}")
+                else:
                     resp = MessagingResponse()
                     resp.message("Sorry, there was an error saving your feedback. Please try again later.")
                     return Response(content=str(resp), media_type="application/xml")
-                finally:
-                    if conn:
-                        return_db_connection(conn)
             else:
                 resp = MessagingResponse()
-                resp.message("Please include your feedback after 'Feedback:'. For example: 'Feedback: I love this app!'")
+                resp.message("Please include your feedback after 'Feedback'. For example: 'Feedback I love this app!'")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # BUG REPORT HANDLING (route to feedback)
+        # ==========================================
+        command, message_text = parse_command(incoming_msg, known_commands=["BUG"])
+        if command == "BUG":
+            bug_message = message_text.strip()
+            if bug_message:
+                # Route through support tickets with category='bug'
+                from services.support_service import create_categorized_ticket
+                result = create_categorized_ticket(phone_number, bug_message, 'bug', 'sms')
+                if result['success']:
+                    resp = MessagingResponse()
+                    resp.message("Thank you for reporting this bug! Our team will look into it.")
+                    log_interaction(phone_number, incoming_msg, f"Bug ticket #{result['ticket_id']}", "bug_report", True)
+                    return Response(content=str(resp), media_type="application/xml")
+                else:
+                    resp = MessagingResponse()
+                    resp.message("Sorry, there was an error saving your bug report. Please try again later.")
+                    return Response(content=str(resp), media_type="application/xml")
+            else:
+                resp = MessagingResponse()
+                resp.message("Please describe the bug after 'Bug'. For example: 'Bug my reminder didn't go off'")
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # EXPORT COMMAND - Email user their data
+        # ==========================================
+        if incoming_msg.upper() == "EXPORT":
+            user = get_user(phone_number)
+            user_email = user.get('email') if user else None
+
+            if not user_email:
+                resp = MessagingResponse()
+                resp.message("We don't have an email address on file for your account. Please contact support@remyndrs.com to request a data export.")
+                log_interaction(phone_number, incoming_msg, "Export - no email on file", "export_no_email", False)
+                return Response(content=str(resp), media_type="application/xml")
+
+            try:
+                from services.export_service import export_and_email_user_data
+                result = export_and_email_user_data(phone_number, user_email)
+                if result:
+                    resp = MessagingResponse()
+                    resp.message(f"Your data export has been emailed to your address on file. Check your inbox!")
+                    log_interaction(phone_number, incoming_msg, "Data export sent", "export", True)
+                else:
+                    resp = MessagingResponse()
+                    resp.message("Sorry, there was an error creating your data export. Please try again later.")
+                    log_interaction(phone_number, incoming_msg, "Export failed", "export", False)
+            except Exception as e:
+                logger.error(f"Error in EXPORT command: {e}", exc_info=True)
+                resp = MessagingResponse()
+                resp.message("Sorry, there was an error creating your data export. Please try again later.")
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # QUESTION HANDLING (route to AI with full message)
+        # ==========================================
+        is_question_command = False
+        command, message_text = parse_command(incoming_msg, known_commands=["QUESTION"])
+        if command == "QUESTION":
+            question_text = message_text.strip()
+            if question_text:
+                # Route the question to AI processing as natural language
+                # Fall through to AI processing at the bottom with the full question text
+                incoming_msg = question_text
+                is_question_command = True
+                logger.info(f"QUESTION command - routing to AI: {question_text[:50]}...")
+            else:
+                resp = MessagingResponse()
+                resp.message("Please include your question after 'Question'. For example: 'Question how do lists work?'")
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
         # UPGRADE / SUBSCRIPTION HANDLING
         # ==========================================
-        if incoming_msg.upper() in ["UPGRADE", "SUBSCRIBE", "PREMIUM", "FAMILY", "PRICING"]:
+        if incoming_msg.upper() in ["UPGRADE", "SUBSCRIBE", "PREMIUM", "PRICING"]:
             from services.stripe_service import get_upgrade_message, get_user_subscription, create_checkout_session
             from config import STRIPE_ENABLED, APP_BASE_URL
 
@@ -1727,21 +2100,18 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 log_interaction(phone_number, incoming_msg, "Already subscribed", "upgrade_already_premium", True)
                 return Response(content=str(resp), media_type="application/xml")
 
-            # Show upgrade options
-            msg_upper = incoming_msg.upper()
-            if msg_upper in ["PREMIUM", "FAMILY"] and STRIPE_ENABLED:
-                # User selected a specific plan - create checkout link
-                plan = 'premium' if msg_upper == "PREMIUM" else 'family'
-                result = create_checkout_session(phone_number, plan, 'monthly')
+            # User selected Premium - create checkout link
+            if incoming_msg.upper() == "PREMIUM" and STRIPE_ENABLED:
+                result = create_checkout_session(phone_number, 'premium', 'monthly')
 
                 if 'url' in result:
                     resp = MessagingResponse()
-                    resp.message(f"Great choice! Complete your {plan.title()} subscription here:\n\n{result['url']}\n\nThis link expires in 24 hours.")
-                    log_interaction(phone_number, incoming_msg, f"Checkout link sent for {plan}", f"upgrade_{plan}_checkout", True)
+                    resp.message(f"Great choice! Complete your Premium subscription here:\n\n{result['url']}\n\nThis link expires in 24 hours.")
+                    log_interaction(phone_number, incoming_msg, "Checkout link sent for premium", "upgrade_premium_checkout", True)
                 else:
                     resp = MessagingResponse()
-                    resp.message(f"Visit {APP_BASE_URL}/upgrade to subscribe to {plan.title()}!")
-                    log_interaction(phone_number, incoming_msg, "Checkout fallback", f"upgrade_{plan}_fallback", True)
+                    resp.message(f"Visit {APP_BASE_URL}/upgrade to subscribe to Premium!")
+                    log_interaction(phone_number, incoming_msg, "Checkout fallback", "upgrade_premium_fallback", True)
                 return Response(content=str(resp), media_type="application/xml")
             else:
                 # Show pricing info
@@ -1777,30 +2147,136 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
-        # SUPPORT HANDLING (Premium users, or all users in beta mode)
+        # STATUS COMMAND (Account Overview)
         # ==========================================
-        if incoming_msg.upper().startswith("SUPPORT:") or incoming_msg.upper().startswith("SUPPORT "):
-            from services.support_service import is_premium_user, add_support_message
-            from config import BETA_MODE
+        if incoming_msg.upper() in ["STATUS", "MY ACCOUNT", "ACCOUNT INFO", "USAGE"]:
+            try:
+                from services.tier_service import get_usage_summary, get_trial_info
+                from services.stripe_service import get_user_subscription
+                from datetime import datetime
 
-            # Check if user is premium (or beta mode allows all users)
-            if not BETA_MODE and not is_premium_user(phone_number):
+                # Get user info
+                user = get_user(phone_number)
+                if not user:
+                    resp = MessagingResponse()
+                    resp.message("Unable to retrieve account info. Please try again.")
+                    log_interaction(phone_number, incoming_msg, "Status - user not found", "status_error", False)
+                    return Response(content=str(resp), media_type="application/xml")
+
+                first_name = user[1] or "there"
+                created_at = user[8] if len(user) > 8 else None  # CREATED_AT is index 8, not 7
+
+                # Get tier and usage info
+                usage = get_usage_summary(phone_number)
+                tier = usage['tier']
+                trial_info = get_trial_info(phone_number)
+                subscription = get_user_subscription(phone_number)
+
+                # Format member since date
+                if created_at:
+                    # Handle both datetime objects and timestamps
+                    if isinstance(created_at, datetime):
+                        member_since = created_at.strftime('%b %d, %Y')
+                    elif isinstance(created_at, (int, float)):
+                        # Unix timestamp - convert to datetime
+                        # If timestamp is 0 or very old (before 2020), show "Recently"
+                        if created_at < 1577836800:  # Jan 1, 2020 timestamp
+                            member_since = "Recently"
+                        else:
+                            member_since = datetime.fromtimestamp(created_at).strftime('%b %d, %Y')
+                    else:
+                        member_since = str(created_at)
+                else:
+                    member_since = "Recently"
+
+            except Exception as e:
+                logger.error(f"Error in STATUS command for {phone_number}: {e}", exc_info=True)
                 resp = MessagingResponse()
-                resp.message("Support chat is available for premium members. Use 'Feedback: [message]' to send us feedback, or upgrade to premium for direct support.")
-                log_interaction(phone_number, incoming_msg, "Support denied - not premium", "support_denied", False)
+                resp.message("Unable to retrieve account status. Please try again later.")
+                log_interaction(phone_number, incoming_msg, f"Status error: {str(e)}", "status_error", False)
                 return Response(content=str(resp), media_type="application/xml")
 
-            # Extract message after "support:" or "support "
-            if incoming_msg.upper().startswith("SUPPORT:"):
-                support_message = incoming_msg[8:].strip()
+            # Build status message
+            status_lines = [f"📊 Account Status\n"]
+
+            # Plan info with trial status
+            if trial_info['is_trial']:
+                days_left = trial_info['days_remaining']
+                day_word = "day" if days_left == 1 else "days"
+                status_lines.append(f"Plan: Premium (Trial - {days_left} {day_word} left)")
             else:
-                support_message = incoming_msg[8:].strip()
+                status_lines.append(f"Plan: {tier.title()}")
+
+            status_lines.append(f"Member since: {member_since}")
+
+            # Next billing (if premium and not trial)
+            if tier == 'premium' and not trial_info['is_trial']:
+                # Get next billing date from Stripe if available
+                if subscription.get('current_period_end'):
+                    try:
+                        next_billing = datetime.fromtimestamp(subscription['current_period_end'])
+                        status_lines.append(f"Next billing: {next_billing.strftime('%b %d, %Y')}")
+                    except Exception as e:
+                        logger.debug(f"Could not format billing date: {e}")
+                        pass
+
+            # Usage stats
+            status_lines.append(f"\nThis Month:")
+
+            # Reminders today (free tier) or total reminders
+            if tier == 'free':
+                reminders_today = usage['reminders_today']
+                reminders_limit = usage['reminders_limit']
+                status_lines.append(f"• {reminders_today} of {reminders_limit} reminders today")
+            else:
+                reminders_today = usage['reminders_today']
+                status_lines.append(f"• {reminders_today} reminders created today")
+
+            # Lists
+            lists_count = usage['lists']
+            lists_limit = usage['lists_limit']
+            status_lines.append(f"• {lists_count} of {lists_limit} lists")
+
+            # Memories
+            memories_count = usage['memories']
+            memories_limit = usage['memories_limit']
+            if memories_limit is None:
+                status_lines.append(f"• {memories_count} memories saved")
+            else:
+                status_lines.append(f"• {memories_count} of {memories_limit} memories")
+
+            # Quick actions
+            status_lines.append(f"\nQuick Actions:")
+            if tier == 'free':
+                status_lines.append(f"• Text UPGRADE for unlimited")
+            else:
+                status_lines.append(f"• Text ACCOUNT to manage billing")
+
+            message = "\n".join(status_lines)
+
+            resp = MessagingResponse()
+            resp.message(message)
+            log_interaction(phone_number, incoming_msg, "Status sent", "status", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # SUPPORT HANDLING (Premium users, or all users in beta mode)
+        # ==========================================
+        command, message_text = parse_command(incoming_msg, known_commands=["SUPPORT"])
+        if command == "SUPPORT":
+            from services.support_service import is_premium_user, add_support_message
+
+            # Support is open to all users
+            is_premium = is_premium_user(phone_number)
+
+            support_message = message_text.strip()
 
             if support_message:
                 result = add_support_message(phone_number, support_message, 'inbound')
                 if result['success']:
+                    upgrade_note = "" if is_premium else "\n\nFor priority support, text UPGRADE."
                     resp = MessagingResponse()
-                    resp.message(staging_prefix(f"[Support Ticket #{result['ticket_id']}] Your message has been sent to our support team. We'll reply as soon as possible!\n\n(You're now in support mode - all replies and messages will go to our support team. Text EXIT to leave support but keep ticket open or text CLOSE to close ticket)"))
+                    resp.message(staging_prefix(f"[Support Ticket #{result['ticket_id']}] Your message has been sent to our support team. We'll reply as soon as possible!{upgrade_note}\n\n(You're now in support mode - all replies and messages will go to our support team. Text EXIT to leave support but keep ticket open or text CLOSE to close ticket)"))
                     log_interaction(phone_number, incoming_msg, f"Support ticket #{result['ticket_id']}", "support", True)
                     return Response(content=str(resp), media_type="application/xml")
                 else:
@@ -1809,7 +2285,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     return Response(content=str(resp), media_type="application/xml")
             else:
                 resp = MessagingResponse()
-                resp.message("Please include your message after 'Support:'. For example: 'Support: I need help with reminders'")
+                resp.message("Please include your message after 'Support'. For example: 'Support I need help with reminders'")
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
@@ -1914,7 +2390,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 'action': 'disabled'
             })
 
-            create_or_update_user(phone_number, daily_summary_enabled=False, pending_reminder_confirmation=undo_data)
+            # Clear daily_summary_prompted flag to exit the setup flow
+            create_or_update_user(
+                phone_number,
+                daily_summary_enabled=False,
+                daily_summary_prompted=False,
+                pending_reminder_confirmation=undo_data
+            )
 
             resp = MessagingResponse()
             resp.message(staging_prefix("Daily summary disabled. You'll no longer receive daily reminder summaries."))
@@ -2846,6 +3328,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if first_action_type:
             reply_text = append_trial_info_to_response(reply_text, first_action_type, phone_number)
 
+        # If this was a QUESTION command, append escape hatch for human help
+        if is_question_command:
+            reply_text += "\n\nNeed more help? Text SUPPORT followed by your message to chat with a real person."
+
         # Send response
         resp = MessagingResponse()
         resp.message(staging_prefix(reply_text))
@@ -3100,6 +3586,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 save_reminder(phone_number, reminder_text, reminder_date)
                 reply_text = ai_response.get("confirmation", "Got it! I'll remind you.")
 
+            # Add usage counter for free tier users
+            from services.tier_service import add_usage_counter_to_message
+            reply_text = add_usage_counter_to_message(phone_number, reply_text)
+
             # Check if this is user's first action and prompt for daily summary
             if should_prompt_daily_summary(phone_number):
                 reply_text = get_daily_summary_prompt_message(reply_text)
@@ -3225,6 +3715,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 date_str = reminder_dt_local.strftime('%A, %B %d, %Y')
 
                 reply_text = f"Got it! I'll remind you on {date_str} at {time_str} {format_reminder_confirmation(reminder_text)}."
+
+                # Add usage counter for free tier users
+                from services.tier_service import add_usage_counter_to_message
+                reply_text = add_usage_counter_to_message(phone_number, reply_text)
 
                 # Check if this is user's first action and prompt for daily summary
                 if should_prompt_daily_summary(phone_number):
@@ -4217,6 +4711,164 @@ async def health_check():
         "environment": ENVIRONMENT,
         "features": ["memory_storage", "reminders", "onboarding", "timezone_support"]
     }
+
+
+@app.post("/api/signup")
+async def desktop_signup(request: Request):
+    """
+    Desktop signup endpoint - sends SMS with onboarding prompt.
+    User enters phone number on website, receives text to begin onboarding.
+    """
+    try:
+        data = await request.json()
+        phone_number = data.get('phone')
+
+        if not phone_number:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Phone number is required"}
+            )
+
+        # Validate and format phone number
+        import re
+        # Remove all non-digits
+        digits_only = re.sub(r'\D', '', phone_number)
+
+        # Check if it's a valid US number (10 or 11 digits)
+        if len(digits_only) == 10:
+            formatted_phone = f"+1{digits_only}"
+        elif len(digits_only) == 11 and digits_only[0] == '1':
+            formatted_phone = f"+{digits_only}"
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Please enter a valid US phone number"}
+            )
+
+        # Check if user already exists
+        from models.user import get_user
+        existing_user = get_user(formatted_phone)
+
+        # Always send new user message (for consistent testing experience)
+        # In production, you could customize this for returning users
+        message = """👋 Welcome to Remyndrs!
+
+I'm your AI-powered reminder assistant. I'll help you remember anything—from daily tasks to important dates.
+
+No app needed - just text me naturally and I'll handle the rest!
+
+Reply with your first name to get started, or text HELP for more info."""
+
+        # Send SMS
+        from services.sms_service import send_sms
+        send_sms(formatted_phone, message)
+
+        # Log the signup
+        log_interaction(formatted_phone, "Desktop signup", "Signup SMS sent", "desktop_signup", True)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "message": "Check your phone! We just sent you a text to get started."
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error in desktop signup: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "Something went wrong. Please try again or text us at (855) 552-1950"}
+        )
+
+
+@app.post("/api/contact")
+async def website_contact(request: Request):
+    """
+    Website contact form endpoint - receives messages from desktop users
+    who can't use SMS links directly.
+    """
+    try:
+        data = await request.json()
+        phone_number = data.get('phone')
+        contact_type = data.get('type', '').lower()
+        message = data.get('message', '').strip()
+
+        if not phone_number:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Phone number is required"}
+            )
+
+        if contact_type not in ('support', 'feedback', 'question', 'bug'):
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Invalid contact type"}
+            )
+
+        if not message:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Message is required"}
+            )
+
+        # Validate and format phone number
+        import re
+        digits_only = re.sub(r'\D', '', phone_number)
+
+        if len(digits_only) == 10:
+            formatted_phone = f"+1{digits_only}"
+        elif len(digits_only) == 11 and digits_only[0] == '1':
+            formatted_phone = f"+{digits_only}"
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Please enter a valid US phone number"}
+            )
+
+        # Route through support tickets with appropriate category
+        from services.support_service import create_categorized_ticket
+        result = create_categorized_ticket(formatted_phone, message, contact_type, 'web')
+        if not result['success']:
+            logger.error(f"Error creating ticket for web contact: {result.get('error')}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Something went wrong. Please try again."}
+            )
+
+        # Send confirmation SMS
+        from services.sms_service import send_sms
+        type_labels = {
+            'support': 'support request',
+            'feedback': 'feedback',
+            'question': 'question',
+            'bug': 'bug report'
+        }
+        type_label = type_labels[contact_type]
+
+        try:
+            confirmation_msg = f"We received your {type_label}. To continue the conversation, text us anytime at this number."
+            send_sms(formatted_phone, confirmation_msg)
+        except Exception as e:
+            logger.error(f"Error sending contact confirmation SMS: {e}")
+            # Don't fail the request if SMS fails - the feedback was already saved
+
+        log_interaction(formatted_phone, f"[WEB CONTACT] [{contact_type.upper()}] {message}", "Contact form ticket created", f"web_contact_{contact_type}", True)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "message": f"Your {type_label} has been received! Check your phone for a confirmation text."
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error in website contact form: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "Something went wrong. Please try again or text us at (855) 552-1950"}
+        )
 
 
 @app.get("/contact.vcf")

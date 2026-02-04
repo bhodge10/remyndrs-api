@@ -60,6 +60,62 @@ def get_user_name(phone_number: str) -> str:
             return_db_connection(conn)
 
 
+def create_categorized_ticket(phone_number: str, message: str, category: str, source: str = 'sms') -> dict:
+    """
+    Create a support ticket for feedback, bug reports, and web contact submissions.
+    Unlike regular support tickets, these do NOT enter support mode (updated_at is set
+    to an old timestamp so the 30-minute timeout doesn't activate).
+
+    Args:
+        phone_number: User's phone number
+        message: The message content
+        category: 'feedback', 'bug', 'question', or 'support'
+        source: 'sms' or 'web'
+
+    Returns:
+        dict with ticket_id and success status
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Create ticket with category and source, but set updated_at to old time
+        # so the user does NOT enter support mode
+        old_time = datetime.utcnow() - timedelta(minutes=SUPPORT_MODE_TIMEOUT + 10)
+        c.execute(
+            """INSERT INTO support_tickets (phone_number, category, source, updated_at)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (phone_number, category, source, old_time)
+        )
+        ticket_id = c.fetchone()[0]
+
+        # Add the message
+        c.execute(
+            """INSERT INTO support_messages (ticket_id, phone_number, message, direction)
+               VALUES (%s, %s, %s, 'inbound')""",
+            (ticket_id, phone_number, message)
+        )
+
+        conn.commit()
+
+        # Send email notification
+        user_name = get_user_name(phone_number)
+        send_support_notification(ticket_id, phone_number, message, user_name)
+
+        logger.info(f"Created {category} ticket #{ticket_id} from {source} for ...{phone_number[-4:]}")
+        return {'success': True, 'ticket_id': ticket_id}
+
+    except Exception as e:
+        logger.error(f"Error creating categorized ticket: {e}")
+        if conn:
+            conn.rollback()
+        return {'success': False, 'error': str(e)}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_or_create_open_ticket(phone_number: str) -> int:
     """Get existing open ticket or create a new one"""
     conn = None
@@ -343,7 +399,7 @@ def close_ticket(ticket_id: int, notify_user: bool = True) -> bool:
             # Send SMS notification to user
             if notify_user and phone_number:
                 try:
-                    sms_message = f"[Support Ticket #{ticket_id}] Your support ticket has been closed. Thank you for contacting Remyndrs support! Text SUPPORT: anytime to open a new ticket."
+                    sms_message = f"[Support Ticket #{ticket_id}] Your support ticket has been closed. Thank you for contacting Remyndrs support! Text SUPPORT anytime to open a new ticket."
                     send_sms(phone_number, sms_message)
                     logger.info(f"Sent closure notification for ticket #{ticket_id}")
                 except Exception as e:
@@ -380,35 +436,42 @@ def reopen_ticket(ticket_id: int) -> bool:
             return_db_connection(conn)
 
 
-def get_all_tickets(include_closed: bool = False) -> list:
-    """Get all support tickets for admin dashboard"""
+def get_all_tickets(include_closed: bool = False, category_filter: str = None, source_filter: str = None) -> list:
+    """Get all support tickets for admin/CS dashboard"""
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
 
-        if include_closed:
-            c.execute("""
-                SELECT t.id, t.phone_number, t.status, t.created_at, t.updated_at,
-                       u.first_name,
-                       (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count,
-                       (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
-                FROM support_tickets t
-                LEFT JOIN users u ON t.phone_number = u.phone_number
-                ORDER BY t.updated_at DESC
-            """)
-        else:
-            c.execute("""
-                SELECT t.id, t.phone_number, t.status, t.created_at, t.updated_at,
-                       u.first_name,
-                       (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count,
-                       (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
-                FROM support_tickets t
-                LEFT JOIN users u ON t.phone_number = u.phone_number
-                WHERE t.status = 'open'
-                ORDER BY t.updated_at DESC
-            """)
+        query = """
+            SELECT t.id, t.phone_number, t.status, t.created_at, t.updated_at,
+                   u.first_name,
+                   (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count,
+                   (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message,
+                   COALESCE(t.category, 'support') as category,
+                   COALESCE(t.source, 'sms') as source,
+                   COALESCE(t.priority, 'normal') as priority,
+                   t.assigned_to
+            FROM support_tickets t
+            LEFT JOIN users u ON t.phone_number = u.phone_number
+            WHERE 1=1
+        """
+        params = []
 
+        if not include_closed:
+            query += " AND t.status = 'open'"
+
+        if category_filter:
+            query += " AND COALESCE(t.category, 'support') = %s"
+            params.append(category_filter)
+
+        if source_filter:
+            query += " AND COALESCE(t.source, 'sms') = %s"
+            params.append(source_filter)
+
+        query += " ORDER BY t.updated_at DESC"
+
+        c.execute(query, params)
         tickets = c.fetchall()
         return [
             {
@@ -419,7 +482,11 @@ def get_all_tickets(include_closed: bool = False) -> list:
                 'updated_at': t[4].isoformat() if t[4] else None,
                 'user_name': t[5],
                 'message_count': t[6],
-                'last_message': t[7][:100] + '...' if t[7] and len(t[7]) > 100 else t[7]
+                'last_message': t[7][:100] + '...' if t[7] and len(t[7]) > 100 else t[7],
+                'category': t[8],
+                'source': t[9],
+                'priority': t[10],
+                'assigned_to': t[11]
             }
             for t in tickets
         ]
@@ -558,6 +625,85 @@ def exit_support_mode(phone_number: str) -> dict:
     except Exception as e:
         logger.error(f"Error exiting support mode: {e}")
         return {'success': False, 'error': str(e)}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def assign_ticket(ticket_id: int, assigned_to: str) -> bool:
+    """Assign a ticket to a CS rep"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            "UPDATE support_tickets SET assigned_to = %s WHERE id = %s",
+            (assigned_to, ticket_id)
+        )
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error assigning ticket: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_ticket_sla_info() -> dict:
+    """Get SLA metrics for the ticket dashboard (computed, no new tables)"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get open ticket count
+        c.execute("SELECT COUNT(*) FROM support_tickets WHERE status = 'open'")
+        open_count = c.fetchone()[0]
+
+        # Get tickets waiting for response (no outbound message after last inbound)
+        c.execute("""
+            SELECT t.id, t.created_at,
+                   (SELECT MAX(sm.created_at) FROM support_messages sm
+                    WHERE sm.ticket_id = t.id AND sm.direction = 'inbound') as last_inbound,
+                   (SELECT MAX(sm.created_at) FROM support_messages sm
+                    WHERE sm.ticket_id = t.id AND sm.direction = 'outbound') as last_outbound
+            FROM support_tickets t
+            WHERE t.status = 'open'
+        """)
+        rows = c.fetchall()
+
+        now = datetime.utcnow()
+        waiting_times = []
+        oldest_unanswered_minutes = 0
+
+        for row in rows:
+            last_inbound = row[2]
+            last_outbound = row[3]
+
+            # Ticket is unanswered if no outbound, or last inbound is newer than last outbound
+            if last_inbound and (not last_outbound or last_inbound > last_outbound):
+                if last_inbound.tzinfo:
+                    from datetime import timezone
+                    now_tz = datetime.now(timezone.utc)
+                    wait_minutes = (now_tz - last_inbound).total_seconds() / 60
+                else:
+                    wait_minutes = (now - last_inbound).total_seconds() / 60
+                waiting_times.append(wait_minutes)
+                if wait_minutes > oldest_unanswered_minutes:
+                    oldest_unanswered_minutes = wait_minutes
+
+        avg_wait = sum(waiting_times) / len(waiting_times) if waiting_times else 0
+
+        return {
+            'open_count': open_count,
+            'unanswered_count': len(waiting_times),
+            'avg_wait_minutes': round(avg_wait),
+            'oldest_unanswered_minutes': round(oldest_unanswered_minutes)
+        }
+    except Exception as e:
+        logger.error(f"Error getting SLA info: {e}")
+        return {'open_count': 0, 'unanswered_count': 0, 'avg_wait_minutes': 0, 'oldest_unanswered_minutes': 0}
     finally:
         if conn:
             return_db_connection(conn)

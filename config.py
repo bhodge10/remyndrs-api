@@ -162,7 +162,7 @@ TIER_FAMILY = 'family'
 
 # Free trial configuration
 FREE_TRIAL_DAYS = 14  # New users get 14-day Premium trial
-PREMIUM_MONTHLY_PRICE = "$4.99"  # Early adopter rate for messaging
+PREMIUM_MONTHLY_PRICE = "$6.99"
 
 # Pricing (in cents for Stripe)
 PRICING = {

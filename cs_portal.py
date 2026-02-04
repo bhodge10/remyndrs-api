@@ -4,6 +4,7 @@ A standalone portal for CS reps to search customers and handle support tickets
 """
 
 import secrets
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -40,6 +41,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
 
     # Get open ticket count for badge
     open_tickets = 0
+    unresolved_feedback = 0
     conn = None
     try:
         conn = get_db_connection()
@@ -47,6 +49,10 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         c.execute("SELECT COUNT(*) FROM support_tickets WHERE status = 'open'")
         result = c.fetchone()
         open_tickets = result[0] if result else 0
+        # Count unresolved feedback (legacy table)
+        c.execute("SELECT COUNT(*) FROM feedback WHERE resolved = FALSE")
+        result = c.fetchone()
+        unresolved_feedback = result[0] if result else 0
     except Exception as e:
         logger.error(f"Error getting ticket count: {e}")
     finally:
@@ -238,6 +244,96 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             border-radius: 4px;
             font-size: 0.8em;
         }}
+        .cat-support {{ background: #3498db; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600; }}
+        .cat-feedback {{ background: #f39c12; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600; }}
+        .cat-bug {{ background: #e74c3c; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600; }}
+        .cat-question {{ background: #9b59b6; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600; }}
+        .source-sms {{ background: #2ecc71; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; }}
+        .source-web {{ background: #3498db; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; }}
+        .sla-green {{ color: #27ae60; font-weight: 600; }}
+        .sla-yellow {{ color: #f39c12; font-weight: 600; }}
+        .sla-red {{ color: #e74c3c; font-weight: 600; }}
+        .sla-summary {{
+            display: flex;
+            gap: 20px;
+            padding: 12px 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }}
+        .sla-summary .stat {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }}
+        .sla-summary .stat-value {{
+            font-size: 1.4em;
+            font-weight: 700;
+        }}
+        .sla-summary .stat-label {{
+            font-size: 0.8em;
+            color: #7f8c8d;
+        }}
+        .filter-row {{
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }}
+        .filter-row select {{
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }}
+        .filter-row label {{
+            font-size: 0.9em;
+            color: #666;
+        }}
+        .canned-dropdown {{
+            position: relative;
+            display: inline-block;
+        }}
+        .canned-menu {{
+            display: none;
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-height: 300px;
+            overflow-y: auto;
+            width: 350px;
+            z-index: 1001;
+        }}
+        .canned-menu.show {{
+            display: block;
+        }}
+        .canned-item {{
+            padding: 10px 15px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+        }}
+        .canned-item:hover {{
+            background: #f0f7ff;
+        }}
+        .canned-item .canned-title {{
+            font-weight: 600;
+            font-size: 0.85em;
+            color: #2c3e50;
+        }}
+        .canned-item .canned-preview {{
+            font-size: 0.8em;
+            color: #7f8c8d;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
 
         /* Customer Profile Styles */
         .profile-header {{
@@ -423,6 +519,10 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 Support Tickets
                 <span class="badge" id="ticketBadge">{open_tickets}</span>
             </button>
+            <button onclick="showView('feedback')" id="btn-feedback">
+                Feedback
+                <span class="badge" id="feedbackBadge" style="background: #f39c12;">{unresolved_feedback}</span>
+            </button>
         </div>
     </div>
 
@@ -466,6 +566,8 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                     <div class="profile-actions">
                         <button class="btn btn-primary" onclick="openTierModal()">Change Tier</button>
                         <button class="btn btn-success" onclick="openNoteModal()">Add Note</button>
+                        <button class="btn btn-warning" onclick="exportCustomerData()">Export Data</button>
+                        <button class="btn btn-danger" id="refundBtn" onclick="openRefundModal()" style="display:none;">Issue Refund</button>
                         <button class="btn" onclick="closeProfile()" style="background: #95a5a6; color: white;">Close</button>
                     </div>
                 </div>
@@ -505,19 +607,67 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                         <input type="checkbox" id="showClosedTickets" onchange="loadAllTickets()"> Show closed tickets
                     </label>
                 </div>
+                <div id="slaSummary" class="sla-summary"></div>
+                <div class="filter-row">
+                    <label>Category:</label>
+                    <select id="filterCategory" onchange="loadAllTickets()">
+                        <option value="">All</option>
+                        <option value="support">Support</option>
+                        <option value="feedback">Feedback</option>
+                        <option value="bug">Bug</option>
+                        <option value="question">Question</option>
+                    </select>
+                    <label>Source:</label>
+                    <select id="filterSource" onchange="loadAllTickets()">
+                        <option value="">All</option>
+                        <option value="sms">SMS</option>
+                        <option value="web">Web</option>
+                    </select>
+                </div>
                 <table>
                     <thead>
                         <tr>
                             <th>ID</th>
                             <th>Customer</th>
+                            <th>Category</th>
                             <th>Status</th>
+                            <th>Wait</th>
+                            <th>Assigned</th>
                             <th>Last Message</th>
                             <th>Updated</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="ticketsBody">
-                        <tr><td colspan="6" class="loading">Loading tickets...</td></tr>
+                        <tr><td colspan="9" class="loading">Loading tickets...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Feedback View (legacy feedback table) -->
+        <div id="view-feedback" class="view-section">
+            <div class="section">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h2>Feedback (Legacy)</h2>
+                    <label style="cursor: pointer;">
+                        <input type="checkbox" id="showResolvedFeedback" onchange="loadFeedback()"> Show resolved
+                    </label>
+                </div>
+                <p style="color: #7f8c8d; margin-bottom: 15px; font-size: 0.9em;">New feedback/bug reports now create support tickets. This tab shows older entries from the legacy feedback table.</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Phone</th>
+                            <th>Message</th>
+                            <th>Date</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="feedbackBody">
+                        <tr><td colspan="6" class="loading">Loading feedback...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -538,11 +688,16 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             </div>
             <div class="modal-footer">
                 <div class="reply-box">
+                    <div class="canned-dropdown">
+                        <button class="btn btn-primary" onclick="toggleCannedMenu()" style="font-size: 0.8em; padding: 10px 12px;" title="Canned Responses">&#9776;</button>
+                        <div id="cannedMenu" class="canned-menu"></div>
+                    </div>
                     <input type="text" id="ticketReplyInput" placeholder="Type your reply..."
                            onkeyup="if(event.key === 'Enter') sendTicketReply()">
                     <button class="btn btn-success" onclick="sendTicketReply()">Send</button>
                 </div>
                 <div style="margin-top: 10px; display: flex; gap: 10px;">
+                    <button class="btn btn-primary" id="assignTicketBtn" onclick="assignCurrentTicket()">Assign to Me</button>
                     <button class="btn btn-danger" id="closeTicketBtn" onclick="closeCurrentTicket()">Close Ticket</button>
                     <button class="btn btn-warning" id="reopenTicketBtn" onclick="reopenCurrentTicket()" style="display: none;">Reopen</button>
                 </div>
@@ -600,6 +755,33 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         </div>
     </div>
 
+    <!-- Refund Modal -->
+    <div id="refundModal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>Issue Refund</h3>
+                <button class="modal-close" onclick="closeRefundModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="background: white;">
+                <p style="margin-bottom: 15px;">Enter refund amount (leave blank for full refund of last payment):</p>
+                <div style="display: flex; align-items: center; gap: 5px; margin-bottom: 15px;">
+                    <span style="font-size: 1.2em;">$</span>
+                    <input type="number" id="refundAmount" step="0.01" min="0.01" placeholder="Full refund"
+                           style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                <select id="refundReason" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="requested_by_customer">Requested by customer</option>
+                    <option value="duplicate">Duplicate charge</option>
+                    <option value="fraudulent">Fraudulent charge</option>
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-danger" onclick="submitRefund()">Confirm Refund</button>
+                <button class="btn" onclick="closeRefundModal()" style="background: #95a5a6; color: white;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentCustomer = null;
         let currentTicketId = null;
@@ -615,6 +797,9 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
 
             if (view === 'tickets') {{
                 loadAllTickets();
+                loadSlaInfo();
+            }} else if (view === 'feedback') {{
+                loadFeedback();
             }}
         }}
 
@@ -679,10 +864,67 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 document.getElementById('profileTier').innerHTML = `Tier: <span class="tier-badge tier-${{customer.tier || 'free'}}">${{(customer.tier || 'free').toUpperCase()}}</span>`;
                 document.getElementById('profileSince').textContent = customer.created_at ? `Member since: ${{new Date(customer.created_at).toLocaleDateString()}}` : '';
 
+                // Show refund button for premium/family users
+                const refundBtn = document.getElementById('refundBtn');
+                refundBtn.style.display = (customer.tier === 'premium' || customer.tier === 'family') ? 'inline-block' : 'none';
+
                 document.getElementById('customerProfile').style.display = 'block';
                 showProfileTab('reminders');
             }} catch (e) {{
                 console.error('Error loading customer:', e);
+            }}
+        }}
+
+        // Data Export
+        function exportCustomerData() {{
+            if (!currentCustomer) return;
+            window.open(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/export`, '_blank');
+        }}
+
+        // Refund
+        function openRefundModal() {{
+            document.getElementById('refundAmount').value = '';
+            document.getElementById('refundReason').value = 'requested_by_customer';
+            document.getElementById('refundModal').style.display = 'block';
+        }}
+
+        function closeRefundModal() {{
+            document.getElementById('refundModal').style.display = 'none';
+        }}
+
+        async function submitRefund() {{
+            if (!currentCustomer) return;
+            const amountStr = document.getElementById('refundAmount').value;
+            const reason = document.getElementById('refundReason').value;
+
+            const amountCents = amountStr ? Math.round(parseFloat(amountStr) * 100) : null;
+
+            if (amountStr && (isNaN(amountCents) || amountCents <= 0)) {{
+                alert('Please enter a valid amount');
+                return;
+            }}
+
+            if (!confirm(`Issue refund${{amountStr ? ' of $' + parseFloat(amountStr).toFixed(2) : ' (full amount)'}} to ${{currentCustomer.name || currentCustomer.phone}}?`)) {{
+                return;
+            }}
+
+            try {{
+                const response = await fetch(`/cs/customer/${{encodeURIComponent(currentCustomer.phone)}}/refund`, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ amount_cents: amountCents, reason: reason }})
+                }});
+
+                if (response.ok) {{
+                    closeRefundModal();
+                    alert('Refund issued successfully!');
+                    viewCustomer(currentCustomer.phone);
+                }} else {{
+                    const data = await response.json();
+                    alert('Error: ' + (data.detail || 'Failed to issue refund'));
+                }}
+            }} catch (e) {{
+                alert('Error issuing refund');
             }}
         }}
 
@@ -837,10 +1079,16 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
         // Support Tickets
         async function loadAllTickets() {{
             const includeClosed = document.getElementById('showClosedTickets').checked;
+            const categoryFilter = document.getElementById('filterCategory').value;
+            const sourceFilter = document.getElementById('filterSource').value;
             const tbody = document.getElementById('ticketsBody');
 
+            let url = `/cs/support/tickets?include_closed=${{includeClosed}}`;
+            if (categoryFilter) url += `&category=${{categoryFilter}}`;
+            if (sourceFilter) url += `&source=${{sourceFilter}}`;
+
             try {{
-                const response = await fetch(`/cs/support/tickets?include_closed=${{includeClosed}}`);
+                const response = await fetch(url);
                 const data = await response.json();
 
                 // Update badge
@@ -848,22 +1096,109 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
                 document.getElementById('ticketBadge').textContent = openCount;
 
                 if (!data.tickets || data.tickets.length === 0) {{
-                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No tickets found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No tickets found</td></tr>';
                     return;
                 }}
 
-                tbody.innerHTML = data.tickets.map(t => `
+                tbody.innerHTML = data.tickets.map(t => {{
+                    const cat = t.category || 'support';
+                    const src = t.source || 'sms';
+                    const waitHtml = getWaitTimeHtml(t);
+                    return `
                     <tr>
                         <td>#${{t.id}}</td>
                         <td>${{t.user_name || 'Unknown'}} (...${{t.phone_number.slice(-4)}})</td>
+                        <td><span class="cat-${{cat}}">${{cat.toUpperCase()}}</span> <span class="source-${{src}}">${{src.toUpperCase()}}</span></td>
                         <td><span class="status-${{t.status}}">${{t.status.toUpperCase()}}</span></td>
-                        <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${{t.last_message || 'No messages'}}</td>
+                        <td>${{waitHtml}}</td>
+                        <td>${{t.assigned_to || '<span style="color:#bbb">—</span>'}}</td>
+                        <td style="max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${{t.last_message || 'No messages'}}</td>
                         <td>${{t.updated_at ? new Date(t.updated_at).toLocaleString() : 'N/A'}}</td>
-                        <td><button class="btn btn-primary" onclick="openTicket(${{t.id}}, '${{t.status}}', '${{t.user_name || 'Unknown'}}', '${{t.phone_number}}')">View</button></td>
+                        <td><button class="btn btn-primary" onclick="openTicket(${{t.id}}, '${{t.status}}', '${{(t.user_name || 'Unknown').replace(/'/g, "\\\\'")}}', '${{t.phone_number}}')">View</button></td>
+                    </tr>`;
+                }}).join('');
+            }} catch (e) {{
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Error loading tickets</td></tr>';
+            }}
+        }}
+
+        function getWaitTimeHtml(ticket) {{
+            if (ticket.status !== 'open') return '<span style="color:#bbb">—</span>';
+            if (!ticket.updated_at) return '';
+            const updated = new Date(ticket.updated_at);
+            const now = new Date();
+            const diffMin = Math.round((now - updated) / 60000);
+            let timeStr, cls;
+            if (diffMin < 60) {{
+                timeStr = diffMin + 'm';
+            }} else if (diffMin < 1440) {{
+                timeStr = Math.round(diffMin / 60) + 'h';
+            }} else {{
+                timeStr = Math.round(diffMin / 1440) + 'd';
+            }}
+            if (diffMin < 60) cls = 'sla-green';
+            else if (diffMin < 240) cls = 'sla-yellow';
+            else cls = 'sla-red';
+            return `<span class="${{cls}}">${{timeStr}}</span>`;
+        }}
+
+        async function loadSlaInfo() {{
+            try {{
+                const response = await fetch('/cs/support/sla');
+                const sla = await response.json();
+                const summary = document.getElementById('slaSummary');
+                const avgCls = sla.avg_wait_minutes < 60 ? 'sla-green' : sla.avg_wait_minutes < 240 ? 'sla-yellow' : 'sla-red';
+                const oldCls = sla.oldest_unanswered_minutes < 60 ? 'sla-green' : sla.oldest_unanswered_minutes < 240 ? 'sla-yellow' : 'sla-red';
+                summary.innerHTML = `
+                    <div class="stat"><span class="stat-value">${{sla.open_count}}</span><span class="stat-label">Open</span></div>
+                    <div class="stat"><span class="stat-value">${{sla.unanswered_count}}</span><span class="stat-label">Unanswered</span></div>
+                    <div class="stat"><span class="stat-value ${{avgCls}}">${{formatWait(sla.avg_wait_minutes)}}</span><span class="stat-label">Avg Wait</span></div>
+                    <div class="stat"><span class="stat-value ${{oldCls}}">${{formatWait(sla.oldest_unanswered_minutes)}}</span><span class="stat-label">Oldest</span></div>
+                `;
+            }} catch (e) {{
+                console.error('Error loading SLA info:', e);
+            }}
+        }}
+
+        function formatWait(minutes) {{
+            if (minutes < 60) return minutes + 'm';
+            if (minutes < 1440) return Math.round(minutes / 60) + 'h';
+            return Math.round(minutes / 1440) + 'd';
+        }}
+
+        // Feedback (legacy table)
+        async function loadFeedback() {{
+            const showResolved = document.getElementById('showResolvedFeedback').checked;
+            const tbody = document.getElementById('feedbackBody');
+            try {{
+                const response = await fetch(`/cs/feedback?include_resolved=${{showResolved}}`);
+                const data = await response.json();
+                if (!data.feedback || data.feedback.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No feedback entries</td></tr>';
+                    return;
+                }}
+                document.getElementById('feedbackBadge').textContent = data.unresolved_count || 0;
+                tbody.innerHTML = data.feedback.map(f => `
+                    <tr>
+                        <td>#${{f.id}}</td>
+                        <td>...${{f.user_phone.slice(-4)}}</td>
+                        <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${{f.message}}</td>
+                        <td>${{f.created_at ? new Date(f.created_at).toLocaleString() : 'N/A'}}</td>
+                        <td>${{f.resolved ? '<span style="color:#27ae60">Resolved</span>' : '<span style="color:#e74c3c">Open</span>'}}</td>
+                        <td>${{!f.resolved ? `<button class="btn btn-success" onclick="resolveFeedback(${{f.id}})">Resolve</button>` : ''}}</td>
                     </tr>
                 `).join('');
             }} catch (e) {{
-                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Error loading tickets</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Error loading feedback</td></tr>';
+            }}
+        }}
+
+        async function resolveFeedback(id) {{
+            try {{
+                const response = await fetch(`/cs/feedback/${{id}}/resolve`, {{ method: 'POST' }});
+                if (response.ok) loadFeedback();
+            }} catch (e) {{
+                alert('Error resolving feedback');
             }}
         }}
 
@@ -998,6 +1333,73 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
             }}
         }}
 
+        // Ticket Assignment
+        async function assignCurrentTicket() {{
+            if (!currentTicketId) return;
+            try {{
+                const response = await fetch(`/cs/support/tickets/${{currentTicketId}}/assign`, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{}})
+                }});
+                if (response.ok) {{
+                    const data = await response.json();
+                    document.getElementById('assignTicketBtn').textContent = `Assigned: ${{data.assigned_to}}`;
+                    document.getElementById('assignTicketBtn').disabled = true;
+                    loadAllTickets();
+                }}
+            }} catch (e) {{
+                alert('Error assigning ticket');
+            }}
+        }}
+
+        // Canned Responses
+        let cannedResponses = [];
+        async function loadCannedResponses() {{
+            try {{
+                const response = await fetch('/cs/canned-responses');
+                const data = await response.json();
+                cannedResponses = data.responses || [];
+                renderCannedMenu();
+            }} catch (e) {{
+                console.error('Error loading canned responses:', e);
+            }}
+        }}
+
+        function renderCannedMenu() {{
+            const menu = document.getElementById('cannedMenu');
+            if (cannedResponses.length === 0) {{
+                menu.innerHTML = '<div class="canned-item" style="color: #7f8c8d;">No canned responses yet</div>';
+                return;
+            }}
+            menu.innerHTML = cannedResponses.map(r => `
+                <div class="canned-item" onclick="useCannedResponse('${{r.id}}')">
+                    <div class="canned-title">${{r.title}}</div>
+                    <div class="canned-preview">${{r.message.substring(0, 80)}}${{r.message.length > 80 ? '...' : ''}}</div>
+                </div>
+            `).join('');
+        }}
+
+        function toggleCannedMenu() {{
+            const menu = document.getElementById('cannedMenu');
+            menu.classList.toggle('show');
+        }}
+
+        function useCannedResponse(id) {{
+            const response = cannedResponses.find(r => r.id == id);
+            if (response) {{
+                document.getElementById('ticketReplyInput').value = response.message;
+            }}
+            document.getElementById('cannedMenu').classList.remove('show');
+        }}
+
+        // Close canned menu when clicking outside
+        document.addEventListener('click', function(e) {{
+            if (!e.target.closest('.canned-dropdown')) {{
+                document.getElementById('cannedMenu').classList.remove('show');
+            }}
+        }});
+
         // Tier Management
         function openTierModal() {{
             if (!currentCustomer) return;
@@ -1108,6 +1510,7 @@ async def cs_portal(request: Request, user: str = Depends(verify_cs_auth)):
 
         // Initialize
         loadAllTickets();
+        loadCannedResponses();
     </script>
 </body>
 </html>
@@ -1156,57 +1559,16 @@ async def get_customer_tickets(phone_number: str, user: str = Depends(verify_cs_
 # =====================================================
 
 @router.get("/cs/support/tickets")
-async def cs_get_all_tickets(include_closed: bool = False, user: str = Depends(verify_cs_auth)):
-    """Get all support tickets"""
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-
-        if include_closed:
-            c.execute("""
-                SELECT t.id, t.phone_number, t.status, t.created_at, t.updated_at,
-                       u.first_name,
-                       (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count,
-                       (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
-                FROM support_tickets t
-                LEFT JOIN users u ON t.phone_number = u.phone_number
-                ORDER BY t.updated_at DESC
-            """)
-        else:
-            c.execute("""
-                SELECT t.id, t.phone_number, t.status, t.created_at, t.updated_at,
-                       u.first_name,
-                       (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count,
-                       (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
-                FROM support_tickets t
-                LEFT JOIN users u ON t.phone_number = u.phone_number
-                WHERE t.status = 'open'
-                ORDER BY t.updated_at DESC
-            """)
-
-        tickets = c.fetchall()
-        return {
-            'tickets': [
-                {
-                    'id': t[0],
-                    'phone_number': t[1],
-                    'status': t[2],
-                    'created_at': t[3].isoformat() if t[3] else None,
-                    'updated_at': t[4].isoformat() if t[4] else None,
-                    'user_name': t[5],
-                    'message_count': t[6],
-                    'last_message': t[7][:100] + '...' if t[7] and len(t[7]) > 100 else t[7]
-                }
-                for t in tickets
-            ]
-        }
-    except Exception as e:
-        logger.error(f"Error getting tickets: {e}")
-        return {'tickets': []}
-    finally:
-        if conn:
-            return_db_connection(conn)
+async def cs_get_all_tickets(
+    include_closed: bool = False,
+    category: str = None,
+    source: str = None,
+    user: str = Depends(verify_cs_auth)
+):
+    """Get all support tickets with optional filtering"""
+    from services.support_service import get_all_tickets
+    tickets = get_all_tickets(include_closed, category_filter=category, source_filter=source)
+    return {'tickets': tickets}
 
 
 @router.get("/cs/support/tickets/{ticket_id}/messages")
@@ -1618,3 +1980,333 @@ async def cs_clear_pending_states(phone_number: str, user: str = Depends(verify_
     finally:
         if conn:
             return_db_connection(conn)
+
+
+# =====================================================
+# FEEDBACK ENDPOINTS (legacy feedback table)
+# =====================================================
+
+@router.get("/cs/feedback")
+async def cs_get_feedback(include_resolved: bool = False, user: str = Depends(verify_cs_auth)):
+    """Get feedback entries from legacy feedback table"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if include_resolved:
+            c.execute("""
+                SELECT id, user_phone, message, created_at, resolved
+                FROM feedback ORDER BY created_at DESC LIMIT 200
+            """)
+        else:
+            c.execute("""
+                SELECT id, user_phone, message, created_at, resolved
+                FROM feedback WHERE resolved = FALSE ORDER BY created_at DESC LIMIT 200
+            """)
+
+        rows = c.fetchall()
+
+        # Get unresolved count
+        c.execute("SELECT COUNT(*) FROM feedback WHERE resolved = FALSE")
+        unresolved_count = c.fetchone()[0]
+
+        return {
+            'feedback': [
+                {
+                    'id': r[0],
+                    'user_phone': r[1],
+                    'message': r[2],
+                    'created_at': r[3].isoformat() if r[3] else None,
+                    'resolved': r[4]
+                }
+                for r in rows
+            ],
+            'unresolved_count': unresolved_count
+        }
+    except Exception as e:
+        logger.error(f"Error getting feedback: {e}")
+        return {'feedback': [], 'unresolved_count': 0}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/cs/feedback/{feedback_id}/resolve")
+async def cs_resolve_feedback(feedback_id: int, user: str = Depends(verify_cs_auth)):
+    """Mark a feedback entry as resolved"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE feedback SET resolved = TRUE WHERE id = %s", (feedback_id,))
+        conn.commit()
+        logger.info(f"Feedback #{feedback_id} resolved by {user}")
+        return {'success': True}
+    except Exception as e:
+        logger.error(f"Error resolving feedback: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# TICKET ASSIGNMENT ENDPOINT
+# =====================================================
+
+@router.post("/cs/support/tickets/{ticket_id}/assign")
+async def cs_assign_ticket(ticket_id: int, request: Request, user: str = Depends(verify_cs_auth)):
+    """Assign a ticket to the current CS rep"""
+    from services.support_service import assign_ticket
+
+    try:
+        success = assign_ticket(ticket_id, user)
+        if success:
+            logger.info(f"Ticket #{ticket_id} assigned to {user}")
+            return {'success': True, 'assigned_to': user}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to assign ticket")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error assigning ticket: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =====================================================
+# SLA INFO ENDPOINT
+# =====================================================
+
+@router.get("/cs/support/sla")
+async def cs_get_sla_info(user: str = Depends(verify_cs_auth)):
+    """Get SLA metrics for the ticket dashboard"""
+    from services.support_service import get_ticket_sla_info
+    return get_ticket_sla_info()
+
+
+# =====================================================
+# CANNED RESPONSES ENDPOINTS
+# =====================================================
+
+@router.get("/cs/canned-responses")
+async def cs_get_canned_responses(user: str = Depends(verify_cs_auth)):
+    """Get all canned responses"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, title, message, category, created_by, created_at
+            FROM canned_responses ORDER BY title
+        """)
+        rows = c.fetchall()
+
+        # If no canned responses exist, seed defaults
+        if not rows:
+            defaults = [
+                ('Greeting', "Hi! Thanks for reaching out to Remyndrs support. How can I help you today?", 'general'),
+                ('Commands Help', "Here are some useful commands:\n- REMIND [text] AT [time] - Set a reminder\n- LIST [name] - Create/view a list\n- REMEMBER [text] - Save a memory\n- RECALL [topic] - Search memories\n- ? - Full help menu", 'general'),
+                ('Upgrade Info', "Remyndrs Premium ($6.99/month) gives you unlimited reminders, recurring reminders, 20 lists, and priority support. Text UPGRADE to get started!", 'billing'),
+                ('Billing Help', "To manage your subscription, text ACCOUNT to get a link to your billing portal where you can update payment info, change plans, or cancel.", 'billing'),
+                ('Bug Acknowledged', "Thanks for reporting this! I've logged the bug and our team will investigate. We'll update you once it's fixed.", 'bug'),
+                ('Feature Request', "Great suggestion! I've passed this along to our development team. We're always looking for ways to improve Remyndrs.", 'feedback'),
+                ('Timezone Fix', "I can update your timezone. What ZIP code should I use? Your reminders will be adjusted automatically.", 'support'),
+                ('Closing Note', "Glad I could help! If you need anything else, just text SUPPORT anytime. Have a great day!", 'general'),
+            ]
+            for title, message, category in defaults:
+                c.execute(
+                    "INSERT INTO canned_responses (title, message, category, created_by) VALUES (%s, %s, %s, %s)",
+                    (title, message, category, 'system')
+                )
+            conn.commit()
+            c.execute("SELECT id, title, message, category, created_by, created_at FROM canned_responses ORDER BY title")
+            rows = c.fetchall()
+
+        return {
+            'responses': [
+                {
+                    'id': r[0],
+                    'title': r[1],
+                    'message': r[2],
+                    'category': r[3],
+                    'created_by': r[4],
+                    'created_at': r[5].isoformat() if r[5] else None
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting canned responses: {e}")
+        return {'responses': []}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/cs/canned-responses")
+async def cs_create_canned_response(request: Request, user: str = Depends(verify_cs_auth)):
+    """Create a new canned response"""
+    conn = None
+    try:
+        body = await request.json()
+        title = body.get('title', '').strip()
+        message = body.get('message', '').strip()
+        category = body.get('category', 'general')
+
+        if not title or not message:
+            raise HTTPException(status_code=400, detail="Title and message are required")
+
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO canned_responses (title, message, category, created_by) VALUES (%s, %s, %s, %s) RETURNING id",
+            (title, message, category, user)
+        )
+        new_id = c.fetchone()[0]
+        conn.commit()
+
+        logger.info(f"Canned response '{title}' created by {user}")
+        return {'success': True, 'id': new_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating canned response: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.delete("/cs/canned-responses/{response_id}")
+async def cs_delete_canned_response(response_id: int, user: str = Depends(verify_cs_auth)):
+    """Delete a canned response"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM canned_responses WHERE id = %s", (response_id,))
+        conn.commit()
+        logger.info(f"Canned response #{response_id} deleted by {user}")
+        return {'success': True}
+    except Exception as e:
+        logger.error(f"Error deleting canned response: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# DATA EXPORT ENDPOINT
+# =====================================================
+
+@router.get("/cs/customer/{phone_number}/export")
+async def cs_export_customer_data(phone_number: str, user: str = Depends(verify_cs_auth)):
+    """Export all customer data as JSON"""
+    from fastapi.responses import JSONResponse
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # User profile
+        c.execute("""
+            SELECT phone_number, first_name, last_name, email, zip_code, timezone,
+                   onboarding_complete, premium_status, created_at, last_active_at
+            FROM users WHERE phone_number = %s
+        """, (phone_number,))
+        user_row = c.fetchone()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        profile = {
+            'phone_number': user_row[0], 'first_name': user_row[1], 'last_name': user_row[2],
+            'email': user_row[3], 'zip_code': user_row[4], 'timezone': user_row[5],
+            'onboarding_complete': user_row[6], 'premium_status': user_row[7],
+            'created_at': user_row[8].isoformat() if user_row[8] else None,
+            'last_active_at': user_row[9].isoformat() if user_row[9] else None
+        }
+
+        # Reminders
+        c.execute("SELECT id, reminder_text, reminder_date, sent, created_at FROM reminders WHERE phone_number = %s ORDER BY created_at DESC", (phone_number,))
+        reminders = [{'id': r[0], 'text': r[1], 'date': r[2].isoformat() if r[2] else None, 'sent': r[3], 'created_at': r[4].isoformat() if r[4] else None} for r in c.fetchall()]
+
+        # Recurring reminders
+        c.execute("SELECT id, reminder_text, recurrence_type, recurrence_day, reminder_time, timezone, active, created_at FROM recurring_reminders WHERE phone_number = %s", (phone_number,))
+        recurring = [{'id': r[0], 'text': r[1], 'type': r[2], 'day': r[3], 'time': str(r[4]), 'timezone': r[5], 'active': r[6], 'created_at': r[7].isoformat() if r[7] else None} for r in c.fetchall()]
+
+        # Memories
+        c.execute("SELECT id, memory_text, created_at FROM memories WHERE phone_number = %s ORDER BY created_at DESC", (phone_number,))
+        memories = [{'id': r[0], 'text': r[1], 'created_at': r[2].isoformat() if r[2] else None} for r in c.fetchall()]
+
+        # Lists and items
+        c.execute("SELECT id, list_name, created_at FROM lists WHERE phone_number = %s ORDER BY created_at", (phone_number,))
+        lists_data = []
+        for lst in c.fetchall():
+            c.execute("SELECT id, item_text, completed, created_at FROM list_items WHERE list_id = %s ORDER BY created_at", (lst[0],))
+            items = [{'id': i[0], 'text': i[1], 'completed': i[2], 'created_at': i[3].isoformat() if i[3] else None} for i in c.fetchall()]
+            lists_data.append({'id': lst[0], 'name': lst[1], 'created_at': lst[2].isoformat() if lst[2] else None, 'items': items})
+
+        export_data = {
+            'exported_at': datetime.utcnow().isoformat() + 'Z',
+            'exported_by': user,
+            'profile': profile,
+            'reminders': reminders,
+            'recurring_reminders': recurring,
+            'memories': memories,
+            'lists': lists_data
+        }
+
+        logger.info(f"Data export for {phone_number[-4:]} by {user}")
+        return JSONResponse(
+            content=export_data,
+            headers={"Content-Disposition": f"attachment; filename=remyndrs-export-{phone_number[-4:]}.json"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting customer data: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# REFUND ENDPOINT
+# =====================================================
+
+@router.post("/cs/customer/{phone_number}/refund")
+async def cs_issue_refund(phone_number: str, request: Request, user: str = Depends(verify_cs_auth)):
+    """Issue a refund for a Stripe subscriber"""
+    from services.stripe_service import issue_refund
+
+    try:
+        body = await request.json()
+        amount_cents = body.get('amount_cents')
+        reason = body.get('reason', 'requested_by_customer')
+
+        result = issue_refund(phone_number, amount_cents, reason)
+
+        if result['success']:
+            # Log refund in customer notes
+            amount_str = f"${amount_cents / 100:.2f}" if amount_cents else "full amount"
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO customer_notes (phone_number, note, created_by) VALUES (%s, %s, %s)",
+                (phone_number, f"[REFUND] Issued refund of {amount_str}. Reason: {reason}", user)
+            )
+            conn.commit()
+            return_db_connection(conn)
+
+            logger.info(f"Refund issued for {phone_number[-4:]} by {user}")
+            return {'success': True, 'refund_id': result.get('refund_id')}
+        else:
+            raise HTTPException(status_code=400, detail=result.get('error', 'Failed to issue refund'))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error issuing refund: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")

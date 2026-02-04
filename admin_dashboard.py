@@ -1307,7 +1307,8 @@ async def get_monitoring_issues(
                 LIMIT %s
             ''', (limit,))
         else:
-            # Show open issues: not false positive, not resolved
+            # Show open issues: validated, not false positive, not resolved
+            # Must match health card criteria from resolution_tracker.py
             c.execute('''
                 SELECT mi.id, mi.log_id, mi.phone_number, mi.issue_type,
                        mi.severity, mi.details, mi.detected_at, mi.validated,
@@ -1315,7 +1316,9 @@ async def get_monitoring_issues(
                        l.message_in, l.message_out
                 FROM monitoring_issues mi
                 LEFT JOIN logs l ON mi.log_id = l.id
-                WHERE mi.false_positive = FALSE AND mi.resolution IS NULL
+                WHERE mi.validated = TRUE
+                  AND mi.false_positive = FALSE
+                  AND mi.resolved_at IS NULL
                 ORDER BY
                     CASE mi.severity
                         WHEN 'critical' THEN 0
@@ -1616,7 +1619,19 @@ async def get_system_health(days: int = 7, admin: str = Depends(verify_admin)):
         init_validator_tables()   # Pattern tables (issue_patterns)
         init_tracker_tables()     # Tracker tables (health_snapshots, issue_resolutions, pattern_resolutions)
         metrics = calculate_health_metrics(days=days)
-        return JSONResponse(content=metrics)
+        # Convert Decimal values for JSON serialization
+        from decimal import Decimal
+        def sanitize(obj):
+            if isinstance(obj, dict):
+                return {k: sanitize(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize(i) for i in obj]
+            elif isinstance(obj, Decimal):
+                return float(obj)
+            elif hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            return obj
+        return JSONResponse(content=sanitize(metrics))
     except Exception as e:
         logger.error(f"Error getting health metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1692,12 +1707,15 @@ async def get_weekly_report(admin: str = Depends(verify_admin)):
         init_tracker_tables()
         report = generate_weekly_report()
 
-        # Convert datetime objects for JSON
+        # Convert datetime and Decimal objects for JSON
+        from decimal import Decimal
         def convert_dates(obj):
             if isinstance(obj, dict):
                 return {k: convert_dates(v) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [convert_dates(i) for i in obj]
+            elif isinstance(obj, Decimal):
+                return float(obj)
             elif hasattr(obj, 'isoformat'):
                 return obj.isoformat()
             return obj
@@ -1719,7 +1737,19 @@ async def get_health_trends(days: int = 30, admin: str = Depends(verify_admin)):
         init_validator_tables()
         init_tracker_tables()
         trend = get_health_trend(days=days)
-        return JSONResponse(content={"trend": trend, "days": days})
+        # Convert Decimal values for JSON serialization
+        from decimal import Decimal
+        def sanitize_trend(obj):
+            if isinstance(obj, dict):
+                return {k: sanitize_trend(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize_trend(i) for i in obj]
+            elif isinstance(obj, Decimal):
+                return float(obj)
+            elif hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            return obj
+        return JSONResponse(content=sanitize_trend({"trend": trend, "days": days}))
     except Exception as e:
         logger.error(f"Error getting trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1732,9 +1762,11 @@ async def save_daily_snapshot(admin: str = Depends(verify_admin)):
         from agents.resolution_tracker import calculate_health_metrics, save_health_snapshot
         metrics = calculate_health_metrics(days=1)
         save_health_snapshot(metrics)
+        from decimal import Decimal
+        score = float(metrics['health_score']) if isinstance(metrics['health_score'], Decimal) else metrics['health_score']
         return JSONResponse(content={
             "success": True,
-            "health_score": metrics['health_score'],
+            "health_score": score,
             "message": "Daily snapshot saved"
         })
     except Exception as e:
@@ -1751,6 +1783,191 @@ async def get_resolution_types(admin: str = Depends(verify_admin)):
     except Exception as e:
         logger.error(f"Error getting resolution types: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================================================
+# AGENT 4: CODE ANALYZER API ENDPOINTS
+# =====================================================
+
+@router.get("/admin/analyzer/issue/{issue_id}")
+async def get_issue_code_analysis(
+    issue_id: int,
+    force: bool = False,
+    use_ai: bool = True,
+    admin: str = Depends(verify_admin)
+):
+    """Get or generate code analysis for a specific issue"""
+    try:
+        from agents.code_analyzer import (
+            get_existing_analysis, analyze_issue, init_analyzer_tables
+        )
+        init_analyzer_tables()
+
+        # Check for existing analysis unless force regenerate
+        if not force:
+            existing = get_existing_analysis(issue_id=issue_id)
+            if existing:
+                return JSONResponse(content=existing)
+
+        # Generate new analysis
+        result = analyze_issue(issue_id, use_ai=use_ai, force=force)
+
+        if result.get('error'):
+            raise HTTPException(status_code=404, detail=result['error'])
+
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting issue analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/analyzer/pattern/{pattern_id}")
+async def get_pattern_code_analysis(
+    pattern_id: int,
+    force: bool = False,
+    use_ai: bool = True,
+    admin: str = Depends(verify_admin)
+):
+    """Get or generate code analysis for a specific pattern"""
+    try:
+        from agents.code_analyzer import (
+            get_existing_analysis, analyze_pattern, init_analyzer_tables
+        )
+        init_analyzer_tables()
+
+        # Check for existing analysis unless force regenerate
+        if not force:
+            existing = get_existing_analysis(pattern_id=pattern_id)
+            if existing:
+                return JSONResponse(content=existing)
+
+        # Generate new analysis
+        result = analyze_pattern(pattern_id, use_ai=use_ai, force=force)
+
+        if result.get('error'):
+            raise HTTPException(status_code=404, detail=result['error'])
+
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting pattern analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/analyzer/run")
+async def run_code_analyzer(
+    use_ai: bool = True,
+    dry_run: bool = False,
+    admin: str = Depends(verify_admin)
+):
+    """Run the code analyzer agent on unanalyzed issues"""
+    try:
+        from agents.code_analyzer import run_code_analysis, init_analyzer_tables
+        init_analyzer_tables()
+
+        results = run_code_analysis(use_ai=use_ai, dry_run=dry_run)
+
+        # Simplify output (remove full prompts)
+        output = {
+            'success': True,
+            'run_id': results.get('run_id'),
+            'issues_analyzed': results['issues_analyzed'],
+            'analyses_generated': results['analyses_generated'],
+            'errors': results.get('errors', [])
+        }
+
+        return JSONResponse(content=output)
+    except Exception as e:
+        logger.error(f"Error running code analyzer: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/analyzer/{analysis_id}/applied")
+async def mark_analysis_applied(
+    analysis_id: int,
+    admin: str = Depends(verify_admin)
+):
+    """Mark a code analysis fix as applied"""
+    try:
+        from agents.code_analyzer import mark_analysis_applied, init_analyzer_tables
+        init_analyzer_tables()
+
+        success = mark_analysis_applied(analysis_id, applied_by=admin)
+
+        if not success:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+
+        return JSONResponse(content={
+            "success": True,
+            "analysis_id": analysis_id,
+            "applied_by": admin
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking analysis as applied: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/analyzer/stats")
+async def get_analyzer_stats(admin: str = Depends(verify_admin)):
+    """Get code analyzer statistics"""
+    conn = None
+    try:
+        # Ensure tables exist
+        from agents.code_analyzer import init_analyzer_tables
+        init_analyzer_tables()
+
+        conn = get_monitoring_connection()
+        c = conn.cursor()
+
+        stats = {}
+
+        # Total analyses
+        c.execute('SELECT COUNT(*) FROM code_analysis')
+        stats['total_analyses'] = c.fetchone()[0]
+
+        # By status
+        c.execute('''
+            SELECT status, COUNT(*) FROM code_analysis
+            GROUP BY status
+        ''')
+        stats['by_status'] = {row[0]: row[1] for row in c.fetchall()}
+
+        # Average confidence
+        c.execute('SELECT AVG(confidence_score) FROM code_analysis')
+        avg = c.fetchone()[0]
+        stats['avg_confidence'] = round(avg, 1) if avg else 0
+
+        # Recent runs
+        c.execute('''
+            SELECT id, started_at, issues_analyzed, analyses_generated, use_ai, status
+            FROM code_analysis_runs
+            ORDER BY started_at DESC
+            LIMIT 5
+        ''')
+        stats['recent_runs'] = [
+            {
+                "id": r[0],
+                "started_at": r[1].isoformat() if r[1] else None,
+                "issues_analyzed": r[2],
+                "analyses_generated": r[3],
+                "use_ai": r[4],
+                "status": r[5]
+            }
+            for r in c.fetchall()
+        ]
+
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting analyzer stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_monitoring_connection(conn)
 
 
 # =====================================================
@@ -2310,7 +2527,8 @@ async def delete_changelog_entry(entry_id: int, admin: str = Depends(verify_admi
 
 
 # =====================================================
-# SUPPORT TICKET API ENDPOINTS
+# SUPPORT TICKET API ENDPOINTS (kept for admin dashboard compatibility)
+# Primary ticket management is now in CS Portal (/cs)
 # =====================================================
 
 class SupportReplyRequest(BaseModel):
@@ -2319,7 +2537,7 @@ class SupportReplyRequest(BaseModel):
 
 @router.get("/admin/support/tickets")
 async def get_support_tickets(include_closed: bool = False, admin: str = Depends(verify_admin)):
-    """Get all support tickets"""
+    """Get all support tickets (delegates to support_service)"""
     from services.support_service import get_all_tickets
     tickets = get_all_tickets(include_closed)
     return tickets
@@ -3768,7 +3986,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </div>
         <div class="section-content">
             <p style="color: #7f8c8d; margin-bottom: 15px;">
-                Premium users can text "Support: [message]" to create tickets. Replies are sent via SMS.
+                Users can text "Support [message]" to create tickets. Feedback and bug reports also create tickets.
+                <a href="/cs" style="color: #3498db; font-weight: 600;">Open CS Portal</a> for full ticket management with filtering, assignment, and canned responses.
             </p>
 
             <div style="margin-bottom: 15px;">

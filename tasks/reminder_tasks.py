@@ -734,3 +734,256 @@ def send_engagement_nudge(self, phone_number: str):
         # Log other errors but don't retry - this is a non-critical message
         logger.error(f"Error in engagement nudge task for ...{phone_number[-4:]}: {exc}")
         return {"status": "error", "error": str(exc)}
+
+
+# =====================================================
+# TRIAL EXPIRATION WARNINGS
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def check_trial_expirations(self):
+    """
+    Check for users whose trials are expiring soon and send warnings.
+    Sends warnings on:
+    - Day 7: 7 days remaining
+    - Day 1: 1 day remaining
+    - Day 0: Trial expired (downgraded to free)
+
+    Runs daily via Celery Beat.
+    Tracks sent warnings to avoid duplicates.
+    """
+    import pytz
+    from datetime import datetime
+    from database import get_db_connection, return_db_connection
+    from models.user import create_or_update_user
+    from config import PREMIUM_MONTHLY_PRICE
+
+    logger.info("Starting trial expiration check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get all users with active trials (trial_end_date in the future and premium_status = 'premium')
+        # Also get their warning status columns
+        now_utc = datetime.utcnow()
+
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date,
+                   trial_warning_7d_sent, trial_warning_1d_sent, trial_warning_0d_sent
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date > %s - INTERVAL '8 days'
+              AND onboarding_complete = TRUE
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users with active or recently expired trials")
+            return {"warnings_sent": 0}
+
+        logger.info(f"Checking {len(users)} users with trials")
+
+        warnings_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date, warning_7d_sent, warning_1d_sent, warning_0d_sent = user
+
+            # Calculate days remaining
+            time_remaining = trial_end_date - now_utc
+            days_remaining = time_remaining.days
+
+            # Determine which warning to send
+            warning_to_send = None
+            update_field = None
+
+            if days_remaining == 7 and not warning_7d_sent:
+                # 7 days remaining warning
+                warning_to_send = f"""You have 7 days left in your Premium trial! ⏰
+
+After your trial, you'll move to the free plan (2 reminders/day).
+
+Want to keep unlimited reminders? Text UPGRADE to continue Premium for {PREMIUM_MONTHLY_PRICE}/month."""
+                update_field = 'trial_warning_7d_sent'
+
+            elif days_remaining == 1 and not warning_1d_sent:
+                # 1 day remaining warning
+                warning_to_send = f"""Tomorrow is your last day of Premium trial! ⏰
+
+After that, you'll be on the free plan (2 reminders/day).
+
+Text UPGRADE now to keep unlimited reminders for {PREMIUM_MONTHLY_PRICE}/month."""
+                update_field = 'trial_warning_1d_sent'
+
+            elif days_remaining <= 0 and not warning_0d_sent:
+                # Trial expired - downgrade message
+                warning_to_send = f"""Your Premium trial has ended. You're now on the free plan (2 reminders/day).
+
+All your data is safe!
+
+Want unlimited reminders again? Text UPGRADE anytime for {PREMIUM_MONTHLY_PRICE}/month."""
+                update_field = 'trial_warning_0d_sent'
+
+            # Send warning if needed
+            if warning_to_send and update_field:
+                try:
+                    send_sms(phone_number, warning_to_send)
+
+                    # Mark warning as sent
+                    create_or_update_user(phone_number, **{update_field: True})
+
+                    warnings_sent += 1
+                    logger.info(f"Sent trial warning (day {days_remaining}) to ...{phone_number[-4:]}")
+
+                except Exception as sms_error:
+                    logger.error(f"Failed to send trial warning to ...{phone_number[-4:]}: {sms_error}")
+                    continue
+
+        logger.info(f"Trial expiration check complete: {warnings_sent} warnings sent")
+        return {"warnings_sent": warnings_sent}
+
+    except Exception as exc:
+        logger.exception("Error in check_trial_expirations")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def send_mid_trial_value_reminders(self):
+    """
+    Send value reminder on Day 7 of trial showing what users have accomplished.
+    Highlights features used and encourages continued engagement.
+
+    Runs daily via Celery Beat.
+    Only sends once per user (tracks with mid_trial_reminder_sent flag).
+    """
+    import pytz
+    from datetime import datetime
+    from database import get_db_connection, return_db_connection
+    from models.user import create_or_update_user
+    from models.list_model import get_list_count
+    from services.tier_service import get_memory_count
+
+    logger.info("Starting mid-trial value reminder check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get users on Day 7 of trial (7 days remaining) who haven't received this reminder
+        now_utc = datetime.utcnow()
+
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date > %s
+              AND trial_end_date <= %s + INTERVAL '8 days'
+              AND onboarding_complete = TRUE
+              AND (mid_trial_reminder_sent IS NULL OR mid_trial_reminder_sent = FALSE)
+        """, (now_utc, now_utc))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for mid-trial value reminder")
+            return {"reminders_sent": 0}
+
+        logger.info(f"Checking {len(users)} users for mid-trial reminder")
+
+        reminders_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date = user
+
+            # Calculate exact days remaining
+            time_remaining = trial_end_date - now_utc
+            days_remaining = time_remaining.days
+
+            # Only send on Day 7 (7 days remaining)
+            if days_remaining != 7:
+                continue
+
+            try:
+                # Get user's usage stats
+                from services.tier_service import get_reminders_created_today, get_recurring_reminder_count
+
+                # Get total reminders count
+                c.execute("SELECT COUNT(*) FROM reminders WHERE phone_number = %s", (phone_number,))
+                result = c.fetchone()
+                total_reminders = result[0] if result else 0
+
+                list_count = get_list_count(phone_number)
+                memory_count = get_memory_count(phone_number)
+                recurring_count = get_recurring_reminder_count(phone_number)
+
+                # Build personalized value message
+                greeting = f"Hi {first_name}!" if first_name else "Hi there!"
+
+                message_lines = [
+                    f"{greeting} You're halfway through your Premium trial! 🎉",
+                    ""
+                ]
+
+                # Show what they've accomplished
+                accomplishments = []
+                if total_reminders > 0:
+                    accomplishments.append(f"✓ {total_reminders} reminder{'s' if total_reminders != 1 else ''} created")
+                if list_count > 0:
+                    accomplishments.append(f"✓ {list_count} list{'s' if list_count != 1 else ''} organized")
+                if memory_count > 0:
+                    accomplishments.append(f"✓ {memory_count} memor{'ies' if memory_count != 1 else 'y'} saved")
+                if recurring_count > 0:
+                    accomplishments.append(f"✓ {recurring_count} recurring reminder{'s' if recurring_count != 1 else ''}")
+
+                if accomplishments:
+                    message_lines.append("So far you've:")
+                    message_lines.extend(accomplishments)
+                    message_lines.append("")
+
+                # Reminder about trial ending
+                message_lines.extend([
+                    "Your trial ends in 7 days. After that, you'll move to the free plan (2 reminders/day).",
+                    "",
+                    "Want to keep unlimited access? Text UPGRADE anytime!"
+                ])
+
+                message = "\n".join(message_lines)
+
+                # Send the reminder
+                send_sms(phone_number, message)
+
+                # Mark as sent
+                create_or_update_user(phone_number, mid_trial_reminder_sent=True)
+
+                reminders_sent += 1
+                logger.info(f"Sent mid-trial value reminder to ...{phone_number[-4:]}")
+
+            except Exception as reminder_error:
+                logger.error(f"Failed to send mid-trial reminder to ...{phone_number[-4:]}: {reminder_error}")
+                continue
+
+        logger.info(f"Mid-trial value reminders complete: {reminders_sent} sent")
+        return {"reminders_sent": reminders_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_mid_trial_value_reminders")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)

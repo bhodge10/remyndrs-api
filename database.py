@@ -415,6 +415,12 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_memory_delete TEXT",
             # Free trial support
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end_date TIMESTAMP",
+            # Trial expiration warning tracking
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_7d_sent BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_1d_sent BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_warning_0d_sent BOOLEAN DEFAULT FALSE",
+            # Mid-trial value reminder (Day 7 engagement message)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS mid_trial_reminder_sent BOOLEAN DEFAULT FALSE",
             # Feedback table (created via migration for existing deployments)
             """CREATE TABLE IF NOT EXISTS feedback (
                 id SERIAL PRIMARY KEY,
@@ -495,6 +501,24 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS post_onboarding_interactions INTEGER DEFAULT 0",
             # Trial info messaging (one-time after first real interaction)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_info_sent BOOLEAN DEFAULT FALSE",
+            # DELETE ACCOUNT: two-step confirmation flag
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_delete_account BOOLEAN DEFAULT FALSE",
+            # Support ticket enhancements: category, source, priority, assignment
+            "ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'support'",
+            "ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'sms'",
+            "ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'",
+            "ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS assigned_to TEXT",
+            # Cancellation feedback collection
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_cancellation_feedback BOOLEAN DEFAULT FALSE",
+            # Canned responses for CS reps
+            """CREATE TABLE IF NOT EXISTS canned_responses (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                category TEXT DEFAULT 'general',
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

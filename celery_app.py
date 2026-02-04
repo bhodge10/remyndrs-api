@@ -40,6 +40,12 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,  # Re-queue if worker dies
     worker_prefetch_multiplier=1,     # Fetch one task at a time
 
+    # Queue routing: monitoring tasks go to dedicated 'monitoring' queue
+    # All other tasks (reminders) stay on the default 'celery' queue
+    task_routes={
+        "tasks.monitoring_tasks.*": {"queue": "monitoring"},
+    },
+
     # Result settings
     result_expires=3600,  # Results expire after 1 hour
 

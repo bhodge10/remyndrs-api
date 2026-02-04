@@ -296,7 +296,7 @@ class TestPremiumFeatures:
         return_db_connection(conn)
 
         # Open support ticket
-        result = await simulator.send_message(phone, "SUPPORT: I have a question about reminders")
+        result = await simulator.send_message(phone, "SUPPORT I have a question about reminders")
 
         # In support mode, messages go to ticket
         result = await simulator.send_message(phone, "How do I create recurring reminders?")

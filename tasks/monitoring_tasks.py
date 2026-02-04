@@ -299,6 +299,46 @@ def generate_weekly_health_report(self):
 
 @celery_app.task(
     bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    acks_late=True,
+)
+def run_code_analyzer(self, use_ai: bool = True):
+    """
+    Run Agent 4: Code Analyzer.
+
+    Analyzes open issues to identify root causes and generate Claude Code prompts.
+    Run periodically (every 8 hours) to ensure analyses are available in dashboard.
+
+    Args:
+        use_ai: Whether to use AI for deeper analysis (default: True)
+    """
+    try:
+        logger.info(f"Running code analyzer: use_ai={use_ai}")
+
+        from agents.code_analyzer import run_code_analysis
+
+        results = run_code_analysis(use_ai=use_ai, dry_run=False)
+
+        logger.info(f"Code analyzer complete: {results['analyses_generated']} analyses generated for {results['issues_analyzed']} issues")
+
+        if results.get('errors'):
+            for err in results['errors']:
+                logger.warning(f"Analysis error for issue #{err['issue_id']}: {err['error']}")
+
+        return {
+            'issues_analyzed': results['issues_analyzed'],
+            'analyses_generated': results['analyses_generated'],
+            'errors': len(results.get('errors', []))
+        }
+
+    except Exception as exc:
+        logger.exception("Error in code analyzer")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    bind=True,
     max_retries=1,
     acks_late=True,
 )
