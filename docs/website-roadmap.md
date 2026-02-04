@@ -73,6 +73,18 @@ Clarify: monthly billing (not upfront), when promo price ends, remove fake scarc
 
 ---
 
+## CS System Overhaul (COMPLETED - Feb 2026)
+
+Backend changes affecting the website contact form and support flow:
+
+- **Contact form submissions no longer go to a black hole.** `/api/contact` now creates support tickets (with category/source tracking) and sends email notifications to the CS team. Previously, submissions went into the feedback table with no notifications.
+- **All submission types unified.** SMS FEEDBACK, BUG, SUPPORT, and web form submissions all flow through the same support ticket system with category filtering in the CS portal (`/cs`).
+- **CS Portal enhancements:** Ticket assignment, canned responses, SLA tracking, customer data export, refund capability, category/source filtering.
+- **SUPPORT command opened to all users** (was premium-only). QUESTION command now includes "text SUPPORT for human help" escape hatch.
+- **New user-facing features:** EXPORT command (emails data as JSON), cancellation feedback collection, pre-deletion export suggestion.
+
+---
+
 ## Quick Wins
 
 1. Make phone number clickable: `<a href="sms:+18555521950&body=START">`

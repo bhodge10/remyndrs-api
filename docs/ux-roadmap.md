@@ -33,14 +33,16 @@
 - CRITICAL: Link-only upgrade (no fallback if link fails)
 - MODERATE: No value reminder before purchase
 
-### 3. Downgrade/Cancellation Flow (Grade: B-)
+### 3. Downgrade/Cancellation Flow (Grade: B)
 **Strengths:**
 - Data preservation (reminders/memories kept)
 - Self-service Stripe Customer Portal
 - Clear SMS confirmation
+- Cancellation feedback collection (numbered options 1-4 + SKIP) *(added Feb 2026)*
+- EXPORT command lets users download data before leaving *(added Feb 2026)*
 
 **Issues:**
-- CRITICAL: No exit interview or cancellation feedback
+- ~~CRITICAL: No exit interview or cancellation feedback~~ DONE (Feb 2026)
 - MODERATE: Unclear downgrade impact on existing data
 - MODERATE: No win-back attempt after cancellation
 
@@ -53,7 +55,7 @@
 
 ## Prioritized Action Plan
 
-**Status (Feb 2026):** No SMS UX phases started yet. Website roadmap phases 1-2 are mostly complete (see `docs/website-roadmap.md`).
+**Status (Feb 2026):** Phases 1-2 not started. Phase 3 partially complete (cancellation feedback done via CS overhaul). Phase 4 partially complete (export before delete done). Website roadmap phases 1-2 are mostly complete (see `docs/website-roadmap.md`).
 
 ### PHASE 1: Critical Fixes (NOT STARTED)
 **Impact: High | Effort: Low | Expected: +15% trial conversion**
@@ -134,21 +136,9 @@ Text UPGRADE to keep unlimited access!"
 ### PHASE 3: Feedback & Retention
 **Impact: Medium | Effort: Low-Medium | Expected: Better product insights**
 
-#### 6. Cancellation Feedback Loop
-**Files:** `services/stripe_service.py` (webhook handler), add database column `cancellation_reason`
-
-```python
-# After Stripe cancellation webhook:
-"Sorry to see you go!
-
-Quick question: Why did you cancel?
-1. Too expensive
-2. Not using it enough
-3. Missing a feature
-4. Other reason
-
-(Reply with number or SKIP)"
-```
+#### 6. Cancellation Feedback Loop (COMPLETED - Feb 2026)
+**Status:** Implemented as part of CS system overhaul. After Stripe cancellation webhook, users receive numbered options (1-4 + SKIP). Responses stored with `[CANCELLATION]` prefix in support tickets. Uses `pending_cancellation_feedback` flag on users table.
+**Files modified:** `services/stripe_service.py`, `main.py`, `database.py`, `models/user.py`
 
 #### 7. Win-Back Campaign
 **Files:** `tasks/reminder_tasks.py` (30-day task)
@@ -177,8 +167,8 @@ Want to come back? Text UPGRADE for 20% off your first month!"
 - Add progress confirmation for multi-step workflows
 - Clearer action feedback
 
-#### 10. Export Before Delete
-- Offer to email data export before deletion
+#### 10. Export Before Delete (PARTIALLY COMPLETED - Feb 2026)
+- ~~Offer to email data export before deletion~~ DONE: EXPORT SMS command emails JSON data; DELETE ACCOUNT now suggests "Text EXPORT first"
 - 24-hour soft delete with UNDO option
 - Clear communication about what gets deleted
 
@@ -206,4 +196,6 @@ Want to come back? Text UPGRADE for 20% off your first month!"
 | **Premium Upgrade** | `main.py` (1774-1811), `services/stripe_service.py` | Value reminders, fallback options |
 | **Usage Limits** | `services/tier_service.py` (225-331) | Proactive counters (X of Y) |
 | **Account Status** | NEW: Create `routes/handlers/account.py` | INFO/STATUS command with stats |
-| **Cancellation** | `services/stripe_service.py` (204-228) | Feedback collection, win-back |
+| **Cancellation** | `services/stripe_service.py` (204-228) | ~~Feedback collection~~, win-back |
+| **CS Portal** | `cs_portal.py` | Ticket management, assignment, SLA tracking |
+| **Data Export** | `services/export_service.py`, `main.py` | EXPORT command, CS portal export |
