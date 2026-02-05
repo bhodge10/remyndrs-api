@@ -3492,7 +3492,14 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 pending_reminder_date=reminder_date
             )
 
-            reply_text = ai_response.get("response", "What time would you like the reminder?")
+            # Generate date string server-side to ensure accurate day-of-week
+            # (AI sometimes miscalculates day names for dates)
+            try:
+                date_obj = datetime.strptime(reminder_date, '%Y-%m-%d')
+                date_str = date_obj.strftime('%A, %B %d')
+                reply_text = f"I'll remind you on {date_str} to {reminder_text}. What time would you like the reminder?"
+            except:
+                reply_text = ai_response.get("response", "What time would you like the reminder?")
             log_interaction(phone_number, incoming_msg, reply_text, "clarify_date_time", True)
 
         elif ai_response["action"] == "clarify_specific_time":
