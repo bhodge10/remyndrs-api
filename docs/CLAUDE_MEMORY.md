@@ -1,5 +1,7 @@
 # Remyndrs Project Memory
 
+> **Sync note:** This file is mirrored at `docs/CLAUDE_MEMORY.md` in the repo for cross-machine access. Update both when making changes.
+
 ## Environment
 - Python path: `/c/Users/BradHodge/AppData/Local/Programs/Python/Python311/python.exe`
 - `python` and `python3` don't work in bash; use full path above
