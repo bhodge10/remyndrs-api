@@ -3544,9 +3544,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                         date_str = "that day"
                     reply_text = f"I'll remind you on {date_str} to {reminder_text}. What time would you like the reminder?"
                     log_interaction(phone_number, incoming_msg, reply_text, "clarify_date_time", True)
-                    resp = MessagingResponse()
-                    resp.message(staging_prefix(reply_text))
-                    return Response(content=str(resp), media_type="application/xml")
+                    return reply_text
 
             # Check for sensitive data (staging only)
             if ENVIRONMENT == "staging":
