@@ -3513,6 +3513,34 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             reminder_text = ai_response.get("reminder_text")
             confidence = ai_response.get("confidence", 100)  # Default to 100 if not provided
 
+            # Detect midnight default - if AI returned 00:00:00 but user didn't specify a time,
+            # redirect to clarify_date_time flow instead of creating a midnight reminder
+            if reminder_date and reminder_date.endswith(' 00:00:00'):
+                # Check if user actually specified midnight explicitly
+                msg_lower = incoming_msg.lower()
+                has_explicit_time = bool(re.search(r'\b(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)\b', msg_lower, re.IGNORECASE))
+                has_midnight = bool(re.search(r'\b(midnight|12\s*(am|a\.m\.))\b', msg_lower, re.IGNORECASE))
+
+                if not has_explicit_time and not has_midnight:
+                    # No time specified - ask for clarification instead of defaulting to midnight
+                    # Extract date portion for the clarify flow
+                    reminder_date_only = reminder_date.split(' ')[0]  # YYYY-MM-DD
+                    create_or_update_user(
+                        phone_number,
+                        pending_reminder_text=reminder_text,
+                        pending_reminder_date=reminder_date_only
+                    )
+                    try:
+                        date_obj = datetime.strptime(reminder_date_only, '%Y-%m-%d')
+                        date_str = date_obj.strftime('%A, %B %d')
+                    except:
+                        date_str = "that day"
+                    reply_text = f"I'll remind you on {date_str} to {reminder_text}. What time would you like the reminder?"
+                    log_interaction(phone_number, incoming_msg, reply_text, "clarify_date_time", True)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(reply_text))
+                    return Response(content=str(resp), media_type="application/xml")
+
             # Check for sensitive data (staging only)
             if ENVIRONMENT == "staging":
                 sensitive_check = detect_sensitive_data(reminder_text)
