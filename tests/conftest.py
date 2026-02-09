@@ -127,7 +127,7 @@ class AIResponseMock:
             },
             r"add.*to.*list|put.*on.*list": {
                 "action": "add_to_list",
-                "items": ["test item"],
+                "item_text": "test item",
                 "list_name": None
             },
             # Delete patterns
@@ -162,6 +162,13 @@ class AIResponseMock:
         # Check custom responses first (exact match)
         if message_lower in self.responses:
             return self.responses[message_lower]
+
+        # Also try de-normalized form: main.py normalizes "3pm" → "3:PM" before
+        # calling AI, so we reverse that to match the original registered key.
+        # Remove the colon that main.py inserts: "3:pm" → "3pm", "10:am" → "10am"
+        denormalized = re.sub(r'(\d+):(\s*)(am|pm)', r'\1\3', message_lower)
+        if denormalized != message_lower and denormalized in self.responses:
+            return self.responses[denormalized]
 
         # Check pattern-based defaults
         for pattern, response in self.default_responses.items():
@@ -352,6 +359,12 @@ def disable_openai_globally():
 def simulator(sms_capture, ai_mock):
     """Fixture providing conversation simulator."""
     return ConversationSimulator(sms_capture, ai_mock)
+
+
+@pytest.fixture
+def real_ai_simulator(sms_capture):
+    """Simulator using real OpenAI — no ai_mock patching."""
+    return ConversationSimulator(sms_capture, ai_mock=None)
 
 
 @pytest.fixture
