@@ -28,7 +28,7 @@ def handle_create_list(
     ai_response: dict[str, Any]
 ) -> str:
     """Handle create_list action."""
-    from services.tier_service import can_create_list
+    from services.tier_service import can_create_list, format_list_limit_message, add_list_counter_to_message
 
     list_name = ai_response.get("list_name")
 
@@ -42,7 +42,8 @@ def handle_create_list(
         # Check tier limit
         allowed, limit_msg = can_create_list(phone_number)
         if not allowed:
-            reply_text = limit_msg
+            # Use Level 4 formatter for clear WHY-WHAT-HOW message
+            reply_text = format_list_limit_message(phone_number)
         else:
             existing_list = get_list_by_name(phone_number, list_name)
             if existing_list:
@@ -60,7 +61,9 @@ def handle_create_list(
                     reply_text = f"You already have a {actual_name} with {item_count} items. Would you like to add items to it, or create a new one?"
             else:
                 create_list(phone_number, list_name)
-                reply_text = ai_response.get("confirmation", f"Created your {list_name}!")
+                base_reply = ai_response.get("confirmation", f"Created your {list_name}!")
+                # Add progressive counter for free tier users
+                reply_text = add_list_counter_to_message(phone_number, base_reply)
 
     log_interaction(phone_number, incoming_msg, reply_text, "create_list", True)
     return reply_text
@@ -75,7 +78,11 @@ def handle_add_to_list(
     mark_daily_summary_prompted: callable
 ) -> str:
     """Handle add_to_list action."""
-    from services.tier_service import can_create_list, can_add_list_item, get_tier_limits, get_user_tier
+    from services.tier_service import (
+        can_create_list, can_add_list_item, get_tier_limits, get_user_tier,
+        format_list_limit_message, format_list_item_limit_message,
+        add_list_item_counter_to_message, add_list_counter_to_message
+    )
 
     list_name = ai_response.get("list_name")
     item_text = ai_response.get("item_text")
@@ -113,7 +120,8 @@ def handle_add_to_list(
     if not list_info:
         allowed, limit_msg = can_create_list(phone_number)
         if not allowed:
-            reply_text = limit_msg
+            # Use Level 4 formatter
+            reply_text = format_list_limit_message(phone_number)
         else:
             list_id = create_list(phone_number, list_name)
             tier_limits = get_tier_limits(get_user_tier(phone_number))
@@ -127,17 +135,32 @@ def handle_add_to_list(
 
             create_or_update_user(phone_number, last_active_list=list_name)
 
-            if len(added_items) == 1:
-                reply_text = f"Created your {list_name} and added {added_items[0]}!"
+            # Handle partial or full adds with progressive education
+            if len(added_items) < len(items_to_add):
+                # Some items skipped - use Level 4 formatter
+                reply_text = format_list_item_limit_message(
+                    phone_number, list_name, items_to_add, len(added_items)
+                )
             else:
-                reply_text = f"Created your {list_name} and added {len(added_items)} items: {', '.join(added_items)}"
+                # All items added successfully
+                if len(added_items) == 1:
+                    base_reply = f"Created your {list_name} and added {added_items[0]}!"
+                else:
+                    base_reply = f"Created your {list_name} and added {len(added_items)} items: {', '.join(added_items)}"
+
+                # Add list counter (for list creation) and item counter
+                reply_text = add_list_counter_to_message(phone_number, base_reply)
+                reply_text = add_list_item_counter_to_message(phone_number, list_id, reply_text)
     else:
         list_id = list_info[0]
         list_name = list_info[1]
 
         allowed, limit_msg = can_add_list_item(phone_number, list_id)
         if not allowed:
-            reply_text = limit_msg
+            # List is already full - use Level 4 formatter
+            reply_text = format_list_item_limit_message(
+                phone_number, list_name, items_to_add, 0
+            )
         else:
             tier_limits = get_tier_limits(get_user_tier(phone_number))
             max_items = tier_limits['max_items_per_list']
@@ -152,12 +175,21 @@ def handle_add_to_list(
 
             create_or_update_user(phone_number, last_active_list=list_name)
 
-            if len(added_items) == 1:
-                reply_text = ai_response.get("confirmation", f"Added {added_items[0]} to your {list_name}")
-            elif len(added_items) < len(items_to_add):
-                reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}. ({len(items_to_add) - len(added_items)} items skipped - list full)"
+            # Handle partial or full adds with progressive education
+            if len(added_items) < len(items_to_add):
+                # Some items skipped - use Level 4 formatter
+                reply_text = format_list_item_limit_message(
+                    phone_number, list_name, items_to_add, len(added_items)
+                )
             else:
-                reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                # All items added successfully
+                if len(added_items) == 1:
+                    base_reply = ai_response.get("confirmation", f"Added {added_items[0]} to your {list_name}")
+                else:
+                    base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+
+                # Add progressive counter
+                reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
             if should_prompt_daily_summary(phone_number):
                 reply_text = get_daily_summary_prompt_message(reply_text)
@@ -176,7 +208,10 @@ def handle_add_item_ask_list(
     mark_daily_summary_prompted: callable
 ) -> str:
     """Handle add_item_ask_list action - when list name is ambiguous."""
-    from services.tier_service import can_add_list_item, get_tier_limits, get_user_tier
+    from services.tier_service import (
+        can_add_list_item, get_tier_limits, get_user_tier,
+        format_list_item_limit_message, add_list_item_counter_to_message
+    )
 
     item_text = ai_response.get("item_text")
     lists = get_lists(phone_number)
@@ -190,7 +225,10 @@ def handle_add_item_ask_list(
 
         allowed, limit_msg = can_add_list_item(phone_number, list_id)
         if not allowed:
-            reply_text = limit_msg
+            # List is full - use Level 4 formatter
+            reply_text = format_list_item_limit_message(
+                phone_number, list_name, items_to_add, 0
+            )
         else:
             tier_limits = get_tier_limits(get_user_tier(phone_number))
             max_items = tier_limits['max_items_per_list']
@@ -205,12 +243,21 @@ def handle_add_item_ask_list(
 
             create_or_update_user(phone_number, last_active_list=list_name)
 
-            if len(added_items) == 1:
-                reply_text = f"Added {added_items[0]} to your {list_name}"
-            elif len(added_items) < len(items_to_add):
-                reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}. ({len(items_to_add) - len(added_items)} items skipped - list full)"
+            # Handle partial or full adds with progressive education
+            if len(added_items) < len(items_to_add):
+                # Some items skipped - use Level 4 formatter
+                reply_text = format_list_item_limit_message(
+                    phone_number, list_name, items_to_add, len(added_items)
+                )
             else:
-                reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                # All items added successfully
+                if len(added_items) == 1:
+                    base_reply = f"Added {added_items[0]} to your {list_name}"
+                else:
+                    base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+
+                # Add progressive counter
+                reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
             if should_prompt_daily_summary(phone_number):
                 reply_text = get_daily_summary_prompt_message(reply_text)

@@ -295,6 +295,13 @@ def handle_pending_list_item(
     Returns:
         Tuple of (handled, response_message)
     """
+    from services.tier_service import (
+        format_list_item_limit_message,
+        add_list_item_counter_to_message,
+        get_tier_limits,
+        get_user_tier
+    )
+
     if not incoming_msg.strip().isdigit():
         return (False, None)
 
@@ -309,13 +316,19 @@ def handle_pending_list_item(
         # Parse multiple items
         items_to_add = parse_list_items(pending_item, phone_number)
 
-        # Check item limit
+        # Check item limit using tier-aware limits
+        tier_limits = get_tier_limits(get_user_tier(phone_number))
+        max_items = tier_limits['max_items_per_list']
         item_count = get_item_count(list_id)
-        available_slots = MAX_ITEMS_PER_LIST - item_count
+        available_slots = max_items - item_count
 
         if available_slots <= 0:
             create_or_update_user(phone_number, pending_list_item=None)
-            return (True, f"Your {list_name} is full ({MAX_ITEMS_PER_LIST} items max). Remove some items first.")
+            # Use Level 4 formatter for clear WHY-WHAT-HOW message
+            reply_msg = format_list_item_limit_message(
+                phone_number, list_name, items_to_add, 0
+            )
+            return (True, reply_msg)
 
         # Add items
         added_items = []
@@ -326,12 +339,21 @@ def handle_pending_list_item(
 
         create_or_update_user(phone_number, pending_list_item=None, last_active_list=list_name)
 
-        if len(added_items) == 1:
-            reply_msg = f"Added {added_items[0]} to your {list_name}"
-        elif len(added_items) < len(items_to_add):
-            reply_msg = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}. ({len(items_to_add) - len(added_items)} items skipped - list full)"
+        # Handle partial or full adds with progressive education
+        if len(added_items) < len(items_to_add):
+            # Some items skipped - use Level 4 formatter
+            reply_msg = format_list_item_limit_message(
+                phone_number, list_name, items_to_add, len(added_items)
+            )
         else:
-            reply_msg = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+            # All items added successfully
+            if len(added_items) == 1:
+                base_reply = f"Added {added_items[0]} to your {list_name}"
+            else:
+                base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+
+            # Add progressive counter
+            reply_msg = add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
         log_interaction(phone_number, incoming_msg, f"Added {len(added_items)} items to {list_name}", "add_to_list", True)
         return (True, reply_msg)

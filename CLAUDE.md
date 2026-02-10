@@ -140,6 +140,28 @@ Uses `SELECT FOR UPDATE SKIP LOCKED` for distributed reminder claiming. Stale ta
 - **Premium:** Unlimited reminders, 20 lists, 30 items/list, recurring reminders
 - **Family:** Premium features for 4-10 members
 
+### Progressive Education for Tier Limits (Feb 2026)
+The Education Pyramid helps free tier users understand limits without frustration:
+
+**Level 1 (0-70%):** Silent - no counters, zero friction
+**Level 2 (70-90%):** Gentle nudge - shows "(7 of 10 items)" for free tier only
+**Level 3 (90-100%):** Clear warning - adds "Almost full!" or "Last one!"
+**Level 4 (Over limit):** Blocked with WHY-WHAT-HOW structure
+
+**Implementation:**
+- **Progressive counters:** `add_list_item_counter_to_message()`, `add_memory_counter_to_message()`, `add_list_counter_to_message()` in `services/tier_service.py`
+- **Level 4 formatters:** `format_list_item_limit_message()`, `format_memory_limit_message()`, `format_list_limit_message()` in `services/tier_service.py`
+- **Handlers updated:** `routes/handlers/lists.py` (3 functions), `routes/handlers/pending_states.py` (1 function), `main.py` (4 locations)
+- **Enhanced STATUS:** Free users see tier comparison showing Premium benefits
+
+**Key rules:**
+- Only FREE tier users see counters (premium/trial never see them)
+- Percentage-based thresholds (70%, 90%)
+- All limit messages follow WHY (tier limit) + WHAT (attempted action) + HOW (remove items OR upgrade)
+- Trial hint for expired trial users: "Still on trial? Text STATUS"
+
+**Testing:** `tests/test_tier_service_progressive.py` (13 unit tests), full integration suite passes. See `PROGRESSIVE_EDUCATION_IMPLEMENTATION.md` for complete details.
+
 ### Low-Confidence Reminder Confirmation
 When AI confidence is below threshold, reminders enter pending confirmation stored in `pending_reminder_confirmation` on the user record.
 - **Pending storage:** `routes/handlers/reminders.py` stores pending JSON
@@ -192,7 +214,10 @@ Dashboard at `/admin/monitoring`. Four agents run on Celery schedules:
 
 **DB tables:** `monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
 
-## Recent Bug Fixes
+## Recent Improvements & Bug Fixes
+
+### Progressive Education for Tier Limits (Feb 2026)
+Complete overhaul of tier limit messaging to improve free-to-premium conversion. Replaced confusing messages like "Added 0 items... (7 items skipped - list full)" with clear WHY-WHAT-HOW explanations. Implemented Education Pyramid (Levels 1-4) with progressive counters, warnings, and educational blocking. Enhanced STATUS command to show tier comparison. All functionality tested with 13 new unit tests. See `PROGRESSIVE_EDUCATION_IMPLEMENTATION.md` for details.
 
 ### Context Loss Fix (Feb 2026)
 List selection by number (e.g., "1") was intercepted by daily summary handler asking "1 AM or 1 PM?". Fixed by adding `pending_list_item` to `has_pending_state` check in `main.py:576`. New monitoring detectors (`context_loss`, `flow_violation`) prevent similar issues.

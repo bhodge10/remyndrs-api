@@ -1577,13 +1577,23 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     # Parse multiple items from the pending item
                     items_to_add = parse_list_items(pending_item, phone_number)
 
-                    # Check item limit
+                    # Check item limit using tier-aware limits
+                    from services.tier_service import (
+                        get_tier_limits, get_user_tier,
+                        format_list_item_limit_message, add_list_item_counter_to_message
+                    )
+                    tier_limits = get_tier_limits(get_user_tier(phone_number))
+                    max_items = tier_limits['max_items_per_list']
                     item_count = get_item_count(list_id)
-                    available_slots = MAX_ITEMS_PER_LIST - item_count
+                    available_slots = max_items - item_count
 
                     if available_slots <= 0:
                         resp = MessagingResponse()
-                        resp.message(f"Your {list_name} is full ({MAX_ITEMS_PER_LIST} items max). Remove some items first.")
+                        # Use Level 4 formatter for clear WHY-WHAT-HOW message
+                        reply_msg = format_list_item_limit_message(
+                            phone_number, list_name, items_to_add, 0
+                        )
+                        resp.message(reply_msg)
                         create_or_update_user(phone_number, pending_list_item=None)
                         return Response(content=str(resp), media_type="application/xml")
 
@@ -1598,12 +1608,23 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     create_or_update_user(phone_number, pending_list_item=None, last_active_list=list_name)
 
                     resp = MessagingResponse()
-                    if len(added_items) == 1:
-                        resp.message(f"Added {added_items[0]} to your {list_name}")
-                    elif len(added_items) < len(items_to_add):
-                        resp.message(f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}. ({len(items_to_add) - len(added_items)} items skipped - list full)")
+                    # Handle partial or full adds with progressive education
+                    if len(added_items) < len(items_to_add):
+                        # Some items skipped - use Level 4 formatter
+                        reply_msg = format_list_item_limit_message(
+                            phone_number, list_name, items_to_add, len(added_items)
+                        )
                     else:
-                        resp.message(f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}")
+                        # All items added successfully
+                        if len(added_items) == 1:
+                            base_reply = f"Added {added_items[0]} to your {list_name}"
+                        else:
+                            base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+
+                        # Add progressive counter
+                        reply_msg = add_list_item_counter_to_message(phone_number, list_id, base_reply)
+
+                    resp.message(reply_msg)
                     log_interaction(phone_number, incoming_msg, f"Added {len(added_items)} items to {list_name}", "add_to_list", True)
                     return Response(content=str(resp), media_type="application/xml")
                 else:
@@ -2252,6 +2273,20 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 status_lines.append(f"• {memories_count} memories saved")
             else:
                 status_lines.append(f"• {memories_count} of {memories_limit} memories")
+
+            # Tier comparison for free users (not on trial)
+            if tier == 'free' and not trial_info['is_trial']:
+                from config import get_tier_limits
+                premium_limits = get_tier_limits('premium')
+                free_limits = get_tier_limits('free')
+
+                status_lines.append(f"\n✨ Premium Benefits:")
+                status_lines.append(f"• Unlimited reminders (you: {free_limits['reminders_per_day']}/day)")
+                status_lines.append(f"• {premium_limits['max_lists']} lists (you: {free_limits['max_lists']})")
+                status_lines.append(f"• {premium_limits['max_items_per_list']} items per list (you: {free_limits['max_items_per_list']})")
+                status_lines.append(f"• Unlimited memories (you: {free_limits['max_memories']})")
+                status_lines.append(f"• Recurring reminders")
+                status_lines.append(f"\nOnly $6.99/month - Text UPGRADE")
 
             # Quick actions
             status_lines.append(f"\nQuick Actions:")
@@ -3377,10 +3412,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     return reply_text
 
             # Check tier limit for memories
-            from services.tier_service import can_save_memory
+            from services.tier_service import can_save_memory, format_memory_limit_message, add_memory_counter_to_message
             allowed, limit_msg = can_save_memory(phone_number)
             if not allowed:
-                reply_text = limit_msg
+                # Use Level 4 formatter for clear WHY-HOW message
+                reply_text = format_memory_limit_message(phone_number)
                 log_interaction(phone_number, incoming_msg, reply_text, "memory_limit_reached", False)
                 return reply_text
 
@@ -3388,9 +3424,12 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             # Echo back exactly what was saved for user trust
             saved_text = ai_response.get("memory_text", "")
             if saved_text:
-                reply_text = f'Got it! Saved: "{saved_text}"'
+                base_reply = f'Got it! Saved: "{saved_text}"'
             else:
-                reply_text = ai_response.get("confirmation", "Got it! I'll remember that.")
+                base_reply = ai_response.get("confirmation", "Got it! I'll remember that.")
+
+            # Add progressive counter for free tier users
+            reply_text = add_memory_counter_to_message(phone_number, base_reply)
 
             # Check if this is user's first action and prompt for daily summary
             if should_prompt_daily_summary(phone_number):
@@ -4020,10 +4059,15 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
                 # Auto-create list if it doesn't exist
                 if not list_info:
-                    from services.tier_service import can_create_list, can_add_list_item, get_tier_limits, get_user_tier
+                    from services.tier_service import (
+                        can_create_list, get_tier_limits, get_user_tier,
+                        format_list_limit_message, format_list_item_limit_message,
+                        add_list_counter_to_message, add_list_item_counter_to_message
+                    )
                     allowed, limit_msg = can_create_list(phone_number)
                     if not allowed:
-                        reply_text = limit_msg
+                        # Use Level 4 formatter
+                        reply_text = format_list_limit_message(phone_number)
                     else:
                         list_id = create_list(phone_number, list_name)
                         # Add all parsed items (check tier item limit)
@@ -4036,18 +4080,37 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                                 added_items.append(item)
                         # Track last active list
                         create_or_update_user(phone_number, last_active_list=list_name)
-                        if len(added_items) == 1:
-                            reply_text = f"Created your {list_name} and added {added_items[0]}!"
+
+                        # Handle partial or full adds with progressive education
+                        if len(added_items) < len(items_to_add):
+                            # Some items skipped - use Level 4 formatter
+                            reply_text = format_list_item_limit_message(
+                                phone_number, list_name, items_to_add, len(added_items)
+                            )
                         else:
-                            reply_text = f"Created your {list_name} and added {len(added_items)} items: {', '.join(added_items)}"
+                            # All items added successfully
+                            if len(added_items) == 1:
+                                base_reply = f"Created your {list_name} and added {added_items[0]}!"
+                            else:
+                                base_reply = f"Created your {list_name} and added {len(added_items)} items: {', '.join(added_items)}"
+
+                            # Add list counter (for list creation) and item counter
+                            reply_text = add_list_counter_to_message(phone_number, base_reply)
+                            reply_text = add_list_item_counter_to_message(phone_number, list_id, reply_text)
                 else:
                     list_id = list_info[0]
                     list_name = list_info[1]  # Use actual list name from DB
                     # Check tier limit for items per list
-                    from services.tier_service import can_add_list_item, get_tier_limits, get_user_tier
+                    from services.tier_service import (
+                        can_add_list_item, get_tier_limits, get_user_tier,
+                        format_list_item_limit_message, add_list_item_counter_to_message
+                    )
                     allowed, limit_msg = can_add_list_item(phone_number, list_id)
                     if not allowed:
-                        reply_text = limit_msg
+                        # List is full - use Level 4 formatter
+                        reply_text = format_list_item_limit_message(
+                            phone_number, list_name, items_to_add, 0
+                        )
                     else:
                         tier_limits = get_tier_limits(get_user_tier(phone_number))
                         max_items = tier_limits['max_items_per_list']
@@ -4064,12 +4127,21 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                         # Track last active list
                         create_or_update_user(phone_number, last_active_list=list_name)
 
-                        if len(added_items) == 1:
-                            reply_text = ai_response.get("confirmation", f"Added {added_items[0]} to your {list_name}")
-                        elif len(added_items) < len(items_to_add):
-                            reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}. ({len(items_to_add) - len(added_items)} items skipped - list full)"
+                        # Handle partial or full adds with progressive education
+                        if len(added_items) < len(items_to_add):
+                            # Some items skipped - use Level 4 formatter
+                            reply_text = format_list_item_limit_message(
+                                phone_number, list_name, items_to_add, len(added_items)
+                            )
                         else:
-                            reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                            # All items added successfully
+                            if len(added_items) == 1:
+                                base_reply = ai_response.get("confirmation", f"Added {added_items[0]} to your {list_name}")
+                            else:
+                                base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+
+                            # Add progressive counter
+                            reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
                         # Check if this is user's first action and prompt for daily summary
                         if should_prompt_daily_summary(phone_number):
@@ -4090,10 +4162,16 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 items_to_add = parse_list_items(item_text, phone_number)
 
                 # Check tier limit for items per list
-                from services.tier_service import can_add_list_item, get_tier_limits, get_user_tier
+                from services.tier_service import (
+                    can_add_list_item, get_tier_limits, get_user_tier,
+                    format_list_item_limit_message, add_list_item_counter_to_message
+                )
                 allowed, limit_msg = can_add_list_item(phone_number, list_id)
                 if not allowed:
-                    reply_text = limit_msg
+                    # List is full - use Level 4 formatter
+                    reply_text = format_list_item_limit_message(
+                        phone_number, list_name, items_to_add, 0
+                    )
                 else:
                     tier_limits = get_tier_limits(get_user_tier(phone_number))
                     max_items = tier_limits['max_items_per_list']
@@ -4110,12 +4188,21 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     # Track last active list
                     create_or_update_user(phone_number, last_active_list=list_name)
 
-                    if len(added_items) == 1:
-                        reply_text = f"Added {added_items[0]} to your {list_name}"
-                    elif len(added_items) < len(items_to_add):
-                        reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}. ({len(items_to_add) - len(added_items)} items skipped - list full)"
+                    # Handle partial or full adds with progressive education
+                    if len(added_items) < len(items_to_add):
+                        # Some items skipped - use Level 4 formatter
+                        reply_text = format_list_item_limit_message(
+                            phone_number, list_name, items_to_add, len(added_items)
+                        )
                     else:
-                        reply_text = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                        # All items added successfully
+                        if len(added_items) == 1:
+                            base_reply = f"Added {added_items[0]} to your {list_name}"
+                        else:
+                            base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+
+                        # Add progressive counter
+                        reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
                     # Check if this is user's first action and prompt for daily summary
                     if should_prompt_daily_summary(phone_number):
