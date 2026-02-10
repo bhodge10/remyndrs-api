@@ -11,12 +11,13 @@ from database import get_db_connection, return_db_connection
 
 
 # Actions that trigger trial info message
-# These match the actual action types returned by the AI
+# These must match the actual action types returned by the AI in ai_service.py
 TRIAL_TRIGGER_ACTIONS = {
     # Save actions
-    'store', 'reminder', 'list_add', 'list_create',
+    'store', 'reminder', 'reminder_relative', 'reminder_recurring',
+    'create_list', 'add_to_list',
     # Retrieval actions
-    'retrieve', 'list_reminders', 'list_show', 'show_lists',
+    'retrieve', 'list_reminders', 'show_list', 'show_all_lists',
 }
 
 # Pricing question patterns
@@ -236,9 +237,9 @@ def append_trial_info_to_response(response: str, action_type: str, phone_number:
     # Determine message type based on action
     action_lower = action_type.lower().replace('-', '_')
 
-    save_actions = {'save_memory', 'save_reminder', 'create_list', 'add_to_list',
-                    'list_add', 'list_create', 'reminder_confirmed'}
-    retrieval_actions = {'show_memories', 'show_lists', 'show_reminders', 'show_all', 'retrieve'}
+    save_actions = {'store', 'reminder', 'reminder_relative', 'reminder_recurring',
+                    'create_list', 'add_to_list'}
+    retrieval_actions = {'retrieve', 'list_reminders', 'show_list', 'show_all_lists'}
 
     if action_lower in save_actions:
         trial_info = get_trial_info_for_save_action()
