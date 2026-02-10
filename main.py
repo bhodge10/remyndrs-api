@@ -4856,7 +4856,7 @@ async def stripe_webhook(request: Request):
 
     if not STRIPE_ENABLED:
         logger.warning("Stripe webhook received but Stripe is not configured")
-        return {"error": "Stripe not configured"}, 400
+        return JSONResponse(content={"error": "Stripe not configured"}, status_code=400)
 
     try:
         payload = await request.body()
@@ -4868,29 +4868,35 @@ async def stripe_webhook(request: Request):
             return {"status": "success"}
         else:
             logger.error(f"Webhook error: {result.get('error')}")
-            return {"error": result.get('error')}, 400
+            return JSONResponse(content={"error": result.get('error')}, status_code=400)
 
     except Exception as e:
         logger.error(f"Stripe webhook error: {e}")
-        return {"error": str(e)}, 500
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 @app.get("/payment/success")
 async def payment_success(session_id: str = None):
     """Handle successful payment redirect"""
-    return {
-        "status": "success",
-        "message": "Thank you for subscribing! You can close this page and continue using Remyndrs via SMS."
-    }
+    return HTMLResponse(content="""<html><head><title>Remyndrs - Payment Successful</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f0fdf4}
+.card{background:#fff;padding:2rem;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);text-align:center;max-width:400px}
+h1{color:#16a34a;margin-bottom:.5rem}p{color:#4b5563;line-height:1.5}</style></head>
+<body><div class="card"><h1>Payment Successful!</h1>
+<p>Thank you for subscribing to Remyndrs Premium! You can close this page and continue using Remyndrs via SMS.</p>
+</div></body></html>""")
 
 
 @app.get("/payment/cancelled")
 async def payment_cancelled():
     """Handle cancelled payment redirect"""
-    return {
-        "status": "cancelled",
-        "message": "Payment was cancelled. Text UPGRADE anytime to try again."
-    }
+    return HTMLResponse(content="""<html><head><title>Remyndrs - Payment Cancelled</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#fef2f2}
+.card{background:#fff;padding:2rem;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);text-align:center;max-width:400px}
+h1{color:#dc2626;margin-bottom:.5rem}p{color:#4b5563;line-height:1.5}</style></head>
+<body><div class="card"><h1>Payment Cancelled</h1>
+<p>No worries! Your payment was cancelled and you were not charged. Text UPGRADE anytime to try again.</p>
+</div></body></html>""")
 
 
 # =====================================================
