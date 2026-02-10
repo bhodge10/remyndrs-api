@@ -51,7 +51,7 @@ from services.trial_messaging_service import (
     get_acknowledgment_response, append_trial_info_to_response
 )
 # NOTE: Reminder checking is now handled by Celery Beat (see tasks/reminder_tasks.py)
-from services.metrics_service import track_user_activity, increment_message_count
+from services.metrics_service import track_user_activity, increment_message_count, set_referral_source
 from utils.timezone import get_user_current_time
 from utils.formatting import get_help_text, format_reminders_list, format_reminder_confirmation
 from utils.validation import mask_phone_number, validate_list_name, validate_item_text, validate_message, log_security_event, detect_sensitive_data, get_sensitive_data_warning
@@ -757,6 +757,22 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     resp.message(staging_prefix(f"[Support Ticket #{ticket_id}]\n\nMessage received. We'll respond shortly.\n\n(You're now in support mode - replies will continue to go to support. Text EXIT to leave support or CLOSE to close ticket)"))
                     log_interaction(phone_number, incoming_msg, f"Support message (ticket #{ticket_id})", "support", True)
                 return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # REFERRAL SOURCE DETECTION
+        # ==========================================
+        REFERRAL_MESSAGES = {
+            "hi, sign me up!": "website",
+            "hey, sign me up!": "facebook",
+            "hi, i'd like to sign up!": "reddit",
+            "hey, i'd like to sign up!": "google",
+            "sign me up!": "tiktok",
+        }
+        if not is_user_onboarded(phone_number):
+            referral_source = REFERRAL_MESSAGES.get(incoming_msg.lower().strip())
+            if referral_source:
+                set_referral_source(phone_number, referral_source)
+                logger.info(f"Referral source detected for ...{phone_number[-4:]}: {referral_source}")
 
         # ==========================================
         # ONBOARDING CHECK
@@ -4917,6 +4933,12 @@ Reply with your first name to get started, or text HELP for more info."""
         # Send SMS
         from services.sms_service import send_sms
         send_sms(formatted_phone, message)
+
+        # Track referral source if provided
+        ref = data.get('ref', '').strip().lower()
+        if ref:
+            set_referral_source(formatted_phone, ref)
+            logger.info(f"Desktop signup referral source for ...{formatted_phone[-4:]}: {ref}")
 
         # Log the signup
         log_interaction(formatted_phone, "Desktop signup", "Signup SMS sent", "desktop_signup", True)
