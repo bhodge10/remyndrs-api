@@ -1,2 +1,4 @@
 /account  /  302
+/payment/success  /  302
+/payment/cancelled  /  302
 /updates  https://sms-reminders-api-1gmm.onrender.com/updates  200

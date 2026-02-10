@@ -424,12 +424,20 @@ def get_user_subscription(phone_number: str) -> dict:
             result = c.fetchone()
 
         if result:
-            return {
+            sub_data = {
                 'tier': result[0] or TIER_FREE,
                 'since': result[1],
                 'subscription_id': result[2],
                 'status': result[3] or 'none',
             }
+            # Fetch current_period_end from Stripe if subscription exists
+            if sub_data['subscription_id'] and STRIPE_ENABLED:
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(sub_data['subscription_id'])
+                    sub_data['current_period_end'] = stripe_sub.current_period_end
+                except Exception as e:
+                    logger.debug(f"Could not fetch Stripe subscription details: {e}")
+            return sub_data
         return {'tier': TIER_FREE, 'since': None, 'subscription_id': None, 'status': 'none'}
     except Exception as e:
         logger.error(f"Error getting user subscription: {e}")
@@ -500,17 +508,20 @@ def send_cancellation_notice(phone_number: str):
         )
 
         # Set pending cancellation feedback flag
+        conn_flag = None
         try:
-            conn = get_db_connection()
-            c = conn.cursor()
+            conn_flag = get_db_connection()
+            c = conn_flag.cursor()
             c.execute(
                 "UPDATE users SET pending_cancellation_feedback = TRUE WHERE phone_number = %s",
                 (phone_number,)
             )
-            conn.commit()
-            return_db_connection(conn)
+            conn_flag.commit()
         except Exception as db_err:
             logger.error(f"Error setting pending_cancellation_feedback: {db_err}")
+        finally:
+            if conn_flag:
+                return_db_connection(conn_flag)
 
         send_sms(phone_number, message)
         logger.info(f"Sent cancellation notice with feedback request to {phone_number[-4:]}")
