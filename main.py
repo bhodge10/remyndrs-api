@@ -186,7 +186,7 @@ app = FastAPI()
 # CORS middleware - allow requests from remyndrs.com
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with ["https://remyndrs.com"]
+    allow_origins=["https://remyndrs.com", "https://www.remyndrs.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
