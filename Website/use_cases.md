@@ -247,3 +247,112 @@ See how real users interact with Remyndrs every day. Just text naturally - Remyn
 
 ---
 
+## Free Tier Experience
+
+### Progressive Limit Education
+
+Remyndrs helps free tier users understand their limits with progressive education - no surprises, just clear communication.
+
+---
+
+### Level 2: Gentle Nudge (70%+)
+
+**Sarah (Free Tier):** Add milk, bread, eggs, butter, cheese, yogurt, chicken to grocery list
+
+> **Remyndrs:** Added 7 items to your grocery list: milk, bread, eggs, butter, cheese, yogurt, chicken (7 of 10 items)
+
+*Sarah sees she's using 70% of her free tier limit - a gentle heads-up before it becomes an issue.*
+
+---
+
+### Level 3: Clear Warning (90%+)
+
+**Sarah:** Add apples, bananas to grocery list
+
+> **Remyndrs:** Added 2 items to your grocery list: apples, bananas (9 of 10 items) - Almost full!
+
+*Now Sarah knows she's nearly at her limit and can plan accordingly.*
+
+---
+
+### Level 4: Blocked with Solution
+
+**Sarah:** grocery list: Cat litter, cat food, yogurt, granola, fruit, milk, potatoes
+
+> **Remyndrs:** Your grocery list is full (10 items max on Free plan).
+>
+> Can't add: Cat litter, cat food, yogurt, granola, fruit, milk, potatoes
+>
+> To add more:
+> • Remove items from grocery list
+> • Text UPGRADE for 30 items/list
+
+*Clear explanation of WHY (free tier limit), WHAT (items she tried to add), and HOW (two options to proceed).*
+
+---
+
+### Checking Account Status
+
+**Sarah:** STATUS
+
+> **Remyndrs:** 📊 Account Status
+>
+> Plan: Free
+> Member since: Jan 15, 2026
+>
+> This Month:
+> • 1 of 2 reminders today
+> • 1 of 5 lists
+> • 10 of 10 items in grocery list
+> • 3 of 5 memories
+>
+> ✨ Premium Benefits:
+> • Unlimited reminders (you: 2/day)
+> • 20 lists (you: 5)
+> • 30 items per list (you: 10)
+> • Unlimited memories (you: 5)
+> • Recurring reminders
+>
+> Only $6.99/month - Text UPGRADE
+>
+> Quick Actions:
+> • Text UPGRADE for unlimited
+
+*Sarah can see exactly what she's using and what she'd get with Premium.*
+
+---
+
+### Premium Experience: No Limits
+
+**Marcus (Premium):** Add 25 items to my grocery list [long list of items]
+
+> **Remyndrs:** Added 25 items to your grocery list: [list of items]
+
+*No counters, no warnings - just seamless functionality. Premium users never see limit messaging.*
+
+---
+
+### Trial Experience
+
+**Jessica (Day 12 of 14-day trial):** Add 15 items to grocery list
+
+> **Remyndrs:** Added 15 items to your grocery list: [items]
+
+*Trial users get the full Premium experience with no counters or limit warnings.*
+
+---
+
+**Jessica (Day 7 of trial):** [Receives automatic notification]
+
+> **Remyndrs:** You have 7 days left in your Premium trial! ⏰
+>
+> You've created 12 reminders and 2 lists so far.
+>
+> After trial: only 2 reminders/day on free plan.
+>
+> Text UPGRADE anytime to keep unlimited access.
+
+*Proactive reminder about trial ending, with clear comparison of what changes.*
+
+---
+

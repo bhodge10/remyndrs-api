@@ -111,6 +111,65 @@ Let's get you set up in under a minute. What's your first name?
 - Only displays for free tier users
 - Automatic counter tracking
 
+#### 3b. Progressive Education for Tier Limits ✅ **DONE** (Feb 2026)
+**Location:** `services/tier_service.py` (6 new functions), `routes/handlers/lists.py`, `routes/handlers/pending_states.py`, `main.py`
+**PR:** feature/progressive-education
+
+**The Education Pyramid:**
+Replaces confusing limit messages with progressive education that helps users understand why they hit limits and how to proceed.
+
+**Level 1 (0-70% of limit): Silent**
+- No friction, no counters shown
+- Users unaware of limits until relevant
+
+**Level 2 (70-90%): Gentle Nudge**
+- Shows usage counters: "(7 of 10 items)", "(4 of 5 memories)"
+- Only for free tier users (premium never sees counters)
+- Passive education before limits become a problem
+
+**Level 3 (90-100%): Clear Warning**
+- Enhanced counter: "(9 of 10 items) - Almost full!"
+- Shows "Last one!" at 100%
+- Prepares users for upcoming limits
+
+**Level 4 (Over limit): Blocked with Solution**
+- WHY-WHAT-HOW message structure:
+  - **WHY:** "Your grocery list is full (10 items max on Free plan)"
+  - **WHAT:** "Can't add: Cat litter, cat food, yogurt, granola, fruit, milk, potatoes"
+  - **HOW:** "To add more: • Remove items from grocery list • Text UPGRADE for 30 items/list"
+- Trial hint for expired trial users: "Still on trial? Text STATUS"
+
+**Before (Confusing):**
+```
+Added 0 items to your grocery list: . (7 items skipped - list full)
+```
+
+**After (Clear):**
+```
+Your grocery list is full (10 items max on Free plan).
+
+Can't add: Cat litter, cat food, yogurt, granola, fruit, milk, potatoes
+
+To add more:
+• Remove items from grocery list
+• Text UPGRADE for 30 items/list
+```
+
+**Enhanced STATUS Command:**
+Free tier users now see a tier comparison showing what they'd get with Premium:
+```
+✨ Premium Benefits:
+• Unlimited reminders (you: 2/day)
+• 20 lists (you: 5)
+• 30 items per list (you: 10)
+• Unlimited memories (you: 5)
+• Recurring reminders
+
+Only $6.99/month - Text UPGRADE
+```
+
+**Testing:** 13/13 new unit tests pass, 96/98 integration tests pass. See `TEST_RESULTS.md` for details.
+
 ### PHASE 2: Value & Visibility ✅ **COMPLETED - Feb 2026**
 **Impact: Medium-High | Effort: Medium | Expected: +10% retention**
 
