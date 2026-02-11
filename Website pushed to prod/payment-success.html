@@ -423,7 +423,7 @@
             var params = new URLSearchParams(window.location.search);
             var sessionId = params.get('session_id');
             if (sessionId) {
-                fetch('https://sms-reminders-api-1gmm.onrender.com/api/payment-info?session_id=' + encodeURIComponent(sessionId))
+                fetch('/api/payment-info?session_id=' + encodeURIComponent(sessionId))
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
                         var headline = document.getElementById('welcome-headline');
