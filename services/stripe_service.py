@@ -484,7 +484,7 @@ def send_subscription_confirmation(phone_number: str, tier: str):
         from services.sms_service import send_sms
 
         plan_name = "Premium" if tier == TIER_PREMIUM else "Family Plan"
-        message = f"Welcome to Remyndrs {plan_name}! You now have access to unlimited reminders, recurring reminders, and priority support. Enjoy!"
+        message = f"Welcome to Remyndrs {plan_name}! Here's what you've unlocked:\n\n- Unlimited reminders per day\n- 20 lists (30 items each)\n- Unlimited saved memories\n- Recurring reminders\n- Priority support\n\nCancel anytime. Enjoy!"
 
         send_sms(phone_number, message)
         logger.info(f"Sent subscription confirmation to {phone_number[-4:]}")
