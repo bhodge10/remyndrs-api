@@ -242,7 +242,8 @@ def init_db():
                 fail_count INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                completed_at TIMESTAMP
+                completed_at TIMESTAMP,
+                source TEXT DEFAULT 'immediate'
             )
         ''')
 
@@ -259,7 +260,8 @@ def init_db():
                 success_count INTEGER DEFAULT 0,
                 fail_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                sent_at TIMESTAMP
+                sent_at TIMESTAMP,
+                target_phone TEXT
             )
         ''')
 
@@ -519,6 +521,9 @@ def init_db():
                 created_by TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
+            # Broadcast system improvements
+            "ALTER TABLE scheduled_broadcasts ADD COLUMN IF NOT EXISTS target_phone TEXT",
+            "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'immediate'",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
