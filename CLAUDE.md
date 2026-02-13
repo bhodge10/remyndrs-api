@@ -225,5 +225,16 @@ The `daily_summary_setup` interactive flow trapped users in an inescapable loop 
 ### Context Loss Fix (Feb 2026)
 List selection by number (e.g., "1") was intercepted by daily summary handler asking "1 AM or 1 PM?". Fixed by removing the interactive daily summary flow entirely (see above). New monitoring detectors (`context_loss`, `flow_violation`) prevent similar issues.
 
+### Broadcast System Improvements (Feb 2026)
+Three fixes to the admin broadcast system (`admin_dashboard.py`):
+
+1. **Single Number Test Mode:** New "Single Number (Test)" audience option sends to one phone number instead of all users. Bypasses time window check. Works for both immediate and scheduled broadcasts. Phone input validates US numbers and normalizes to E.164.
+
+2. **Scheduled Broadcast Reliability:** The daemon thread (`check_scheduled_broadcasts`) had two issues: (a) a single DB exception could crash the thread silently, and (b) completed scheduled broadcasts only updated `scheduled_broadcasts` table but never inserted into `broadcast_logs`, making them invisible in Broadcast History. Fixed with inner try/except around DB connections and auto-insertion into `broadcast_logs` with `source='scheduled'` on completion.
+
+3. **Message Viewer:** Broadcast History messages (previously truncated to 100 chars with no expansion) are now clickable to open a modal showing the full text with a Copy button. History also shows "Immediate" vs "Scheduled" source indicator.
+
+**DB changes:** Added `target_phone TEXT` to `scheduled_broadcasts`, `source TEXT DEFAULT 'immediate'` to `broadcast_logs` (with ALTER TABLE migrations).
+
 ### Desktop Signup Flow (Feb 2026)
 Added `POST /api/signup` endpoint for desktop visitors. Phone validation, E.164 formatting, sends welcome SMS. Frontend form on remyndrs.com with responsive design. Uses CORSMiddleware.
