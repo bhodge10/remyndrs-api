@@ -846,6 +846,71 @@ async def delete_incomplete_users(admin: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/admin/users/{phone_number}")
+async def delete_user(phone_number: str, admin: str = Depends(verify_admin)):
+    """Delete a specific user and all their data from all tables"""
+    from urllib.parse import unquote
+    phone_number = unquote(phone_number)
+
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+
+        # Verify user exists
+        c.execute('SELECT phone_number FROM users WHERE phone_number = %s', (phone_number,))
+        if not c.fetchone():
+            return_db_connection(conn)
+            raise HTTPException(status_code=404, detail="User not found")
+
+        deleted_counts = {}
+
+        # Delete from child tables first, then parent table last
+        tables = [
+            ("list_items", "phone_number"),
+            ("lists", "phone_number"),
+            ("support_messages", "phone_number"),
+            ("support_tickets", "phone_number"),
+            ("customer_notes", "phone_number"),
+            ("reminders", "phone_number"),
+            ("recurring_reminders", "phone_number"),
+            ("memories", "phone_number"),
+            ("logs", "phone_number"),
+            ("conversation_analysis", "phone_number"),
+            ("api_usage", "phone_number"),
+            ("confidence_logs", "phone_number"),
+            ("onboarding_progress", "phone_number"),
+            ("feedback", "user_phone"),
+            ("users", "phone_number"),
+        ]
+
+        for table_name, column in tables:
+            try:
+                c.execute(f'DELETE FROM {table_name} WHERE {column} = %s', (phone_number,))
+                deleted_counts[table_name] = c.rowcount
+            except Exception:
+                # Table may not exist in all environments
+                deleted_counts[table_name] = 0
+
+        conn.commit()
+        return_db_connection(conn)
+
+        logger.info(f"Admin '{admin}' deleted user {phone_number}: {deleted_counts}")
+        return JSONResponse(content={
+            "success": True,
+            "phone_number": phone_number,
+            "deleted_counts": deleted_counts,
+            "message": f"User {phone_number} and all associated data deleted"
+        })
+    except HTTPException:
+        return_db_connection(conn)
+        raise
+    except Exception as e:
+        conn.rollback()
+        return_db_connection(conn)
+        logger.error(f"Error deleting user {phone_number}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =====================================================
 # MAINTENANCE MESSAGE SETTINGS
 # =====================================================
@@ -6177,6 +6242,27 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        async function deleteUser(phone) {{
+            if (!confirm(`Delete user ${{phone}} and ALL their data? This cannot be undone.`)) return;
+            if (!confirm(`Are you SURE? This will permanently delete all reminders, lists, memories, and account data for ${{phone}}.`)) return;
+
+            try {{
+                const response = await fetch(`/admin/users/${{encodeURIComponent(phone)}}`, {{
+                    method: 'DELETE',
+                    headers: {{ 'Authorization': 'Basic ' + btoa('{ADMIN_USERNAME}:{ADMIN_PASSWORD}') }}
+                }});
+                const data = await response.json();
+                if (response.ok && data.success) {{
+                    alert(data.message);
+                    csSearch();
+                }} else {{
+                    alert('Failed to delete: ' + (data.detail || 'Unknown error'));
+                }}
+            }} catch (e) {{
+                alert('Error: ' + e.message);
+            }}
+        }}
+
         // =====================================================
         // CUSTOMER SERVICE FUNCTIONS
         // =====================================================
@@ -6214,6 +6300,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                             <td style="font-size: 0.85em;">${{c.last_active_at ? new Date(c.last_active_at).toLocaleDateString() : '-'}}</td>
                             <td>
                                 <button class="btn" style="padding: 4px 12px; font-size: 0.85em;" onclick="csViewCustomer('${{c.phone}}')">View</button>
+                                <button class="btn" style="padding: 4px 12px; font-size: 0.85em; background: #e74c3c; color: white;" onclick="deleteUser('${{c.phone}}')">Delete</button>
                             </td>
                         `;
                         tbody.appendChild(row);
