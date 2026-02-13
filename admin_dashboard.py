@@ -25,6 +25,7 @@ from database import (
 )
 from config import ADMIN_USERNAME, ADMIN_PASSWORD, logger
 from utils.validation import log_security_event
+import re
 
 # Broadcast time window (8am - 8pm in user's local timezone)
 BROADCAST_START_HOUR = 8
@@ -42,13 +43,25 @@ def is_within_broadcast_window(timezone_str: str) -> bool:
     local_time = datetime.now(tz)
     return BROADCAST_START_HOUR <= local_time.hour < BROADCAST_END_HOUR
 
+
+def validate_e164_phone(phone: str) -> str:
+    """Validate and normalize a phone number to E.164 format. Returns normalized number or raises HTTPException."""
+    digits = re.sub(r'\D', '', phone)
+    if len(digits) == 10:
+        digits = '1' + digits
+    if len(digits) == 11 and digits.startswith('1'):
+        return '+' + digits
+    raise HTTPException(status_code=400, detail="Invalid phone number. Use format: +1XXXXXXXXXX or (XXX) XXX-XXXX")
+
+
 router = APIRouter()
 security = HTTPBasic()
 
 
 class BroadcastRequest(BaseModel):
     message: str
-    audience: str  # "all", "free", "premium"
+    audience: str  # "all", "free", "premium", "single"
+    phone_number: Optional[str] = None  # Required when audience == "single"
 
 
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
@@ -133,7 +146,7 @@ async def get_broadcast_history(admin: str = Depends(verify_admin)):
 
         c.execute('''
             SELECT id, sender, message, audience, recipient_count,
-                   success_count, fail_count, status, created_at, completed_at
+                   success_count, fail_count, status, created_at, completed_at, source
             FROM broadcast_logs
             ORDER BY created_at DESC
             LIMIT 20
@@ -146,13 +159,15 @@ async def get_broadcast_history(admin: str = Depends(verify_admin)):
                 "id": row[0],
                 "sender": row[1],
                 "message": row[2][:100] + "..." if len(row[2]) > 100 else row[2],
+                "full_message": row[2],
                 "audience": row[3],
                 "recipient_count": row[4],
                 "success_count": row[5],
                 "fail_count": row[6],
                 "status": row[7],
                 "created_at": row[8].isoformat() if row[8] else None,
-                "completed_at": row[9].isoformat() if row[9] else None
+                "completed_at": row[9].isoformat() if row[9] else None,
+                "source": row[10] or "immediate"
             })
 
         return JSONResponse(content=history)
@@ -317,52 +332,61 @@ async def send_broadcast(request: BroadcastRequest, background_tasks: Background
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Build query based on audience - include timezone for filtering
-        # Exclude opted-out users (STOP command compliance)
-        if request.audience == "all":
-            c.execute('''
-                SELECT phone_number, timezone FROM users
-                WHERE onboarding_complete = TRUE
-                AND (opted_out = FALSE OR opted_out IS NULL)
-            ''')
-        elif request.audience == "free":
-            c.execute('''
-                SELECT phone_number, timezone FROM users
-                WHERE onboarding_complete = TRUE
-                AND (premium_status = 'free' OR premium_status IS NULL)
-                AND (opted_out = FALSE OR opted_out IS NULL)
-            ''')
-        elif request.audience == "premium":
-            c.execute('''
-                SELECT phone_number, timezone FROM users
-                WHERE onboarding_complete = TRUE
-                AND premium_status = 'premium'
-                AND (opted_out = FALSE OR opted_out IS NULL)
-            ''')
+        skipped_count = 0
+
+        if request.audience == "single":
+            # Single number test mode - skip user query, send directly
+            if not request.phone_number:
+                raise HTTPException(status_code=400, detail="Phone number required for single number mode")
+            phone = validate_e164_phone(request.phone_number)
+            phone_numbers = [phone]
         else:
-            raise HTTPException(status_code=400, detail="Invalid audience")
+            # Build query based on audience - include timezone for filtering
+            # Exclude opted-out users (STOP command compliance)
+            if request.audience == "all":
+                c.execute('''
+                    SELECT phone_number, timezone FROM users
+                    WHERE onboarding_complete = TRUE
+                    AND (opted_out = FALSE OR opted_out IS NULL)
+                ''')
+            elif request.audience == "free":
+                c.execute('''
+                    SELECT phone_number, timezone FROM users
+                    WHERE onboarding_complete = TRUE
+                    AND (premium_status = 'free' OR premium_status IS NULL)
+                    AND (opted_out = FALSE OR opted_out IS NULL)
+                ''')
+            elif request.audience == "premium":
+                c.execute('''
+                    SELECT phone_number, timezone FROM users
+                    WHERE onboarding_complete = TRUE
+                    AND premium_status = 'premium'
+                    AND (opted_out = FALSE OR opted_out IS NULL)
+                ''')
+            else:
+                raise HTTPException(status_code=400, detail="Invalid audience")
 
-        results = c.fetchall()
+            results = c.fetchall()
 
-        # Filter to only users within the 8am-8pm window in their timezone
-        phone_numbers = [
-            r[0] for r in results
-            if is_within_broadcast_window(r[1])
-        ]
+            # Filter to only users within the 8am-8pm window in their timezone
+            phone_numbers = [
+                r[0] for r in results
+                if is_within_broadcast_window(r[1])
+            ]
 
-        total_audience = len(results)
-        skipped_count = total_audience - len(phone_numbers)
+            total_audience = len(results)
+            skipped_count = total_audience - len(phone_numbers)
 
-        if not phone_numbers:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No recipients currently in the 8am-8pm window. {total_audience} users are outside the allowed time."
-            )
+            if not phone_numbers:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No recipients currently in the 8am-8pm window. {total_audience} users are outside the allowed time."
+                )
 
         # Create broadcast log entry
         c.execute('''
-            INSERT INTO broadcast_logs (sender, message, audience, recipient_count, status)
-            VALUES (%s, %s, %s, %s, 'pending')
+            INSERT INTO broadcast_logs (sender, message, audience, recipient_count, status, source)
+            VALUES (%s, %s, %s, %s, 'pending', 'immediate')
             RETURNING id
         ''', (admin, request.message, request.audience, len(phone_numbers)))
         broadcast_id = c.fetchone()[0]
@@ -399,6 +423,7 @@ class ScheduleBroadcastRequest(BaseModel):
     message: str
     audience: str
     scheduled_date: str  # ISO format datetime string
+    phone_number: Optional[str] = None  # Required when audience == "single"
 
 
 @router.post("/admin/broadcast/schedule")
@@ -406,11 +431,18 @@ async def schedule_broadcast(request: ScheduleBroadcastRequest, admin: str = Dep
     """Schedule a broadcast for future delivery"""
     conn = None
     try:
-        if request.audience not in ["all", "free", "premium"]:
+        if request.audience not in ["all", "free", "premium", "single"]:
             raise HTTPException(status_code=400, detail="Invalid audience type")
 
         if not request.message.strip():
             raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+        # Validate phone number for single number mode
+        target_phone = None
+        if request.audience == "single":
+            if not request.phone_number:
+                raise HTTPException(status_code=400, detail="Phone number required for single number mode")
+            target_phone = validate_e164_phone(request.phone_number)
 
         # Parse the scheduled date
         try:
@@ -430,10 +462,10 @@ async def schedule_broadcast(request: ScheduleBroadcastRequest, admin: str = Dep
 
         # Insert scheduled broadcast
         c.execute('''
-            INSERT INTO scheduled_broadcasts (sender, message, audience, scheduled_date, status)
-            VALUES (%s, %s, %s, %s, 'scheduled')
+            INSERT INTO scheduled_broadcasts (sender, message, audience, scheduled_date, status, target_phone)
+            VALUES (%s, %s, %s, %s, 'scheduled', %s)
             RETURNING id
-        ''', (admin, request.message.strip(), request.audience, scheduled_dt))
+        ''', (admin, request.message.strip(), request.audience, scheduled_dt, target_phone))
 
         broadcast_id = c.fetchone()[0]
         conn.commit()
@@ -544,7 +576,7 @@ async def cancel_scheduled_broadcast(broadcast_id: int, admin: str = Depends(ver
 # SCHEDULED BROADCAST CHECKER
 # =====================================================
 
-def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str):
+def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str, sender: str = 'system', target_phone: str = None):
     """Send a scheduled broadcast - filters recipients and sends messages"""
     conn = None
     success_count = 0
@@ -563,35 +595,39 @@ def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str):
         )
         conn.commit()
 
-        # Get recipients based on audience (exclude opted-out users)
-        if audience == "all":
-            c.execute('''
-                SELECT phone_number, timezone FROM users
-                WHERE onboarding_complete = TRUE
-                AND (opted_out = FALSE OR opted_out IS NULL)
-            ''')
-        elif audience == "free":
-            c.execute('''
-                SELECT phone_number, timezone FROM users
-                WHERE onboarding_complete = TRUE
-                AND (premium_status = 'free' OR premium_status IS NULL)
-                AND (opted_out = FALSE OR opted_out IS NULL)
-            ''')
-        elif audience == "premium":
-            c.execute('''
-                SELECT phone_number, timezone FROM users
-                WHERE onboarding_complete = TRUE
-                AND premium_status = 'premium'
-                AND (opted_out = FALSE OR opted_out IS NULL)
-            ''')
+        if audience == "single" and target_phone:
+            # Single number mode - send directly, skip user query
+            phone_numbers = [target_phone]
         else:
-            logger.error(f"Invalid audience for scheduled broadcast {broadcast_id}: {audience}")
-            return
+            # Get recipients based on audience (exclude opted-out users)
+            if audience == "all":
+                c.execute('''
+                    SELECT phone_number, timezone FROM users
+                    WHERE onboarding_complete = TRUE
+                    AND (opted_out = FALSE OR opted_out IS NULL)
+                ''')
+            elif audience == "free":
+                c.execute('''
+                    SELECT phone_number, timezone FROM users
+                    WHERE onboarding_complete = TRUE
+                    AND (premium_status = 'free' OR premium_status IS NULL)
+                    AND (opted_out = FALSE OR opted_out IS NULL)
+                ''')
+            elif audience == "premium":
+                c.execute('''
+                    SELECT phone_number, timezone FROM users
+                    WHERE onboarding_complete = TRUE
+                    AND premium_status = 'premium'
+                    AND (opted_out = FALSE OR opted_out IS NULL)
+                ''')
+            else:
+                logger.error(f"Invalid audience for scheduled broadcast {broadcast_id}: {audience}")
+                return
 
-        results = c.fetchall()
+            results = c.fetchall()
 
-        # Filter to only users within the 8am-8pm window
-        phone_numbers = [r[0] for r in results if is_within_broadcast_window(r[1])]
+            # Filter to only users within the 8am-8pm window
+            phone_numbers = [r[0] for r in results if is_within_broadcast_window(r[1])]
 
         if not phone_numbers:
             logger.info(f"Scheduled broadcast {broadcast_id}: No recipients in time window")
@@ -600,6 +636,12 @@ def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str):
                 SET status = 'completed', recipient_count = 0, sent_at = NOW()
                 WHERE id = %s
             ''', (broadcast_id,))
+            conn.commit()
+            # Still log to broadcast_logs so it appears in history
+            c.execute('''
+                INSERT INTO broadcast_logs (sender, message, audience, recipient_count, success_count, fail_count, status, completed_at, source)
+                VALUES (%s, %s, %s, 0, 0, 0, 'completed', NOW(), 'scheduled')
+            ''', (sender, message, audience))
             conn.commit()
             return
 
@@ -630,12 +672,19 @@ def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str):
             # Rate limit: 100ms delay
             time.sleep(0.1)
 
-        # Final update
+        # Final update on scheduled_broadcasts
         c.execute('''
             UPDATE scheduled_broadcasts
             SET success_count = %s, fail_count = %s, status = 'completed', sent_at = NOW()
             WHERE id = %s
         ''', (success_count, fail_count, broadcast_id))
+        conn.commit()
+
+        # Also insert into broadcast_logs so it appears in Broadcast History
+        c.execute('''
+            INSERT INTO broadcast_logs (sender, message, audience, recipient_count, success_count, fail_count, status, completed_at, source)
+            VALUES (%s, %s, %s, %s, %s, %s, 'completed', NOW(), 'scheduled')
+        ''', (sender, message, audience, len(phone_numbers), success_count, fail_count))
         conn.commit()
 
         logger.info(f"Scheduled broadcast {broadcast_id} completed: {success_count} success, {fail_count} failed")
@@ -662,29 +711,40 @@ def check_scheduled_broadcasts():
     logger.info("Starting scheduled broadcast checker")
 
     while True:
+        conn = None
         try:
             now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             logger.info(f"Checking for scheduled broadcasts at {now}")
 
-            conn = get_db_connection()
-            c = conn.cursor()
+            try:
+                conn = get_db_connection()
+                c = conn.cursor()
 
-            # Find broadcasts that are due
-            c.execute('''
-                SELECT id, message, audience
-                FROM scheduled_broadcasts
-                WHERE scheduled_date <= %s AND status = 'scheduled'
-            ''', (now,))
+                # Find broadcasts that are due
+                c.execute('''
+                    SELECT id, message, audience, sender, target_phone
+                    FROM scheduled_broadcasts
+                    WHERE scheduled_date <= %s AND status = 'scheduled'
+                ''', (now,))
 
-            due_broadcasts = c.fetchall()
-            return_db_connection(conn)
+                due_broadcasts = c.fetchall()
+            except Exception as db_err:
+                logger.error(f"DB error in scheduled broadcast checker: {db_err}")
+                due_broadcasts = []
+            finally:
+                if conn:
+                    return_db_connection(conn)
+                    conn = None
 
             if due_broadcasts:
                 logger.info(f"Found {len(due_broadcasts)} scheduled broadcasts to send")
 
-            for broadcast_id, message, audience in due_broadcasts:
+            for broadcast_id, message, audience, sender, target_phone in due_broadcasts:
                 logger.info(f"Sending scheduled broadcast {broadcast_id}")
-                send_scheduled_broadcast(broadcast_id, message, audience)
+                try:
+                    send_scheduled_broadcast(broadcast_id, message, audience, sender=sender or 'system', target_phone=target_phone)
+                except Exception as send_err:
+                    logger.error(f"Error sending scheduled broadcast {broadcast_id}: {send_err}")
 
         except Exception as e:
             logger.error(f"Error in scheduled broadcast checker: {e}")
@@ -3854,7 +3914,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <option value="all">All Users</option>
                 <option value="free">Free Tier Only</option>
                 <option value="premium">Premium Only</option>
+                <option value="single">Single Number (Test)</option>
             </select>
+        </div>
+
+        <div class="form-group" id="singlePhoneGroup" style="display: none;">
+            <label for="singlePhone">Phone Number</label>
+            <input type="tel" id="singlePhone" placeholder="+1 (555) 123-4567" oninput="updatePreview()" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 1em;">
+            <small style="color: #7f8c8d;">Enter a US phone number in any format</small>
         </div>
 
         <div class="form-group">
@@ -4485,6 +4552,21 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </div>
     </div>
 
+    <!-- Message Viewer Modal -->
+    <div class="modal" id="messageViewerModal">
+        <div class="modal-content">
+            <h3>Full Broadcast Message</h3>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 15px 0; white-space: pre-wrap; max-height: 400px; overflow-y: auto;">
+                <span id="messageViewerText"></span>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn btn-secondary" onclick="hideMessageViewer()">Close</button>
+                <button class="btn btn-primary" onclick="copyMessageText()">Copy</button>
+            </div>
+            <div id="copyConfirmation" style="display: none; color: #27ae60; text-align: center; margin-top: 8px;">Copied!</div>
+        </div>
+    </div>
+
     <p class="refresh-note">Refresh page to update metrics</p>
 
     <script>
@@ -4537,10 +4619,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         }}
 
         // Load broadcast history
+        // Store history data for message viewer
+        let broadcastHistoryData = [];
+
         async function loadHistory() {{
             try {{
                 const response = await fetch('/admin/broadcast/history');
                 const history = await response.json();
+                broadcastHistoryData = history;
 
                 const table = document.getElementById('historyTable');
                 const loadingRow = document.getElementById('historyLoading');
@@ -4552,14 +4638,17 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     return;
                 }}
 
-                history.forEach(b => {{
+                history.forEach((b, idx) => {{
                     const row = table.insertRow(-1);
                     const date = new Date(b.created_at).toLocaleString();
                     const statusClass = 'status-' + b.status;
+                    const sourceLabel = b.source === 'scheduled' ? 'Scheduled' : 'Immediate';
+                    const sourceColor = b.source === 'scheduled' ? '#3498db' : '#95a5a6';
+                    const escapedMsg = b.message.replace(/"/g, '&quot;');
                     row.innerHTML = `
                         <td>${{date}}</td>
-                        <td>${{b.audience}}</td>
-                        <td class="message-preview" title="${{b.message}}">${{b.message}}</td>
+                        <td>${{b.audience}}<br><span style="font-size: 0.8em; color: ${{sourceColor}};">${{sourceLabel}}</span></td>
+                        <td class="message-preview" style="cursor: pointer; text-decoration: underline; color: #2980b9;" onclick="showMessageViewer(${{idx}})" title="Click to view full message">${{escapedMsg}}</td>
                         <td>${{b.recipient_count}}</td>
                         <td style="color: #27ae60;">${{b.success_count}}</td>
                         <td style="color: #e74c3c;">${{b.fail_count}}</td>
@@ -4569,6 +4658,38 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }} catch (e) {{
                 console.error('Error loading history:', e);
             }}
+        }}
+
+        function showMessageViewer(idx) {{
+            const b = broadcastHistoryData[idx];
+            if (!b) return;
+            document.getElementById('messageViewerText').textContent = '[Remyndrs System Message] ' + b.full_message;
+            document.getElementById('copyConfirmation').style.display = 'none';
+            document.getElementById('messageViewerModal').classList.add('active');
+        }}
+
+        function hideMessageViewer() {{
+            document.getElementById('messageViewerModal').classList.remove('active');
+        }}
+
+        function copyMessageText() {{
+            const text = document.getElementById('messageViewerText').textContent;
+            navigator.clipboard.writeText(text).then(() => {{
+                const conf = document.getElementById('copyConfirmation');
+                conf.style.display = 'block';
+                setTimeout(() => {{ conf.style.display = 'none'; }}, 2000);
+            }}).catch(() => {{
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                const conf = document.getElementById('copyConfirmation');
+                conf.style.display = 'block';
+                setTimeout(() => {{ conf.style.display = 'none'; }}, 2000);
+            }});
         }}
 
         // Load user feedback
@@ -4815,6 +4936,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         function updatePreview() {{
             const audience = document.getElementById('audience').value;
             const message = document.getElementById('message').value;
+            const isSingle = audience === 'single';
+
+            // Show/hide single phone input
+            document.getElementById('singlePhoneGroup').style.display = isSingle ? 'block' : 'none';
 
             // Update character count
             document.getElementById('charCount').textContent = message.length;
@@ -4831,32 +4956,47 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 preview.style.fontStyle = 'italic';
             }}
 
-            // Update recipient count (use timezone-aware counts)
-            const inWindowCount = audienceStats[audience + '_in_window'] || 0;
-            const totalCount = audienceStats[audience] || 0;
-            const outsideCount = totalCount - inWindowCount;
-
-            document.getElementById('recipientCount').textContent = inWindowCount;
-
-            // Show outside window info
             const outsideInfo = document.getElementById('outsideWindowInfo');
-            if (outsideCount > 0) {{
-                outsideInfo.textContent = `(${{outsideCount}} outside window, won't receive)`;
+
+            if (isSingle) {{
+                // Single number mode
+                const phone = document.getElementById('singlePhone').value.trim();
+                const digits = phone.replace(/\\D/g, '');
+                const validPhone = digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
+                document.getElementById('recipientCount').textContent = validPhone ? '1' : '0';
+                outsideInfo.textContent = validPhone ? '(single number test)' : '(enter a valid US phone number)';
             }} else {{
-                outsideInfo.textContent = '';
+                // Update recipient count (use timezone-aware counts)
+                const inWindowCount = audienceStats[audience + '_in_window'] || 0;
+                const totalCount = audienceStats[audience] || 0;
+                const outsideCount = totalCount - inWindowCount;
+
+                document.getElementById('recipientCount').textContent = inWindowCount;
+
+                // Show outside window info
+                if (outsideCount > 0) {{
+                    outsideInfo.textContent = `(${{outsideCount}} outside window, won't receive)`;
+                }} else {{
+                    outsideInfo.textContent = '';
+                }}
             }}
 
             // Enable/disable send button
-            // For scheduled broadcasts, don't require current in-window count
             const sendBtn = document.getElementById('sendBtn');
             const isScheduled = document.getElementById('scheduleCheckbox').checked;
             const hasMessage = message.trim().length > 0;
 
-            if (isScheduled) {{
+            if (isSingle) {{
+                const phone = document.getElementById('singlePhone').value.trim();
+                const digits = phone.replace(/\\D/g, '');
+                const validPhone = digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
+                sendBtn.disabled = !hasMessage || !validPhone;
+            }} else if (isScheduled) {{
                 // For scheduled: only need a message
                 sendBtn.disabled = !hasMessage;
             }} else {{
                 // For immediate: need message AND users in window
+                const inWindowCount = audienceStats[audience + '_in_window'] || 0;
                 sendBtn.disabled = !hasMessage || inWindowCount === 0;
             }}
         }}
@@ -4867,6 +5007,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             const inWindowCount = audienceStats[audience + '_in_window'] || 0;
             const isScheduled = document.getElementById('scheduleCheckbox').checked;
             const scheduleDate = document.getElementById('scheduleDate').value;
+            const isSingle = audience === 'single';
 
             // Validate scheduled date if scheduling
             if (isScheduled) {{
@@ -4875,7 +5016,6 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 }}
             }}
 
-            document.getElementById('modalCount').textContent = inWindowCount;
             document.getElementById('modalMessage').textContent = '[Remyndrs System Message] ' + message;
 
             const scheduleInfo = document.getElementById('modalScheduleInfo');
@@ -4883,7 +5023,26 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             const modalSubtitle = document.getElementById('modalSubtitle');
             const confirmBtn = document.getElementById('modalConfirmBtn');
 
-            if (isScheduled && scheduleDate) {{
+            if (isSingle) {{
+                const phone = document.getElementById('singlePhone').value.trim();
+                document.getElementById('modalCount').textContent = '1';
+                scheduleInfo.style.display = 'none';
+                if (isScheduled && scheduleDate) {{
+                    const scheduledTime = new Date(scheduleDate).toLocaleString();
+                    scheduleInfo.style.display = 'block';
+                    document.getElementById('modalScheduleTime').textContent = scheduledTime;
+                    modalTitle.textContent = '📅 Schedule Test Message';
+                    modalSubtitle.innerHTML = 'This message will be sent to <strong>' + phone + '</strong> at the scheduled time:';
+                    confirmBtn.textContent = 'Schedule';
+                    confirmBtn.style.background = '#3498db';
+                }} else {{
+                    modalTitle.textContent = '📱 Confirm Test Send';
+                    modalSubtitle.innerHTML = 'Send this message to <strong>' + phone + '</strong>:';
+                    confirmBtn.textContent = 'Send Test';
+                    confirmBtn.style.background = '#27ae60';
+                }}
+            }} else if (isScheduled && scheduleDate) {{
+                document.getElementById('modalCount').textContent = inWindowCount;
                 const scheduledTime = new Date(scheduleDate).toLocaleString();
                 scheduleInfo.style.display = 'block';
                 document.getElementById('modalScheduleTime').textContent = scheduledTime;
@@ -4892,9 +5051,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 confirmBtn.textContent = 'Schedule';
                 confirmBtn.style.background = '#3498db';
             }} else {{
+                document.getElementById('modalCount').textContent = inWindowCount;
                 scheduleInfo.style.display = 'none';
                 modalTitle.textContent = '⚠️ Confirm Broadcast';
-                modalSubtitle.innerHTML = 'You are about to send the following message to <strong id="modalCount">' + inWindowCount + '</strong> users:';
+                modalSubtitle.innerHTML = 'You are about to send the following message to <strong>' + inWindowCount + '</strong> users:';
                 confirmBtn.textContent = 'Send Now';
                 confirmBtn.style.background = '#e74c3c';
             }}
@@ -4966,7 +5126,11 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     headers: {{
                         'Content-Type': 'application/json'
                     }},
-                    body: JSON.stringify({{ message, audience }})
+                    body: JSON.stringify({{
+                        message,
+                        audience,
+                        phone_number: audience === 'single' ? document.getElementById('singlePhone').value.trim() : undefined
+                    }})
                 }});
 
                 const result = await response.json();
@@ -5316,7 +5480,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     body: JSON.stringify({{
                         message: message,
                         audience: audience,
-                        scheduled_date: utcDate
+                        scheduled_date: utcDate,
+                        phone_number: audience === 'single' ? document.getElementById('singlePhone').value.trim() : undefined
                     }})
                 }});
 
