@@ -240,6 +240,14 @@ def handle_subscription_cancelled(subscription):
         logger.error("Subscription cancelled but no phone number found")
         return
 
+    # If user is deleting their account, skip downgrade messaging —
+    # the delete flow handles its own confirmation message.
+    from models.user import get_user
+    user = get_user(phone_number)
+    if user and (user.get('pending_delete_account') or user.get('opted_out')):
+        logger.info(f"Subscription cancelled for {phone_number[-4:]} (account deletion in progress, skipping cancellation notice)")
+        return
+
     # Downgrade to free tier
     update_user_subscription(phone_number, TIER_FREE, None, 'cancelled')
 
