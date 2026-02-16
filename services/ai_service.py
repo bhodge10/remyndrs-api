@@ -458,14 +458,15 @@ For HELP REQUESTS:
     "response": "User is asking how to use the service. Tell them to text INFO (or ? or GUIDE) for the full guide, or answer their specific question briefly."
 }}
 
-For CREATING A LIST:
+For CREATING A LIST (ONLY when no items are provided):
 {{
     "action": "create_list",
     "list_name": "the name of the list to create",
     "confirmation": "Created your [list name]!"
 }}
+IMPORTANT: If the user says "create a list" AND includes items in the same message (e.g., "Create a grocery list\nMilk\nEggs\nBread"), do NOT use create_list. Use add_to_list instead — the system will auto-create the list AND add the items in one step.
 
-For ADDING TO A SPECIFIC LIST:
+For ADDING TO A SPECIFIC LIST (also use this when creating a list WITH items):
 {{
     "action": "add_to_list",
     "list_name": "the name of the list",
@@ -484,6 +485,7 @@ CORRECT EXAMPLES - Follow these exactly:
 - User: "add chips and salsa to shopping list" → item_text: "chips and salsa"
 - User: "add apples, oranges, bananas" → item_text: "apples, oranges, bananas" (NOT just "apples")
 - User: "put toilet paper, paper towels, soap on my list" → item_text: "toilet paper, paper towels, soap"
+- User: "Create a grocery list\nMilk\nEggs\nBread" → action: "add_to_list", list_name: "grocery list", item_text: "Milk, Eggs, Bread" (NOT create_list — use add_to_list so items get added!)
 
 WRONG - NEVER DO THIS:
 - User says "add milk, eggs, bread" → item_text: "milk" (WRONG - missing eggs and bread!)
