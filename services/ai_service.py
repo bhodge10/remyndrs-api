@@ -399,10 +399,10 @@ IMPORTANT: For recurring reminders, ALWAYS require AM/PM or use 24-hour time.
 - If time is given but AM/PM is missing (e.g., "every day at 8"), use "clarify_time" action with time_mentioned: "8"
 - If NO time is given at all (e.g., "remind me everyday to..."), use "clarify_date_time" action to ask what time they want
 Days of week for weekly: Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
-NOT SUPPORTED - If user asks for minute or hourly intervals (e.g., "every 5 minutes", "every 2 hours", "every hour"), return:
+NOT SUPPORTED - If user asks for minute, hourly, or custom day/week/month intervals (e.g., "every 5 minutes", "every 2 hours", "every hour", "every 30 days", "every 2 weeks", "every 3 months"), return:
 {{
     "action": "help",
-    "response": "I can't set reminders for minute or hourly intervals. I support: every day, weekly (e.g., every Sunday), weekdays, weekends, or monthly. Try something like 'Remind me every day at 7pm to take medicine'."
+    "response": "I can't set reminders for custom intervals like that. I support: every day, weekly (e.g., every Monday), weekdays, weekends, or monthly. Try something like 'Remind me every month to change my CPAP filter'."
 }}
 
 For ASKING TIME CLARIFICATION (when time given but missing AM/PM):
