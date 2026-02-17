@@ -847,11 +847,151 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         is_undo_command = msg_lower_clean in ['undo', "that's wrong", 'thats wrong', 'wrong', 'fix that', 'that was wrong', 'not what i meant', 'cancel']
 
         # ==========================================
+        # PENDING REMINDER CONFIRMATION HANDLING
+        # ==========================================
+        # Check if user is responding to a pending confirmation (day clarification or low-confidence)
+        pending_confirmation = get_pending_reminder_confirmation(phone_number)
+
+        # ==========================================
+        # RECURRING REMINDER DAY CLARIFICATION
+        # ==========================================
+        # Handle response to "which day of the week/month?" question
+        if pending_confirmation and pending_confirmation.get('type') == 'needs_recurrence_day' and not is_new_reminder_request and not is_undo_command:
+            recurrence_type = pending_confirmation.get('recurrence_type')
+            reminder_text = pending_confirmation.get('reminder_text')
+            stored_time = pending_confirmation.get('time')
+            msg_text = incoming_msg.strip()
+
+            recurrence_day = None
+            time_str = stored_time
+
+            if recurrence_type == 'monthly':
+                # Extract day number (1-31) from response
+                day_match = re.search(r'\b(\d{1,2})\s*(st|nd|rd|th)?\b', msg_text, re.IGNORECASE)
+                if day_match:
+                    day_num = int(day_match.group(1))
+                    if 1 <= day_num <= 31:
+                        recurrence_day = day_num
+
+            elif recurrence_type == 'weekly':
+                # Extract day name from response
+                day_map = {
+                    'monday': 0, 'mon': 0,
+                    'tuesday': 1, 'tue': 1, 'tues': 1,
+                    'wednesday': 2, 'wed': 2,
+                    'thursday': 3, 'thu': 3, 'thur': 3, 'thurs': 3,
+                    'friday': 4, 'fri': 4,
+                    'saturday': 5, 'sat': 5,
+                    'sunday': 6, 'sun': 6
+                }
+                msg_lower = msg_text.lower()
+                for day_word, day_num in day_map.items():
+                    if re.search(r'\b' + day_word + r'\b', msg_lower):
+                        recurrence_day = day_num
+                        break
+
+            # Check if user provided a new time in their response
+            time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b', msg_text, re.IGNORECASE)
+            if time_match:
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2)) if time_match.group(2) else 0
+                am_pm_raw = time_match.group(3).lower().replace('.', '')
+                if 'p' in am_pm_raw and hour != 12:
+                    hour += 12
+                elif 'a' in am_pm_raw and hour == 12:
+                    hour = 0
+                time_str = f"{hour:02d}:{minute:02d}"
+
+            if recurrence_day is None:
+                # Couldn't parse day - re-ask with clearer prompt
+                if recurrence_type == 'monthly':
+                    reply_text = "I didn't catch the day. Please reply with a day of the month (e.g., '15th' or '1')."
+                else:
+                    reply_text = "I didn't catch the day. Please reply with a day of the week (e.g., 'Monday' or 'Sunday')."
+                log_interaction(phone_number, incoming_msg, reply_text, "reminder_recurring_clarify", False)
+                resp = MessagingResponse()
+                resp.message(staging_prefix(reply_text))
+                return Response(content=str(resp), media_type="application/xml")
+
+            # Clear pending state
+            create_or_update_user(phone_number, pending_reminder_confirmation=None)
+
+            # Save the recurring reminder
+            try:
+                user_tz_str = get_user_timezone(phone_number)
+                recurring_id = save_recurring_reminder(
+                    phone_number=phone_number,
+                    reminder_text=reminder_text,
+                    recurrence_type=recurrence_type,
+                    recurrence_day=recurrence_day,
+                    reminder_time=time_str,
+                    timezone=user_tz_str
+                )
+
+                if not recurring_id:
+                    reply_text = "Sorry, I couldn't save that recurring reminder. Please try again."
+                    log_interaction(phone_number, incoming_msg, reply_text, "reminder_recurring", False)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(reply_text))
+                    return Response(content=str(resp), media_type="application/xml")
+
+                # Generate the first occurrence immediately
+                from tasks.reminder_tasks import generate_first_occurrence
+                next_occurrence = generate_first_occurrence(recurring_id)
+
+                # Format confirmation message
+                hour, minute = map(int, time_str.split(':'))
+                display_time = datetime(2000, 1, 1, hour, minute).strftime('%I:%M %p').lstrip('0')
+
+                if recurrence_type == 'weekly':
+                    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                    pattern_text = f"every {days[recurrence_day]}"
+                elif recurrence_type == 'monthly':
+                    suffix = 'th'
+                    if recurrence_day in [1, 21, 31]:
+                        suffix = 'st'
+                    elif recurrence_day in [2, 22]:
+                        suffix = 'nd'
+                    elif recurrence_day in [3, 23]:
+                        suffix = 'rd'
+                    pattern_text = f"on the {recurrence_day}{suffix} of every month"
+                else:
+                    pattern_text = recurrence_type
+
+                reply_text = f"Got it! I'll remind you {pattern_text} at {display_time} {format_reminder_confirmation(reminder_text)}.\n\n"
+
+                if next_occurrence:
+                    tz = pytz.timezone(user_tz_str)
+                    if isinstance(next_occurrence, str):
+                        next_dt = datetime.fromisoformat(next_occurrence.replace('Z', '+00:00'))
+                    else:
+                        next_dt = next_occurrence
+                    if next_dt.tzinfo is None:
+                        next_dt = pytz.UTC.localize(next_dt)
+                    next_local = next_dt.astimezone(tz)
+                    next_str = next_local.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')
+                    reply_text += f"Next reminder: {next_str}\n\n"
+
+                reply_text += "(Text 'SHOW RECURRING' to see all, 'DELETE RECURRING [#]' to remove)"
+
+                log_interaction(phone_number, incoming_msg, reply_text, "reminder_recurring", True)
+                resp = MessagingResponse()
+                resp.message(staging_prefix(reply_text))
+                return Response(content=str(resp), media_type="application/xml")
+
+            except Exception as e:
+                logger.error(f"Error saving recurring reminder from day clarification: {e}")
+                create_or_update_user(phone_number, pending_reminder_confirmation=None)
+                reply_text = "Sorry, I couldn't save that recurring reminder. Please try again."
+                log_interaction(phone_number, incoming_msg, reply_text, "reminder_recurring", False)
+                resp = MessagingResponse()
+                resp.message(staging_prefix(reply_text))
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # LOW-CONFIDENCE REMINDER CONFIRMATION
         # ==========================================
-        # Check if user is responding to a confirmation request for a low-confidence reminder
-        pending_confirmation = get_pending_reminder_confirmation(phone_number)
-        if pending_confirmation and pending_confirmation.get('type') != 'summary_undo' and not is_new_reminder_request:
+        if pending_confirmation and pending_confirmation.get('type') not in ('summary_undo', 'needs_recurrence_day') and not is_new_reminder_request:
             msg_lower = incoming_msg.strip().lower()
 
             # User confirms the reminder is correct
@@ -3853,11 +3993,29 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
                 # For weekly and monthly, validate recurrence_day
                 if recurrence_type == 'weekly' and recurrence_day is None:
+                    # Store pending state so user's response has context
+                    pending_data = json.dumps({
+                        'type': 'needs_recurrence_day',
+                        'action': 'reminder_recurring',
+                        'reminder_text': reminder_text,
+                        'recurrence_type': recurrence_type,
+                        'time': time_str
+                    })
+                    create_or_update_user(phone_number, pending_reminder_confirmation=pending_data)
                     reply_text = "Please specify which day of the week (e.g., 'every Sunday at 6pm')."
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_recurring", False)
                     return reply_text
 
                 if recurrence_type == 'monthly' and recurrence_day is None:
+                    # Store pending state so user's response has context
+                    pending_data = json.dumps({
+                        'type': 'needs_recurrence_day',
+                        'action': 'reminder_recurring',
+                        'reminder_text': reminder_text,
+                        'recurrence_type': recurrence_type,
+                        'time': time_str
+                    })
+                    create_or_update_user(phone_number, pending_reminder_confirmation=pending_data)
                     reply_text = "Please specify which day of the month (e.g., 'every 1st at noon')."
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_recurring", False)
                     return reply_text
