@@ -197,7 +197,8 @@ BEFORE classifying any reminder request, check if it contains recurring keywords
 - "every weekday", "weekdays" → use action "reminder_recurring" with recurrence_type: "weekdays"
 - "every weekend", "weekends" → use action "reminder_recurring" with recurrence_type: "weekends"
 - "every month", "monthly" → use action "reminder_recurring" with recurrence_type: "monthly"
-If ANY of these patterns are found, use "reminder_recurring" - NOT "reminder" or "reminder_relative"!
+**EXCEPTION**: If the message ALSO contains "for the next X days/weeks" or "for X days" (a FINITE time period), do NOT use "reminder_recurring". Instead, create MULTIPLE separate "reminder" actions (one per day) using the "multiple" action wrapper. See RECURRING/MULTI-DAY REMINDERS section below.
+If ANY of these patterns are found (and no finite period exception applies), use "reminder_recurring" - NOT "reminder" or "reminder_relative"!
 
 For reminder requests with SPECIFIC TIMES:
 - If time includes AM/PM in ANY format: Process normally with action "reminder"
@@ -684,7 +685,22 @@ CRITICAL RULES:
                         OPENAI_MODEL
                     )
 
+                # Check for truncated response (max_tokens hit)
+                finish_reason = response.choices[0].finish_reason
                 raw_content = response.choices[0].message.content
+
+                if finish_reason == "length":
+                    logger.warning(f"AI response truncated (finish_reason=length, attempt {attempt + 1}): {raw_content[:200]}...")
+                    last_error = ValueError("Response truncated by max_tokens")
+                    if attempt < max_retries:
+                        logger.info("Retrying AI call (truncated response)...")
+                        continue
+                    # All retries exhausted with truncation - return a helpful message
+                    return {
+                        "action": "help",
+                        "response": "That request is a bit complex for me to handle all at once. Could you try breaking it into smaller parts? For example, set reminders one day at a time."
+                    }
+
                 result = json.loads(raw_content)
 
                 # Validate result has required fields

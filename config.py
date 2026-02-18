@@ -58,7 +58,7 @@ LOG_FILE_PATH = 'app.log'
 # OpenAI Configuration
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_TEMPERATURE = 0.3
-OPENAI_MAX_TOKENS = 300
+OPENAI_MAX_TOKENS = 800
 
 # Reminder Configuration
 REMINDER_CHECK_INTERVAL = 30  # seconds (used by Celery Beat)

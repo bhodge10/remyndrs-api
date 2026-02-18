@@ -342,3 +342,100 @@ class TestReminderTimezoneHandling:
 
         result = await simulator.send_message(phone, "MY REMINDERS")
         # Response should show time in Eastern timezone format
+
+
+class TestMultiDayReminders:
+    """Tests for multi-day reminder creation (e.g., 'for the next 5 days')."""
+
+    @pytest.mark.asyncio
+    async def test_every_day_for_next_five_days(self, simulator, onboarded_user, ai_mock):
+        """Test creating reminders for the next 5 days via 'multiple' action."""
+        phone = onboarded_user["phone"]
+
+        # Build 5 reminder actions, one per day at 5:00 PM local time
+        actions = []
+        for i in range(1, 6):
+            day = (datetime.utcnow() + timedelta(days=i)).replace(hour=17, minute=0, second=0)
+            actions.append({
+                "action": "reminder",
+                "reminder_text": "it's time to quit working",
+                "reminder_date": day.strftime("%Y-%m-%d %H:%M:%S"),
+                "confidence": 95
+            })
+
+        multiple_response = {
+            "action": "multiple",
+            "actions": actions
+        }
+
+        # Register both original and normalized forms (main.py normalizes "5pm" -> "5:PM")
+        ai_mock.set_response(
+            "remind me every day for the next five days at 5pm that it's time to quit working",
+            multiple_response
+        )
+        ai_mock.set_response(
+            "remind me every day for the next five days at 5:pm that it's time to quit working",
+            multiple_response
+        )
+
+        result = await simulator.send_message(
+            phone,
+            "Remind me every day for the next five days at 5 PM that it's time to quit working"
+        )
+
+        # Should get confirmation(s) - the multiple handler joins replies with \n\n
+        output = result["output"].lower()
+        assert "remind" in output or "got it" in output, \
+            f"Expected reminder confirmation, got: {result['output']}"
+
+        # Verify reminders were created in the database
+        from models.reminder import get_user_reminders
+        reminders = get_user_reminders(phone)
+        unsent = [r for r in reminders if not r[4]]  # r[4] = sent
+        assert len(unsent) >= 5, \
+            f"Expected at least 5 unsent reminders, got {len(unsent)}"
+
+    @pytest.mark.asyncio
+    async def test_multi_day_reminder_not_classified_as_recurring(self, simulator, onboarded_user, ai_mock):
+        """Test that 'every day for the next 3 days' uses multiple action, not reminder_recurring."""
+        phone = onboarded_user["phone"]
+
+        # The correct response for "for the next 3 days" is multiple separate reminders
+        actions = []
+        for i in range(1, 4):
+            day = (datetime.utcnow() + timedelta(days=i)).replace(hour=8, minute=0, second=0)
+            actions.append({
+                "action": "reminder",
+                "reminder_text": "take medication",
+                "reminder_date": day.strftime("%Y-%m-%d %H:%M:%S"),
+                "confidence": 95
+            })
+
+        multiple_response = {
+            "action": "multiple",
+            "actions": actions
+        }
+
+        ai_mock.set_response(
+            "remind me for the next 3 days at 8am to take medication",
+            multiple_response
+        )
+        ai_mock.set_response(
+            "remind me for the next 3 days at 8:am to take medication",
+            multiple_response
+        )
+
+        result = await simulator.send_message(
+            phone,
+            "Remind me for the next 3 days at 8am to take medication"
+        )
+
+        output = result["output"].lower()
+        assert "remind" in output or "got it" in output, \
+            f"Expected reminder confirmation, got: {result['output']}"
+
+        from models.reminder import get_user_reminders
+        reminders = get_user_reminders(phone)
+        unsent = [r for r in reminders if not r[4]]
+        assert len(unsent) >= 3, \
+            f"Expected at least 3 unsent reminders, got {len(unsent)}"
