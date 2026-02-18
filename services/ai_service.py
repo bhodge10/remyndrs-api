@@ -411,6 +411,7 @@ For ASKING TIME CLARIFICATION (when time given but missing AM/PM):
     "action": "clarify_time",
     "reminder_text": "what to remind them about",
     "time_mentioned": "the ambiguous time they said (e.g., '4:35')",
+    "reminder_date": "YYYY-MM-DD if a specific date/day was mentioned (e.g., 'Sunday', 'March 5th'), omit if no date",
     "response": "Got it! Do you mean [time] AM or PM?"
 }}
 
