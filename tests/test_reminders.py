@@ -439,3 +439,72 @@ class TestMultiDayReminders:
         unsent = [r for r in reminders if not r[4]]
         assert len(unsent) >= 3, \
             f"Expected at least 3 unsent reminders, got {len(unsent)}"
+
+
+class TestClarifyTimeOclock:
+    """Tests for clarify_time flow with o'clock patterns and date context."""
+
+    @pytest.mark.asyncio
+    async def test_oclock_with_standalone_pm_and_date_context(self, simulator, onboarded_user, ai_mock):
+        """Test: 'Remind me Sunday at 1 o'clock to look at Robyn's registry' -> 'Pm'
+        Verifies o'clock is stripped from time and Sunday date is preserved."""
+        phone = onboarded_user["phone"]
+
+        # Calculate next Sunday's date for the AI response
+        from datetime import date
+        today = date.today()
+        days_until_sunday = (6 - today.weekday()) % 7
+        if days_until_sunday == 0:
+            days_until_sunday = 7
+        next_sunday = today + timedelta(days=days_until_sunday)
+        sunday_str = next_sunday.strftime("%Y-%m-%d")
+
+        clarify_response = {
+            "action": "clarify_time",
+            "reminder_text": "look at Robyn's registry",
+            "time_mentioned": "1 o'clock",
+            "reminder_date": sunday_str,
+            "response": "Got it! Do you mean 1 o'clock AM or PM?"
+        }
+
+        ai_mock.set_response("remind me sunday at 1 o'clock to look at robyn's registry", clarify_response)
+        ai_mock.set_response("remind me sunday at 1 o'clock to look at robyn's registry", clarify_response)
+
+        result = await simulator.send_message(phone, "Remind me Sunday at 1 o'clock to look at Robyn's registry")
+
+        # Should ask for AM/PM
+        assert "am" in result["output"].lower() or "pm" in result["output"].lower()
+
+        # User replies with standalone "Pm"
+        result = await simulator.send_message(phone, "Pm")
+
+        # Should confirm reminder is set for Sunday at 1 PM
+        output = result["output"].lower()
+        assert "remind" in output, f"Expected reminder confirmation, got: {result['output']}"
+        assert "1:00 pm" in output or "1 pm" in output, f"Expected 1 PM in output, got: {result['output']}"
+        assert "sunday" in output, f"Expected Sunday in output, got: {result['output']}"
+
+    @pytest.mark.asyncio
+    async def test_oclock_without_date_falls_back_to_today_tomorrow(self, simulator, onboarded_user, ai_mock):
+        """Test: 'Remind me at 3 o'clock to call mom' -> 'Pm' (no date context)
+        Verifies o'clock is stripped and today/tomorrow logic applies."""
+        phone = onboarded_user["phone"]
+
+        clarify_response = {
+            "action": "clarify_time",
+            "reminder_text": "call mom",
+            "time_mentioned": "3 o'clock",
+            "response": "Got it! Do you mean 3 o'clock AM or PM?"
+        }
+
+        ai_mock.set_response("remind me at 3 o'clock to call mom", clarify_response)
+        ai_mock.set_response("remind me at 3 o'clock to call mom", clarify_response)
+
+        result = await simulator.send_message(phone, "Remind me at 3 o'clock to call mom")
+        assert "am" in result["output"].lower() or "pm" in result["output"].lower()
+
+        result = await simulator.send_message(phone, "Pm")
+
+        output = result["output"].lower()
+        assert "remind" in output, f"Expected reminder confirmation, got: {result['output']}"
+        assert "3:00 pm" in output or "3 pm" in output, f"Expected 3 PM in output, got: {result['output']}"

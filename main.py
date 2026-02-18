@@ -1407,6 +1407,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 clean_time = pending_time.upper().replace("AM", "").replace("PM", "").replace("A.M.", "").replace("P.M.", "").strip()
                 # Also remove any trailing letters (handles "3P", "8A", etc.)
                 clean_time = re.sub(r'[AP]$', '', clean_time).strip()
+                # Remove "o'clock" variations (e.g., "1 O'CLOCK" -> "1")
+                clean_time = re.sub(r"O'?CLOCK", "", clean_time, flags=re.IGNORECASE).strip()
 
                 # Parse the time
                 time_parts = clean_time.split(":")
@@ -1419,12 +1421,21 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 elif am_pm == "AM" and hour == 12:
                     hour = 0
 
-                # Create reminder datetime in user's timezone
-                reminder_datetime = user_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                # Check if a specific date was stored during clarify_time (e.g., "Sunday")
+                pending_date_data = get_pending_reminder_date(phone_number)
+                if pending_date_data and pending_date_data.get('date'):
+                    # Use the stored date instead of today/tomorrow
+                    tz = pytz.timezone(user_tz)
+                    date_obj = datetime.strptime(pending_date_data['date'], '%Y-%m-%d')
+                    reminder_datetime = date_obj.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    reminder_datetime = tz.localize(reminder_datetime)
+                else:
+                    # No date context - use today/tomorrow logic
+                    reminder_datetime = user_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-                # If time has already passed today, schedule for tomorrow
-                if reminder_datetime <= user_time:
-                    reminder_datetime = reminder_datetime + timedelta(days=1)
+                    # If time has already passed today, schedule for tomorrow
+                    if reminder_datetime <= user_time:
+                        reminder_datetime = reminder_datetime + timedelta(days=1)
 
                 # Convert to UTC for storage
                 reminder_datetime_utc = reminder_datetime.astimezone(pytz.UTC)
@@ -1437,8 +1448,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 readable_date = reminder_datetime.strftime('%A, %B %d at %I:%M %p')
                 reply_text = f"I'll remind you on {readable_date} {format_reminder_confirmation(pending_text)}."
 
-                # Clear pending reminder
-                create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None)
+                # Clear pending reminder (including date)
+                create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None, pending_reminder_date=None)
 
                 # Check if this is user's first action and prompt for daily summary
                 if should_prompt_daily_summary(phone_number):
@@ -3647,10 +3658,12 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                         time_mentioned = time_match.group(1)
                         logger.info(f"Extracted time '{time_mentioned}' from AI response")
 
+                reminder_date = ai_response.get("reminder_date")  # Optional date context (e.g., "Sunday")
                 create_or_update_user(
                     phone_number,
                     pending_reminder_text=reminder_text,
-                    pending_reminder_time=time_mentioned
+                    pending_reminder_time=time_mentioned,
+                    pending_reminder_date=reminder_date
                 )
 
                 reply_text = ai_response.get("response", f"Do you mean {time_mentioned} AM or PM?")
