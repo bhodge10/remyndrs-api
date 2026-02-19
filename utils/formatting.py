@@ -14,6 +14,7 @@ Examples:
 • "Add milk to my grocery list"
 • "Remember my WiFi is ABC123"
 
+Text STATUS for your plan info.
 Full guide: remyndrs.com/commands"""
 
 def get_onboarding_prompt(step):

@@ -240,8 +240,8 @@ def can_create_reminder(phone_number: str) -> tuple[bool, str | None]:
     if current_count >= limits['reminders_per_day']:
         return (
             False,
-            f"You've reached your daily limit of {limits['reminders_per_day']} reminders. "
-            f"Upgrade to Premium for unlimited reminders! Text UPGRADE for details."
+            f"You've used all {limits['reminders_per_day']} reminders for today — they reset at midnight. "
+            f"Need more? Text UPGRADE for unlimited reminders."
         )
 
     return (True, None)
