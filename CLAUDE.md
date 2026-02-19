@@ -265,5 +265,27 @@ Added `POST /api/signup` endpoint for desktop visitors. Phone validation, E.164 
 - `_extract_keywords()` strips stop words and short tokens, returns set of meaningful words
 - `_memory_similarity()` computes Jaccard similarity (intersection / union of keyword sets)
 - `_find_similar_memory()` scans all user memories, returns ID of best match above threshold
-- Threshold `_SIMILARITY_THRESHOLD = 0.6` — catches "WiFi password is ABC" → "WiFi password is XYZ" but not "Mom's birthday" vs "Dad's birthday"
+- Threshold `_SIMILARITY_THRESHOLD = 0.6` for standard memories, `_SHORT_MEMORY_THRESHOLD = 0.4` for short memories (≤4 keywords)
+- Short-memory threshold catches key-value updates like "WiFi is ABC" → "WiFi is XYZ" where Jaccard drops disproportionately (2/4 = 0.5 < 0.6)
 - Encryption-aware: uses `phone_hash` lookup with plaintext fallback, same as other memory functions
+
+### Pricing Update — $8.99/mo, $89.99/yr (Feb 2026)
+Premium pricing changed from $6.99/mo ($76.89/yr) to $8.99/mo ($89.99/yr, ~17% discount, save $18). Constants `PREMIUM_MONTHLY_PRICE` and `PREMIUM_ANNUAL_PRICE` in `config.py` are used everywhere — no hardcoded prices remain. Stripe cents values updated in `PRICING` dict (899/8999). Annual pricing exposed in UPGRADE flow (both monthly + annual Stripe checkout links). All limit-hit messages include inline pricing (e.g., "Text UPGRADE for unlimited reminders ($8.99/mo)"). Trial expiration messages list specific free-tier limits. Updated in: `config.py`, `main.py`, `cs_portal.py`, `services/tier_service.py`, `tasks/reminder_tasks.py`, website `index.html`.
+
+### Expanded HELP Command (Feb 2026)
+`get_help_text()` in `utils/formatting.py` expanded from 5 lines to a comprehensive guide covering reminders, lists, memories, management commands (MY REMINDERS, MEMORIES, MY LISTS, SNOOZE, UNDO), and account commands (STATUS, UPGRADE, SUMMARY ON/OFF). Points to remyndrs.com/commands for full guide.
+
+### Snooze Duration in Fire Messages (Feb 2026)
+Reminder fire messages now say "(Reply SNOOZE to snooze 15 min)" instead of just "(Reply SNOOZE to snooze)" to set expectations on the default duration. Changed in `tasks/reminder_tasks.py`.
+
+### Annual Pricing in UPGRADE Flow (Feb 2026)
+UPGRADE command now generates two Stripe checkout links — monthly and annual. Uses `create_checkout_session(phone_number, 'premium', 'annual')` which already supported the `annual` billing cycle. Message format: monthly link first, then "Save $18/yr with annual ($89.99/yr):" with the annual link. Both links expire in 24 hours. Changed in `main.py` UPGRADE handler.
+
+### MY REMINDERS Fallback in AI Handlers (Feb 2026)
+When AI `delete_reminder` or `update_reminder` handlers can't find a matching reminder, the error message now includes "Text MY REMINDERS to see your list" so users can find the correct reminder to reference. Changed in `main.py` at the delete and update handler no-match fallbacks.
+
+### Personalized Trial Warnings (Feb 2026)
+Day 7 and Day 1 trial expiration warnings now include the user's actual usage stats — reminder count, list count, and memory count — to reinforce value before expiration. Example: "So far you've used: 12 reminders, 3 lists, 5 memories." Queries `reminders` table directly and uses `get_list_count()` and `get_memory_count()` from models/services. Changed in `tasks/reminder_tasks.py` `check_trial_expirations`.
+
+### 30-Day Post-Trial Win-Back (Feb 2026)
+New `send_30d_winback` Celery task sends a re-engagement SMS 30 days after trial expiry. Targets users who are on the free plan, haven't upgraded, and haven't opted out. Message includes both monthly and annual pricing. Tracks with `winback_30d_sent` column on users table (added in `database.py`). Runs daily at 12 PM UTC via Celery Beat (`celery_config.py`). Uses a 1-day window (`trial_end_date` between 30-31 days ago) to avoid missing users. Follows same pattern as `send_post_trial_reengagement` (Day 3).
