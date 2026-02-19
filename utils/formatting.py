@@ -29,7 +29,35 @@ Account:
 • UPGRADE — go Premium
 • SUMMARY ON/OFF — daily summary
 
+Text MORE COMMANDS for the full list.
 Full guide: remyndrs.com/commands"""
+
+
+def get_extended_help_text():
+    """Return extended command list for power users"""
+    return """MORE COMMANDS
+
+Recurring reminders:
+• MY RECURRING — see recurring reminders
+• PAUSE RECURRING — pause a recurring reminder
+• RESUME RECURRING — resume a paused one
+• DELETE RECURRING — delete a recurring reminder
+
+Past reminders:
+• SHOW COMPLETED — see sent reminders
+
+Data & account:
+• EXPORT — download all your data
+• TIMEZONE — update your timezone
+• DELETE ALL REMINDERS
+• DELETE ALL LISTS
+• DELETE ALL MEMORIES
+• DELETE ACCOUNT — permanently delete everything
+
+Support:
+• SUPPORT — open a support ticket
+• FEEDBACK — send feedback
+• BUG — report a bug"""
 
 def get_onboarding_prompt(step):
     """Get the appropriate prompt for the current onboarding step"""

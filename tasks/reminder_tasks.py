@@ -836,7 +836,7 @@ def check_trial_expirations(self):
 
 After your trial, you'll move to the free plan (2 reminders/day).
 
-Text UPGRADE to keep unlimited reminders — {PREMIUM_MONTHLY_PRICE}/month or {PREMIUM_ANNUAL_PRICE}/year (save $18)."""
+Text UPGRADE to keep unlimited reminders — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7.50/mo)."""
                 update_field = 'trial_warning_7d_sent'
 
             elif days_remaining == 1 and not warning_1d_sent:
@@ -862,7 +862,7 @@ Text UPGRADE to keep unlimited reminders — {PREMIUM_MONTHLY_PRICE}/month or {P
 
 After that, you'll be on the free plan (2 reminders/day).
 
-Text UPGRADE now — {PREMIUM_MONTHLY_PRICE}/month or {PREMIUM_ANNUAL_PRICE}/year (save $18)."""
+Text UPGRADE now — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7.50/mo)."""
                 update_field = 'trial_warning_1d_sent'
 
             elif days_remaining <= 0 and not warning_0d_sent:
@@ -870,10 +870,11 @@ Text UPGRADE now — {PREMIUM_MONTHLY_PRICE}/month or {PREMIUM_ANNUAL_PRICE}/yea
                 warning_to_send = f"""Your Premium trial has ended. You're now on the free plan:
 • 2 reminders/day
 • 5 lists, 5 memories
+• Existing recurring reminders keep working, but you can't create new ones
 
 All your data is safe!
 
-Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/month or {PREMIUM_ANNUAL_PRICE}/year."""
+Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7.50/mo)."""
                 update_field = 'trial_warning_0d_sent'
 
             # Send warning if needed
@@ -1289,7 +1290,7 @@ def send_30d_winback(self):
 
 Your reminders, lists & memories are still here waiting for you.
 
-Text UPGRADE to unlock unlimited access — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr (save $18).
+Text UPGRADE to unlock unlimited access — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7.50/mo).
 
 Or just text me anything to keep using the free plan!"""
 

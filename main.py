@@ -369,7 +369,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # Check rate limit
         if not check_rate_limit(phone_number):
             resp = MessagingResponse()
-            resp.message(staging_prefix("You're sending messages too quickly. Please wait a moment and try again."))
+            resp.message(staging_prefix("You're sending messages too quickly. Please wait about 30 seconds and try again."))
             return Response(content=str(resp), media_type="application/xml")
 
         logger.info(f"Received from {mask_phone_number(phone_number)}: {incoming_msg[:50]}...")
@@ -2291,7 +2291,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     annual_result = create_checkout_session(phone_number, 'premium', 'annual')
                     annual_line = ""
                     if 'url' in annual_result:
-                        annual_line = f"\n\nSave $18/yr with annual ({PREMIUM_ANNUAL_PRICE}/yr):\n{annual_result['url']}"
+                        annual_line = f"\n\nOr {PREMIUM_ANNUAL_PRICE}/yr ($7.50/mo — save $18):\n{annual_result['url']}"
 
                     resp = MessagingResponse()
                     resp.message(f"Remyndrs Premium — {PREMIUM_MONTHLY_PRICE}/month\nUnlimited reminders, lists & memories. Cancel anytime.\n\nMonthly:\n{result['url']}{annual_line}\n\nLinks expire in 24 hours.")
@@ -2499,7 +2499,21 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             if last_reminder:
                 # Parse snooze duration
                 snooze_text = incoming_msg[6:].strip().lower()  # Everything after "snooze"
-                snooze_minutes = parse_snooze_duration(snooze_text)
+                requested_minutes = parse_snooze_duration(snooze_text)
+                snooze_minutes = requested_minutes
+                snooze_was_capped = False
+                # Check if user requested more than 24h max
+                if snooze_text and requested_minutes == 1440:
+                    # parse_snooze_duration caps at 1440 — check if user asked for more
+                    raw_match = re.match(r'^(\d+)', snooze_text)
+                    if raw_match:
+                        raw_val = int(raw_match.group(1))
+                        if 'h' in snooze_text and raw_val > 24:
+                            snooze_was_capped = True
+                        elif 'd' in snooze_text and raw_val > 1:
+                            snooze_was_capped = True
+                        elif raw_val > 1440 and 'h' not in snooze_text and 'd' not in snooze_text:
+                            snooze_was_capped = True
 
                 # Create new reminder with snoozed time (UTC is correct - snooze is relative to NOW)
                 new_reminder_time = datetime.utcnow() + timedelta(minutes=snooze_minutes)
@@ -2522,7 +2536,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         time_str = f"{hours} hour{'s' if hours != 1 else ''}"
 
                 resp = MessagingResponse()
-                resp.message(f"Snoozed! I'll remind you again in {time_str}.")
+                cap_note = " (max snooze is 24 hours)" if snooze_was_capped else ""
+                resp.message(f"Snoozed! I'll remind you again in {time_str}.{cap_note}")
                 log_interaction(phone_number, incoming_msg, f"Snoozed for {time_str}", "snooze", True)
                 return Response(content=str(resp), media_type="application/xml")
             else:
@@ -3305,6 +3320,16 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             resp = MessagingResponse()
             resp.message(get_help_text())
             log_interaction(phone_number, incoming_msg, "Help guide sent", "help_command", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # MORE COMMANDS (Extended Help)
+        # ==========================================
+        if incoming_msg.upper() in ["MORE COMMANDS", "MORE", "ALL COMMANDS", "FULL COMMANDS"]:
+            from utils.formatting import get_extended_help_text
+            resp = MessagingResponse()
+            resp.message(get_extended_help_text())
+            log_interaction(phone_number, incoming_msg, "Extended help sent", "more_commands", True)
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
