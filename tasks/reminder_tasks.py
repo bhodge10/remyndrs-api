@@ -815,7 +815,7 @@ def check_trial_expirations(self):
             warning_to_send = None
             update_field = None
 
-            if days_remaining == 7 and not warning_7d_sent:
+            if 6 <= days_remaining <= 7 and not warning_7d_sent:
                 # 7 days remaining warning — personalized with usage stats
                 # (Also serves as mid-trial value reminder to avoid double-message)
                 from services.tier_service import get_recurring_reminder_count
@@ -852,7 +852,7 @@ Text UPGRADE to keep unlimited reminders — {PREMIUM_MONTHLY_PRICE}/mo or {PREM
                 # Also mark mid-trial reminder as sent to prevent duplicate
                 create_or_update_user(phone_number, mid_trial_reminder_sent=True)
 
-            elif days_remaining == 1 and not warning_1d_sent:
+            elif 0 < days_remaining <= 1 and not warning_1d_sent:
                 # 1 day remaining warning — include usage stats
                 c.execute("SELECT COUNT(*) FROM reminders WHERE phone_number = %s", (phone_number,))
                 reminder_count = (c.fetchone() or (0,))[0]
@@ -979,8 +979,8 @@ def send_mid_trial_value_reminders(self):
             time_remaining = trial_end_date - now_utc
             days_remaining = time_remaining.days
 
-            # Only send on Day 7 (7 days remaining)
-            if days_remaining != 7:
+            # Only send on Day 7 (6-7 days remaining, range for signup time-of-day tolerance)
+            if not (6 <= days_remaining <= 7):
                 continue
 
             try:
@@ -1112,8 +1112,8 @@ def send_day_3_engagement_nudges(self):
             days_remaining = time_remaining.days
             days_in_trial = 14 - days_remaining
 
-            # Only send on Day 3
-            if days_in_trial != 3:
+            # Only send on Day 3 (range check to handle signup time-of-day)
+            if not (2 <= days_in_trial <= 3):
                 continue
 
             try:
@@ -1208,8 +1208,8 @@ def send_post_trial_reengagement(self):
             # Calculate days since trial ended
             days_since_expiry = (now_utc - trial_end_date).days
 
-            # Only send on Day 3 after expiration
-            if days_since_expiry != 3:
+            # Only send on Day 3 after expiration (range check to handle signup time-of-day)
+            if not (2 <= days_since_expiry <= 3):
                 continue
 
             try:
@@ -1301,7 +1301,8 @@ def send_14d_post_trial_touchpoint(self):
 
             days_since_expiry = (now_utc - trial_end_date).days
 
-            if days_since_expiry != 14:
+            # Range check to handle signup time-of-day
+            if not (13 <= days_since_expiry <= 14):
                 continue
 
             try:

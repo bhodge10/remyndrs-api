@@ -2365,6 +2365,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 log_interaction(phone_number, incoming_msg, "Upgrade info sent", "upgrade_info", True)
                 return Response(content=str(resp), media_type="application/xml")
 
+        if any(phrase in incoming_msg.upper() for phrase in ["CANCEL SUBSCRIPTION", "CANCEL PLAN", "CANCEL PREMIUM", "CANCEL MY SUBSCRIPTION", "CANCEL MY PLAN"]):
+            resp = MessagingResponse()
+            resp.message("To manage or cancel your subscription, text ACCOUNT to get your billing portal link.")
+            log_interaction(phone_number, incoming_msg, "Cancel subscription redirect", "cancel_subscription_redirect", True)
+            return Response(content=str(resp), media_type="application/xml")
+
         if incoming_msg.upper() in ["ACCOUNT", "MANAGE", "BILLING", "SUBSCRIPTION"]:
             from services.stripe_service import get_user_subscription, create_customer_portal_session
             from config import STRIPE_ENABLED, APP_BASE_URL
