@@ -2271,7 +2271,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         if incoming_msg.upper() in ["UPGRADE", "SUBSCRIBE", "PREMIUM", "PRICING"]:
             from services.stripe_service import get_upgrade_message, get_user_subscription, create_checkout_session
-            from config import STRIPE_ENABLED, APP_BASE_URL, PREMIUM_MONTHLY_PRICE
+            from config import STRIPE_ENABLED, APP_BASE_URL, PREMIUM_MONTHLY_PRICE, PREMIUM_ANNUAL_PRICE
 
             subscription = get_user_subscription(phone_number)
 
@@ -2287,8 +2287,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 result = create_checkout_session(phone_number, 'premium', 'monthly')
 
                 if 'url' in result:
+                    # Also generate annual checkout link
+                    annual_result = create_checkout_session(phone_number, 'premium', 'annual')
+                    annual_line = ""
+                    if 'url' in annual_result:
+                        annual_line = f"\n\nSave $18/yr with annual ({PREMIUM_ANNUAL_PRICE}/yr):\n{annual_result['url']}"
+
                     resp = MessagingResponse()
-                    resp.message(f"Remyndrs Premium — {PREMIUM_MONTHLY_PRICE}/month\nUnlimited reminders, lists & memories. Cancel anytime.\n\nComplete your upgrade here:\n{result['url']}\n\nThis link expires in 24 hours.")
+                    resp.message(f"Remyndrs Premium — {PREMIUM_MONTHLY_PRICE}/month\nUnlimited reminders, lists & memories. Cancel anytime.\n\nMonthly:\n{result['url']}{annual_line}\n\nLinks expire in 24 hours.")
                     log_interaction(phone_number, incoming_msg, "Checkout link sent for premium", "upgrade_premium_checkout", True)
                 else:
                     resp = MessagingResponse()
@@ -4692,7 +4698,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     log_interaction(phone_number, incoming_msg, reply_text, "delete_memory_fallback", True)
                     return reply_text
                 else:
-                    reply_text = f"No pending reminders or memories found matching '{search_term}'."
+                    reply_text = f"No pending reminders or memories found matching '{search_term}'. Text MY REMINDERS to see your list."
             elif len(matching_reminders) == 1:
                 # Single match - ask for confirmation first
                 reminder_id, reminder_text, reminder_date = matching_reminders[0]
@@ -4786,7 +4792,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             matching_reminders = search_pending_reminders(phone_number, search_term)
 
             if len(matching_reminders) == 0:
-                reply_text = f"No pending reminders found matching '{search_term}'."
+                reply_text = f"No pending reminders found matching '{search_term}'. Text MY REMINDERS to see your list."
             elif len(matching_reminders) == 1:
                 reminder_id, reminder_text, current_date = matching_reminders[0]
 

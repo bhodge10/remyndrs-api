@@ -768,7 +768,7 @@ def check_trial_expirations(self):
     from datetime import datetime
     from database import get_db_connection, return_db_connection
     from models.user import create_or_update_user
-    from config import PREMIUM_MONTHLY_PRICE
+    from config import PREMIUM_MONTHLY_PRICE, PREMIUM_ANNUAL_PRICE
 
     logger.info("Starting trial expiration check")
 
@@ -817,7 +817,7 @@ def check_trial_expirations(self):
 
 After your trial, you'll move to the free plan (2 reminders/day).
 
-Want to keep unlimited reminders? Text UPGRADE to continue Premium for {PREMIUM_MONTHLY_PRICE}/month."""
+Text UPGRADE to keep unlimited reminders — {PREMIUM_MONTHLY_PRICE}/month or {PREMIUM_ANNUAL_PRICE}/year (save $18)."""
                 update_field = 'trial_warning_7d_sent'
 
             elif days_remaining == 1 and not warning_1d_sent:
@@ -826,7 +826,7 @@ Want to keep unlimited reminders? Text UPGRADE to continue Premium for {PREMIUM_
 
 After that, you'll be on the free plan (2 reminders/day).
 
-Text UPGRADE now to keep unlimited reminders for {PREMIUM_MONTHLY_PRICE}/month."""
+Text UPGRADE now — {PREMIUM_MONTHLY_PRICE}/month or {PREMIUM_ANNUAL_PRICE}/year (save $18)."""
                 update_field = 'trial_warning_1d_sent'
 
             elif days_remaining <= 0 and not warning_0d_sent:
@@ -835,7 +835,7 @@ Text UPGRADE now to keep unlimited reminders for {PREMIUM_MONTHLY_PRICE}/month."
 
 All your data is safe!
 
-Want unlimited reminders again? Text UPGRADE anytime for {PREMIUM_MONTHLY_PRICE}/month."""
+Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/month or {PREMIUM_ANNUAL_PRICE}/year."""
                 update_field = 'trial_warning_0d_sent'
 
             # Send warning if needed
