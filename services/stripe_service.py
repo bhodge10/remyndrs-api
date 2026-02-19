@@ -52,6 +52,12 @@ def create_checkout_session(phone_number: str, plan: str, billing_cycle: str) ->
             customer_id = customer.id
             save_stripe_customer_id(phone_number, customer_id)
 
+        # Check for existing active subscription to prevent double-billing
+        existing_subs = stripe.Subscription.list(customer=customer_id, status='active', limit=1)
+        if existing_subs.data:
+            logger.warning(f"User {phone_number[-4:]} already has active subscription {existing_subs.data[0].id}")
+            return {'error': 'You already have an active subscription. Text ACCOUNT to manage it.'}
+
         # Create checkout session
         session = stripe.checkout.Session.create(
             customer=customer_id,
