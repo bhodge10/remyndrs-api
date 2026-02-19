@@ -1239,6 +1239,115 @@ Text UPGRADE for Premium at {PREMIUM_MONTHLY_PRICE}/month — pick up right wher
 
 
 # =====================================================
+# 14-DAY POST-TRIAL TOUCHPOINT
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def send_14d_post_trial_touchpoint(self):
+    """
+    Send a touchpoint 14 days after trial expires highlighting what free users are missing.
+    Focuses on features they actually used during trial to create urgency.
+
+    Runs daily via Celery Beat.
+    Only sends once per user (tracks with post_trial_14d_sent flag).
+    """
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+    from models.user import create_or_update_user
+    from models.list_model import get_list_count
+    from services.tier_service import get_memory_count, get_recurring_reminder_count
+    from config import PREMIUM_MONTHLY_PRICE, PREMIUM_ANNUAL_PRICE
+
+    logger.info("Starting 14-day post-trial touchpoint check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date < %s
+              AND onboarding_complete = TRUE
+              AND premium_status = 'free'
+              AND (post_trial_14d_sent IS NULL OR post_trial_14d_sent = FALSE)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for 14-day post-trial touchpoint")
+            return {"messages_sent": 0}
+
+        messages_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date = user
+
+            days_since_expiry = (now_utc - trial_end_date).days
+
+            if days_since_expiry != 14:
+                continue
+
+            try:
+                greeting = f"Hi {first_name}!" if first_name else "Hi there!"
+
+                # Check what features they used during trial
+                recurring_count = get_recurring_reminder_count(phone_number)
+                list_count = get_list_count(phone_number)
+                memory_count = get_memory_count(phone_number)
+
+                # Build a message highlighting what they're missing
+                missing_parts = []
+                if recurring_count > 0:
+                    missing_parts.append(f"Your {recurring_count} recurring reminder{'s are' if recurring_count != 1 else ' is'} paused on the free plan")
+                if list_count > 5:
+                    missing_parts.append(f"You have {list_count} lists but free only allows 5")
+                if memory_count and memory_count > 5:
+                    missing_parts.append(f"You have {memory_count} memories but free only allows 5")
+
+                if missing_parts:
+                    missing_line = "\n\n" + missing_parts[0] + "."
+                else:
+                    missing_line = "\n\nOn the free plan, you're limited to 2 reminders/day."
+
+                message = f"""{greeting} It's been 2 weeks since your trial ended.{missing_line}
+
+Text UPGRADE to get unlimited access back — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr."""
+
+                send_sms(phone_number, message)
+                create_or_update_user(phone_number, post_trial_14d_sent=True)
+
+                messages_sent += 1
+                logger.info(f"Sent 14-day post-trial touchpoint to ...{phone_number[-4:]}")
+
+            except Exception as e:
+                logger.error(f"Failed to send 14-day touchpoint to ...{phone_number[-4:]}: {e}")
+                continue
+
+        logger.info(f"14-day post-trial touchpoint complete: {messages_sent} sent")
+        return {"messages_sent": messages_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_14d_post_trial_touchpoint")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
 # 30-DAY WIN-BACK MESSAGE
 # =====================================================
 

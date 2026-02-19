@@ -80,6 +80,14 @@ beat_schedule = {
             "expires": 3600,  # 1 hour expiry
         },
     },
+    # Send 14-day post-trial touchpoint daily at 11:45 AM UTC
+    "send-14d-post-trial-touchpoint": {
+        "task": "tasks.reminder_tasks.send_14d_post_trial_touchpoint",
+        "schedule": crontab(hour=11, minute=45),  # 11:45 AM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
     # Send 30-day win-back daily at 12 PM UTC
     "send-30d-winback": {
         "task": "tasks.reminder_tasks.send_30d_winback",
