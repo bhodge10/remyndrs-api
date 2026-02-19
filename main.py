@@ -2271,7 +2271,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         if incoming_msg.upper() in ["UPGRADE", "SUBSCRIBE", "PREMIUM", "PRICING"]:
             from services.stripe_service import get_upgrade_message, get_user_subscription, create_checkout_session
-            from config import STRIPE_ENABLED, APP_BASE_URL
+            from config import STRIPE_ENABLED, APP_BASE_URL, PREMIUM_MONTHLY_PRICE
 
             subscription = get_user_subscription(phone_number)
 
@@ -2282,13 +2282,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 log_interaction(phone_number, incoming_msg, "Already subscribed", "upgrade_already_premium", True)
                 return Response(content=str(resp), media_type="application/xml")
 
-            # User selected Premium - create checkout link
-            if incoming_msg.upper() == "PREMIUM" and STRIPE_ENABLED:
+            # One-step upgrade: go straight to checkout link
+            if STRIPE_ENABLED:
                 result = create_checkout_session(phone_number, 'premium', 'monthly')
 
                 if 'url' in result:
                     resp = MessagingResponse()
-                    resp.message(f"Great choice! Complete your Premium subscription here:\n\n{result['url']}\n\nThis link expires in 24 hours.")
+                    resp.message(f"Remyndrs Premium — {PREMIUM_MONTHLY_PRICE}/month\nUnlimited reminders, lists & memories. Cancel anytime.\n\nComplete your upgrade here:\n{result['url']}\n\nThis link expires in 24 hours.")
                     log_interaction(phone_number, incoming_msg, "Checkout link sent for premium", "upgrade_premium_checkout", True)
                 else:
                     resp = MessagingResponse()
@@ -2296,7 +2296,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     log_interaction(phone_number, incoming_msg, "Checkout fallback", "upgrade_premium_fallback", True)
                 return Response(content=str(resp), media_type="application/xml")
             else:
-                # Show pricing info
+                # Stripe not enabled - show pricing info
                 upgrade_msg = get_upgrade_message(phone_number)
                 resp = MessagingResponse()
                 resp.message(upgrade_msg)

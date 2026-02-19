@@ -630,13 +630,13 @@ def format_memory_limit_message(phone_number: str) -> str:
     limits = get_tier_limits(tier)
     memory_limit = limits['max_memories']
 
-    # WHY
-    message = f"You've reached your limit ({memory_limit} memories on Free plan).\n\n"
+    # WHAT + WHY
+    message = f"I wasn't able to save that — you've hit your limit of {memory_limit} memories on the Free plan.\n\n"
 
     # HOW - provide two clear options
     message += "To save more:\n"
-    message += "• Delete old memories (text MEMORIES to see them)\n"
-    message += "• Text UPGRADE for unlimited memories"
+    message += "• Text UPGRADE for unlimited memories\n"
+    message += "• Or delete old ones (text MEMORIES to see them)"
 
     # Check if user had a trial
     trial_info = get_trial_info(phone_number)
