@@ -527,6 +527,8 @@ def init_db():
             # Lifecycle nudges (roundtable Phase 4)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS day_3_nudge_sent BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS post_trial_reengagement_sent BOOLEAN DEFAULT FALSE",
+            # 30-day win-back (roundtable 2, Phase 3)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS winback_30d_sent BOOLEAN DEFAULT FALSE",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

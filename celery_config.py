@@ -80,6 +80,14 @@ beat_schedule = {
             "expires": 3600,  # 1 hour expiry
         },
     },
+    # Send 30-day win-back daily at 12 PM UTC
+    "send-30d-winback": {
+        "task": "tasks.reminder_tasks.send_30d_winback",
+        "schedule": crontab(hour=12, minute=0),  # 12:00 PM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
 
     # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)

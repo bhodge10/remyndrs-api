@@ -163,6 +163,7 @@ TIER_FAMILY = 'family'
 # Free trial configuration
 FREE_TRIAL_DAYS = 14  # New users get 14-day Premium trial
 PREMIUM_MONTHLY_PRICE = "$6.99"
+PREMIUM_ANNUAL_PRICE = "$89.99"
 
 # Pricing (in cents for Stripe)
 PRICING = {
