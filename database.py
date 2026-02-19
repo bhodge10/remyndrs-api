@@ -40,9 +40,13 @@ def get_db_connection():
 
 
 def return_db_connection(conn):
-    """Return a connection to the pool"""
+    """Return a connection to the pool, rolling back any aborted transaction first"""
     global _connection_pool
     if _connection_pool and conn:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         _connection_pool.putconn(conn)
 
 
