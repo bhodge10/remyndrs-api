@@ -162,13 +162,14 @@ TIER_FAMILY = 'family'
 
 # Free trial configuration
 FREE_TRIAL_DAYS = 14  # New users get 14-day Premium trial
-PREMIUM_MONTHLY_PRICE = "$6.99"
+PREMIUM_MONTHLY_PRICE = "$8.99"
+PREMIUM_ANNUAL_PRICE = "$89.99"
 
 # Pricing (in cents for Stripe)
 PRICING = {
     TIER_PREMIUM: {
-        'monthly': 699,           # $6.99/month
-        'annual': 7689,           # $76.89/year (1 month free)
+        'monthly': 899,           # $8.99/month
+        'annual': 8999,           # $89.99/year (~$7.50/mo, save $18)
     },
     TIER_FAMILY: {
         'monthly': 1499,          # $14.99/month (base, 4 members)

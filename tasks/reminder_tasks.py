@@ -137,7 +137,7 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
                 "Friendly reminder",
             ]
             opener = random.choice(openers)
-            message = f"{opener} — {reminder_text}\n\n(Reply SNOOZE to snooze)"
+            message = f"{opener} — {reminder_text}\n\n(Reply SNOOZE to snooze 15 min)"
 
             # Send SMS via Twilio
             send_sms(phone_number, message)
@@ -831,11 +831,13 @@ Text UPGRADE now to keep unlimited reminders for {PREMIUM_MONTHLY_PRICE}/month."
 
             elif days_remaining <= 0 and not warning_0d_sent:
                 # Trial expired - downgrade message
-                warning_to_send = f"""Your Premium trial has ended. You're now on the free plan (2 reminders/day).
+                warning_to_send = f"""Your Premium trial has ended. You're now on the free plan:
+• 2 reminders/day
+• 5 lists, 5 memories
 
 All your data is safe!
 
-Want unlimited reminders again? Text UPGRADE anytime for {PREMIUM_MONTHLY_PRICE}/month."""
+Want unlimited access back? Text UPGRADE anytime for {PREMIUM_MONTHLY_PRICE}/month."""
                 update_field = 'trial_warning_0d_sent'
 
             # Send warning if needed

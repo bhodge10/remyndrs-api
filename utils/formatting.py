@@ -7,14 +7,28 @@ def get_help_text():
     """Return help guide for users"""
     return """REMYNDRS HELP
 
-Reminders, lists & memories - just text naturally!
+Just text naturally! Here's what I can do:
 
-Examples:
+Set reminders:
 • "Remind me at 3pm to call mom"
+• "Remind me every Monday at 9am to submit timesheet"
+
+Lists & memories:
 • "Add milk to my grocery list"
 • "Remember my WiFi is ABC123"
 
-Text STATUS for your plan info.
+Manage your stuff:
+• MY REMINDERS — see upcoming reminders
+• MEMORIES — see saved memories
+• MY LISTS — see your lists
+• SNOOZE — snooze a reminder (15 min default)
+• UNDO — undo your last action
+
+Account:
+• STATUS — your plan & usage
+• UPGRADE — go Premium
+• SUMMARY ON/OFF — daily summary
+
 Full guide: remyndrs.com/commands"""
 
 def get_onboarding_prompt(step):

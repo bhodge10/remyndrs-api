@@ -2107,7 +2107,7 @@ async def cs_get_canned_responses(user: str = Depends(verify_cs_auth)):
             defaults = [
                 ('Greeting', "Hi! Thanks for reaching out to Remyndrs support. How can I help you today?", 'general'),
                 ('Commands Help', "Here are some useful commands:\n- REMIND [text] AT [time] - Set a reminder\n- LIST [name] - Create/view a list\n- REMEMBER [text] - Save a memory\n- RECALL [topic] - Search memories\n- ? - Full help menu", 'general'),
-                ('Upgrade Info', "Remyndrs Premium ($6.99/month) gives you unlimited reminders, recurring reminders, 20 lists, and priority support. Text UPGRADE to get started!", 'billing'),
+                ('Upgrade Info', "Remyndrs Premium ($8.99/month) gives you unlimited reminders, recurring reminders, 20 lists, and priority support. Text UPGRADE to get started!", 'billing'),
                 ('Billing Help', "To manage your subscription, text ACCOUNT to get a link to your billing portal where you can update payment info, change plans, or cancel.", 'billing'),
                 ('Bug Acknowledged', "Thanks for reporting this! I've logged the bug and our team will investigate. We'll update you once it's fixed.", 'bug'),
                 ('Feature Request', "Great suggestion! I've passed this along to our development team. We're always looking for ways to improve Remyndrs.", 'feedback'),

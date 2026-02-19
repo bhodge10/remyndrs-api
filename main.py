@@ -2428,7 +2428,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             # Tier comparison for free users (not on trial)
             if tier == 'free' and not trial_info['is_trial']:
-                from config import get_tier_limits
+                from config import get_tier_limits, PREMIUM_MONTHLY_PRICE as _price
                 premium_limits = get_tier_limits('premium')
                 free_limits = get_tier_limits('free')
 
@@ -2438,7 +2438,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 status_lines.append(f"• {premium_limits['max_items_per_list']} items per list (you: {free_limits['max_items_per_list']})")
                 status_lines.append(f"• Unlimited memories (you: {free_limits['max_memories']})")
                 status_lines.append(f"• Recurring reminders")
-                status_lines.append(f"\nOnly $6.99/month - Text UPGRADE")
+                status_lines.append(f"\nOnly {_price}/month - Text UPGRADE")
 
             # Quick actions
             status_lines.append(f"\nQuick Actions:")
