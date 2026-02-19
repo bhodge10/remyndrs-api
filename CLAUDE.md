@@ -257,3 +257,13 @@ When a user created a monthly or weekly recurring reminder without specifying th
 
 ### Desktop Signup Flow (Feb 2026)
 Added `POST /api/signup` endpoint for desktop visitors. Phone validation, E.164 formatting, sends welcome SMS. Frontend form on remyndrs.com with responsive design. Uses CORSMiddleware.
+
+### Memory Upsert — Duplicate Detection (Feb 2026)
+`save_memory()` in `models/memory.py` now detects duplicate memories before inserting. Uses Jaccard keyword similarity (stop words filtered, 60% threshold) to find existing memories with high overlap. If a match is found, the existing memory is updated in place (text, parsed_data, and created_at refreshed) instead of creating a duplicate row. `save_memory()` returns `bool` — `True` if updated, `False` if new insert. Both call sites (`main.py` ~line 3575, `routes/handlers/memories.py` ~line 40) show "Updated: ..." vs "Got it! Saved: ..." accordingly.
+
+**Key details:**
+- `_extract_keywords()` strips stop words and short tokens, returns set of meaningful words
+- `_memory_similarity()` computes Jaccard similarity (intersection / union of keyword sets)
+- `_find_similar_memory()` scans all user memories, returns ID of best match above threshold
+- Threshold `_SIMILARITY_THRESHOLD = 0.6` — catches "WiFi password is ABC" → "WiFi password is XYZ" but not "Mom's birthday" vs "Dad's birthday"
+- Encryption-aware: uses `phone_hash` lookup with plaintext fallback, same as other memory functions
