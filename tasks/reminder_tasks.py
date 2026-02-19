@@ -995,3 +995,192 @@ def send_mid_trial_value_reminders(self):
     finally:
         if conn:
             return_db_connection(conn)
+
+
+# =====================================================
+# DAY 3 ENGAGEMENT NUDGE
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def send_day_3_engagement_nudges(self):
+    """
+    Send engagement nudge on Day 3 of trial to encourage feature discovery.
+    Targets users who signed up ~3 days ago and haven't been very active.
+
+    Runs daily via Celery Beat.
+    Only sends once per user (tracks with day_3_nudge_sent flag).
+    """
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+    from models.user import create_or_update_user
+
+    logger.info("Starting Day 3 engagement nudge check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        # Find users on Day 3 of trial (11 days remaining = 3 days since signup for 14-day trial)
+        # trial_end_date - 11 days = Day 3 of trial
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date > %s
+              AND onboarding_complete = TRUE
+              AND (day_3_nudge_sent IS NULL OR day_3_nudge_sent = FALSE)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for Day 3 nudge")
+            return {"nudges_sent": 0}
+
+        nudges_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date = user
+
+            # Calculate days since signup (trial is 14 days, so days_in = 14 - days_remaining)
+            time_remaining = trial_end_date - now_utc
+            days_remaining = time_remaining.days
+            days_in_trial = 14 - days_remaining
+
+            # Only send on Day 3
+            if days_in_trial != 3:
+                continue
+
+            try:
+                greeting = f"Hey {first_name}!" if first_name else "Hey there!"
+
+                message = f"""{greeting} You've been on Remyndrs for 3 days now.
+
+Have you tried these yet?
+• Save a memory: "Remember my WiFi is ABC123"
+• Create a list: "Start a grocery list"
+• Set a recurring reminder: "Remind me every Monday at 9am to submit my timesheet"
+
+Just text me naturally — I'll figure out what you need!"""
+
+                send_sms(phone_number, message)
+                create_or_update_user(phone_number, day_3_nudge_sent=True)
+
+                nudges_sent += 1
+                logger.info(f"Sent Day 3 nudge to ...{phone_number[-4:]}")
+
+            except Exception as e:
+                logger.error(f"Failed to send Day 3 nudge to ...{phone_number[-4:]}: {e}")
+                continue
+
+        logger.info(f"Day 3 engagement nudges complete: {nudges_sent} sent")
+        return {"nudges_sent": nudges_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_day_3_engagement_nudges")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# POST-TRIAL RE-ENGAGEMENT
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def send_post_trial_reengagement(self):
+    """
+    Send re-engagement message 3 days after trial expires.
+    Targets users who were downgraded to free but haven't upgraded.
+
+    Runs daily via Celery Beat.
+    Only sends once per user (tracks with post_trial_reengagement_sent flag).
+    """
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+    from models.user import create_or_update_user
+    from config import PREMIUM_MONTHLY_PRICE
+
+    logger.info("Starting post-trial re-engagement check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        # Find users whose trial ended 3 days ago and haven't upgraded
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date < %s
+              AND onboarding_complete = TRUE
+              AND premium_status = 'free'
+              AND (post_trial_reengagement_sent IS NULL OR post_trial_reengagement_sent = FALSE)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for post-trial re-engagement")
+            return {"messages_sent": 0}
+
+        messages_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date = user
+
+            # Calculate days since trial ended
+            days_since_expiry = (now_utc - trial_end_date).days
+
+            # Only send on Day 3 after expiration
+            if days_since_expiry != 3:
+                continue
+
+            try:
+                greeting = f"Hi {first_name}!" if first_name else "Hi there!"
+
+                message = f"""{greeting} Your Remyndrs data is still here and safe.
+
+You're on the free plan (2 reminders/day). Want unlimited reminders, lists & memories back?
+
+Text UPGRADE for Premium at {PREMIUM_MONTHLY_PRICE}/month — pick up right where you left off."""
+
+                send_sms(phone_number, message)
+                create_or_update_user(phone_number, post_trial_reengagement_sent=True)
+
+                messages_sent += 1
+                logger.info(f"Sent post-trial re-engagement to ...{phone_number[-4:]}")
+
+            except Exception as e:
+                logger.error(f"Failed to send post-trial re-engagement to ...{phone_number[-4:]}: {e}")
+                continue
+
+        logger.info(f"Post-trial re-engagement complete: {messages_sent} sent")
+        return {"messages_sent": messages_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_post_trial_reengagement")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)

@@ -64,6 +64,22 @@ beat_schedule = {
             "expires": 3600,  # 1 hour expiry
         },
     },
+    # Send Day 3 engagement nudges daily at 11 AM UTC
+    "send-day-3-engagement-nudges": {
+        "task": "tasks.reminder_tasks.send_day_3_engagement_nudges",
+        "schedule": crontab(hour=11, minute=0),  # 11:00 AM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
+    # Send post-trial re-engagement daily at 11:30 AM UTC
+    "send-post-trial-reengagement": {
+        "task": "tasks.reminder_tasks.send_post_trial_reengagement",
+        "schedule": crontab(hour=11, minute=30),  # 11:30 AM UTC daily
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
 
     # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)

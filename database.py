@@ -524,6 +524,9 @@ def init_db():
             # Broadcast system improvements
             "ALTER TABLE scheduled_broadcasts ADD COLUMN IF NOT EXISTS target_phone TEXT",
             "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'immediate'",
+            # Lifecycle nudges (roundtable Phase 4)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS day_3_nudge_sent BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS post_trial_reengagement_sent BOOLEAN DEFAULT FALSE",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
