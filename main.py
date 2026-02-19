@@ -4975,14 +4975,14 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             log_interaction(phone_number, incoming_msg, reply_text, "delete_memory", True)
 
         else:  # help or error
-            reply_text = ai_response.get("response", "Hi! Text me to remember things, set reminders, or ask me about stored info.")
+            reply_text = ai_response.get("response", "I'm not sure what you mean. You can ask me to set a reminder, save a memory, or manage a list — just text naturally!")
             log_interaction(phone_number, incoming_msg, reply_text, "help", True)
 
         return reply_text
 
     except Exception as e:
         logger.error(f"Error processing action: {e}", exc_info=True)
-        return "Sorry, I couldn't complete that action."
+        return "Hmm, something went wrong with that. Could you try rephrasing? For example: 'Remind me at 3pm to call mom' or 'Remember my WiFi is ABC123'."
 
 
 # =====================================================

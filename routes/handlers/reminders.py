@@ -251,7 +251,13 @@ def handle_reminder(
 
         time_str = naive_dt.strftime('%I:%M %p').lstrip('0')
         date_str = naive_dt.strftime('%A, %B %d, %Y')
-        reply_text = f"Got it! I'll remind you on {date_str} at {time_str} {format_reminder_confirmation(reminder_text)}."
+        import random
+        confirmations = [
+            f"Got it! I'll remind you on {date_str} at {time_str} {format_reminder_confirmation(reminder_text)}.",
+            f"You're all set! Reminder for {date_str} at {time_str} {format_reminder_confirmation(reminder_text)}.",
+            f"Done! I'll ping you on {date_str} at {time_str} {format_reminder_confirmation(reminder_text)}.",
+        ]
+        reply_text = random.choice(confirmations)
 
     except Exception as e:
         logger.error(f"Error converting reminder time to UTC: {e}")

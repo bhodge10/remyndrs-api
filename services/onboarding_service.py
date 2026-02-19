@@ -4,6 +4,7 @@ Handles new user onboarding flow
 """
 
 import re
+import pytz
 from datetime import datetime, timedelta
 from fastapi.responses import Response
 from twilio.twiml.messaging_response import MessagingResponse
@@ -327,8 +328,15 @@ Email for account recovery?
             first_memory = f"Signed up for Remyndrs on {signup_date}"
             save_memory(phone_number, first_memory, {"type": "signup", "auto_created": True})
 
-            # Send completion message - focused on immediate value
+            # Format trial end date in user's timezone
+            user_tz = pytz.timezone(timezone)
+            trial_end_local = trial_end_date.replace(tzinfo=pytz.UTC).astimezone(user_tz)
+            trial_end_str = trial_end_local.strftime('%B %d')
+
+            # Send completion message - focused on immediate value + trial awareness
             resp.message(f"""Perfect! You're all set, {first_name}! 🎉
+
+You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories.
 
 I just saved your first memory: "{first_memory}"
 

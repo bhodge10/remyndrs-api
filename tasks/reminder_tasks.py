@@ -128,8 +128,16 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
         try:
             logger.info(f"Sending reminder {reminder_id} to {phone_number}")
 
-            # Format message with snooze option
-            message = f"Reminder: {reminder_text}\n\n(Reply SNOOZE to snooze)"
+            # Format message with friendly opener and snooze option
+            import random
+            openers = [
+                "Hey, just a heads up",
+                "Quick reminder",
+                "Don't forget",
+                "Friendly reminder",
+            ]
+            opener = random.choice(openers)
+            message = f"{opener} — {reminder_text}\n\n(Reply SNOOZE to snooze)"
 
             # Send SMS via Twilio
             send_sms(phone_number, message)
