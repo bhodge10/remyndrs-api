@@ -790,6 +790,8 @@ def check_trial_expirations(self):
             WHERE trial_end_date IS NOT NULL
               AND trial_end_date > %s - INTERVAL '8 days'
               AND onboarding_complete = TRUE
+              AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
         """, (now_utc,))
 
         users = c.fetchall()
@@ -877,7 +879,9 @@ Text UPGRADE now — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7
                 update_field = 'trial_warning_1d_sent'
 
             elif days_remaining <= 0 and not warning_0d_sent:
-                # Trial expired - downgrade message
+                # Trial expired - downgrade to free and send message
+                create_or_update_user(phone_number, premium_status='free')
+
                 warning_to_send = f"""Your Premium trial has ended. You're now on the free plan:
 • 2 reminders/day
 • 5 lists, 5 memories
@@ -955,6 +959,7 @@ def send_mid_trial_value_reminders(self):
               AND onboarding_complete = TRUE
               AND (mid_trial_reminder_sent IS NULL OR mid_trial_reminder_sent = FALSE)
               AND (trial_warning_7d_sent IS NULL OR trial_warning_7d_sent = FALSE)
+              AND (opted_out IS NULL OR opted_out = FALSE)
         """, (now_utc, now_utc))
 
         users = c.fetchall()

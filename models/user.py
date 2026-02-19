@@ -29,6 +29,13 @@ ALLOWED_USER_FIELDS = {
     'trial_info_sent',
     'pending_delete_account',
     'pending_cancellation_feedback',
+    # Trial lifecycle flags
+    'trial_warning_7d_sent', 'trial_warning_1d_sent', 'trial_warning_0d_sent',
+    'mid_trial_reminder_sent',
+    'day_3_nudge_sent',
+    'post_trial_reengagement_sent',
+    'post_trial_14d_sent',
+    'winback_30d_sent',
 }
 
 
