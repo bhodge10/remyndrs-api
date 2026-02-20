@@ -17,7 +17,7 @@ from twilio.request_validator import RequestValidator
 
 # Local imports
 import secrets
-from config import logger, ENVIRONMENT, MAX_LISTS_PER_USER, MAX_ITEMS_PER_LIST, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, PUBLIC_PHONE_NUMBER, ADMIN_USERNAME, ADMIN_PASSWORD, RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW, REQUEST_TIMEOUT
+from config import logger, ENVIRONMENT, MAX_LISTS_PER_USER, MAX_ITEMS_PER_LIST, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, PUBLIC_PHONE_NUMBER, ADMIN_USERNAME, ADMIN_PASSWORD, RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW, REQUEST_TIMEOUT, TWILIO_WEBHOOK_TIMEOUT
 from collections import defaultdict
 import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -65,6 +65,33 @@ def staging_prefix(message):
     if ENVIRONMENT == "staging":
         return f"[STAGING] {message}"
     return message
+
+
+def twiml_or_sms_fallback(phone_number, reply_text, request_start_time):
+    """
+    Return a TwiML response if within Twilio's webhook timeout window.
+    If processing took too long, send via direct SMS instead and return empty TwiML.
+    This ensures users always get a reply even if Twilio times out waiting for the webhook.
+    """
+    elapsed = time.time() - request_start_time
+    resp = MessagingResponse()
+
+    if elapsed > TWILIO_WEBHOOK_TIMEOUT:
+        # Twilio has likely already timed out — send reply via direct SMS
+        try:
+            send_sms(phone_number, staging_prefix(reply_text))
+            logger.warning(f"Webhook took {elapsed:.1f}s (>{TWILIO_WEBHOOK_TIMEOUT}s) — sent reply via direct SMS to ...{phone_number[-4:]}")
+        except Exception as sms_err:
+            logger.error(f"SMS fallback also failed after {elapsed:.1f}s: {sms_err}")
+            # Last resort: still include in TwiML in case Twilio is still listening
+            resp.message(staging_prefix(reply_text))
+    else:
+        # Normal path — TwiML response within timeout
+        resp.message(staging_prefix(reply_text))
+        if elapsed > 10:
+            logger.info(f"Webhook response took {elapsed:.1f}s (close to timeout) for ...{phone_number[-4:]}")
+
+    return Response(content=str(resp), media_type="application/xml")
 
 
 # Snooze duration parser
@@ -351,6 +378,7 @@ logger.info(f"✅ Application initialized in {ENVIRONMENT} mode")
 @app.post("/sms")
 async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(...)):
     """Handle incoming SMS from Twilio"""
+    request_start_time = time.time()
     try:
         # Validate Twilio signature (skip in development and staging)
         # Note: Staging skips validation because fallback requests have signatures
@@ -3695,19 +3723,16 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if is_question_command:
             reply_text += "\n\nNeed more help? Text SUPPORT followed by your message to chat with a real person."
 
-        # Send response
-        resp = MessagingResponse()
-        resp.message(staging_prefix(reply_text))
-        return Response(content=str(resp), media_type="application/xml")
+        # Send response (with SMS fallback if processing took too long)
+        return twiml_or_sms_fallback(phone_number, reply_text, request_start_time)
 
     except HTTPException:
         # Re-raise HTTPException (e.g., for staging fallback 503)
         raise
     except Exception as e:
         logger.error(f"❌ CRITICAL ERROR in webhook: {e}", exc_info=True)
-        resp = MessagingResponse()
-        resp.message(staging_prefix("Sorry, something went wrong. Please try again in a moment."))
-        return Response(content=str(resp), media_type="application/xml")
+        error_msg = "Sorry, something went wrong. Please try again in a moment."
+        return twiml_or_sms_fallback(phone_number, error_msg, request_start_time)
 
 
 def process_single_action(ai_response, phone_number, incoming_msg):

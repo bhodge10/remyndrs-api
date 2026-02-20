@@ -98,6 +98,7 @@ MAX_MESSAGE_LENGTH = 500
 # Request Timeout Configuration (in seconds)
 OPENAI_TIMEOUT = 12  # OpenAI API call timeout (must be < Twilio's 15s webhook timeout)
 REQUEST_TIMEOUT = 60  # Overall request timeout
+TWILIO_WEBHOOK_TIMEOUT = 14  # If processing exceeds this, send reply via direct SMS instead of TwiML
 
 # Encryption Configuration
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")

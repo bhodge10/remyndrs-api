@@ -9,6 +9,17 @@ from celery.schedules import crontab
 # Beat schedule - periodic tasks
 beat_schedule = {
     # ===========================================
+    # KEEP-WARM PING
+    # ===========================================
+    "keep-web-service-warm": {
+        "task": "tasks.reminder_tasks.keep_web_service_warm",
+        "schedule": timedelta(minutes=5),
+        "options": {
+            "expires": 240,  # 4 minute expiry
+        },
+    },
+
+    # ===========================================
     # REMINDER TASKS
     # ===========================================
 

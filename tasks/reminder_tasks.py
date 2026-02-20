@@ -3,6 +3,8 @@ Celery Tasks for SMS Reminder Processing
 Implements atomic reminder claiming with SELECT FOR UPDATE SKIP LOCKED.
 """
 
+import os
+import urllib.request
 from celery import shared_task
 from celery.utils.log import get_task_logger
 from psycopg2 import sql
@@ -1558,3 +1560,24 @@ Or just text me anything to keep using the free plan!"""
     finally:
         if conn:
             return_db_connection(conn)
+
+
+@celery_app.task(time_limit=15, soft_time_limit=10)
+def keep_web_service_warm():
+    """
+    Ping the web service health check endpoint to keep DB connections warm
+    and prevent idle timeouts. Runs every 5 minutes via Celery Beat.
+    """
+    api_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not api_url:
+        return {"skipped": True, "reason": "RENDER_EXTERNAL_URL not set"}
+
+    try:
+        req = urllib.request.Request(f"{api_url}/", method="GET")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+        logger.info(f"Keep-warm ping: {api_url}/ -> {status}")
+        return {"status": status}
+    except Exception as e:
+        logger.warning(f"Keep-warm ping failed: {e}")
+        return {"error": str(e)}
