@@ -1,6 +1,6 @@
 # Website UX Improvement Roadmap (remyndrs.com)
 
-**Overall Grade: A- (88/100)** - Updated Feb 9, 2026 after backend alignment
+**Overall Grade: A- (88/100)** - Updated Feb 19, 2026 after mobile optimization pass
 
 **🚀 LAUNCH READY** - Website-to-SMS flow fully aligned
 
@@ -69,7 +69,7 @@ Users receive SMS notifications on day 7, day 1, and day 0 explaining:
 
 8. **Rewrite Feature Benefits** - DONE (Feb 2026). Vague features replaced with outcome-focused copy and concrete usage examples.
 9. **Create Demo Video** - 30 seconds showing text -> confirmation -> reminder delivery
-10. **Mobile Optimization Pass** - Hamburger nav consistency fixed across all subpages (Feb 2026). Further device testing, tap targets, animation fixes remain.
+10. **Mobile Optimization Pass** - DONE (Feb 2026). Hamburger tap targets enlarged to 44x44px minimum (all 5 pages). Conversation popup width responsive on 320px screens. Footer/inline contact buttons enlarged for tap targets. SMS disclaimer font bumped to 13px on mobile. Animation performance hints (will-change) added. Nav link tap targets widened with horizontal padding. Hamburger aria-controls added for accessibility.
 
 ### PHASE 4: Testing & Iteration (Ongoing)
 
