@@ -1208,8 +1208,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # Also skip if there's a pending_reminder_delete (delete confirmation) - let that handler deal with cancel
         pending_reminder_del = get_pending_reminder_delete(phone_number)
         has_pending_delete_confirm = pending_reminder_del is not None
-        # Also skip if there's a pending_reminder_time (clarify_time flow) - let that handler deal with cancel
-        has_pending_time_clarify = user_for_undo and len(user_for_undo) > 11 and user_for_undo[11] and user_for_undo[11] != "NEEDS_TIME"
+        # Also skip if there's a pending_reminder_time (clarify_time or NEEDS_TIME flow) - let that handler deal with cancel
+        has_pending_time_clarify = user_for_undo and len(user_for_undo) > 11 and user_for_undo[11]
 
         if is_undo_command and not has_pending_add and not has_pending_delete_confirm and not has_pending_time_clarify:
             # First check if there's a pending confirmation to cancel
@@ -1405,7 +1405,17 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # VAGUE TIME FOLLOW-UP (clarify_specific_time flow)
         # ==========================================
         # Check if pending_reminder_time is "NEEDS_TIME" (from vague time like "in a bit")
-        if user and len(user) > 11 and user[10] and user[11] == "NEEDS_TIME" and not is_new_reminder_request:
+        # Also detect clear new-intent signals (memory, list commands) that should auto-cancel the pending time
+        is_new_intent = bool(re.search(
+            r'\b(remember\b|add to\b|my lists?\b|my reminders?\b|help\b|status\b|upgrade\b|memories\b|summary\b)',
+            incoming_msg, re.IGNORECASE
+        ))
+        # If user has NEEDS_TIME but sends a clear new intent, auto-cancel the pending reminder
+        if user and len(user) > 11 and user[10] and user[11] == "NEEDS_TIME" and (is_new_reminder_request or is_new_intent):
+            create_or_update_user(phone_number, pending_reminder_text=None, pending_reminder_time=None)
+            logger.info(f"Auto-cancelled NEEDS_TIME pending state for {mask_phone_number(phone_number)} — new intent detected")
+
+        if user and len(user) > 11 and user[10] and user[11] == "NEEDS_TIME" and not is_new_reminder_request and not is_new_intent:
             pending_text = user[10]
 
             # Check for simple time like "3p", "3pm", "at 3pm", "8am"
