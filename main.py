@@ -5565,7 +5565,7 @@ async def admin_stats(admin: str = Depends(verify_admin)):
         },
         "top_users": [
             {
-                "phone_number": user[0],
+                "phone_number": f"***-***-{user[0][-4:]}" if user[0] and len(user[0]) >= 4 else "***",
                 "interactions": user[1]
             } for user in top_users
         ],

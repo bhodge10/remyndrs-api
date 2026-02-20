@@ -379,7 +379,7 @@ def get_cost_analytics():
 
             # Get SMS costs by plan (count messages from logs table)
             # Each log entry = 1 inbound + 1 outbound message
-            c.execute(f'''
+            c.execute('''
                 SELECT
                     CASE
                         WHEN u.trial_end_date > NOW() AND u.premium_status IN ('premium', 'family')
@@ -389,13 +389,13 @@ def get_cost_analytics():
                     COUNT(*) as message_count
                 FROM logs l
                 JOIN users u ON l.phone_number = u.phone_number
-                WHERE l.created_at >= NOW() - INTERVAL '{interval}'
+                WHERE l.created_at >= NOW() - %s::interval
                 GROUP BY 1
-            ''')
+            ''', (interval,))
             sms_by_plan = {row[0]: row[1] for row in c.fetchall()}
 
             # Get AI costs by plan (from api_usage table)
-            c.execute(f'''
+            c.execute('''
                 SELECT
                     CASE
                         WHEN u.trial_end_date > NOW() AND u.premium_status IN ('premium', 'family')
@@ -406,9 +406,9 @@ def get_cost_analytics():
                     SUM(a.completion_tokens) as completion_tokens
                 FROM api_usage a
                 JOIN users u ON a.phone_number = u.phone_number
-                WHERE a.created_at >= NOW() - INTERVAL '{interval}'
+                WHERE a.created_at >= NOW() - %s::interval
                 GROUP BY 1
-            ''')
+            ''', (interval,))
             ai_by_plan = {row[0]: {'prompt': row[1] or 0, 'completion': row[2] or 0} for row in c.fetchall()}
 
             # Calculate costs for each plan tier (including trial)

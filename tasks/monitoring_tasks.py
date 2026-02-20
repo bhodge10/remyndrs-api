@@ -47,6 +47,8 @@ def send_alerts_if_needed(health: dict, regressions: list, critical_issues: list
     max_retries=2,
     default_retry_delay=300,
     acks_late=True,
+    time_limit=3600,
+    soft_time_limit=3300,
 )
 def run_monitoring_pipeline(self, hours: int = 24, use_ai: bool = True, save_snapshot: bool = False):
     """
@@ -147,6 +149,8 @@ def run_monitoring_pipeline(self, hours: int = 24, use_ai: bool = True, save_sna
     max_retries=2,
     default_retry_delay=60,
     acks_late=True,
+    time_limit=1800,
+    soft_time_limit=1700,
 )
 def run_interaction_monitor(self, hours: int = 6):
     """
@@ -179,6 +183,8 @@ def run_interaction_monitor(self, hours: int = 6):
     max_retries=2,
     default_retry_delay=60,
     acks_late=True,
+    time_limit=1800,
+    soft_time_limit=1700,
 )
 def run_issue_validator(self, limit: int = 50, use_ai: bool = False):
     """
@@ -212,6 +218,8 @@ def run_issue_validator(self, limit: int = 50, use_ai: bool = False):
     bind=True,
     max_retries=1,
     acks_late=True,
+    time_limit=600,
+    soft_time_limit=540,
 )
 def save_daily_health_snapshot(self):
     """
@@ -244,6 +252,8 @@ def save_daily_health_snapshot(self):
     bind=True,
     max_retries=1,
     acks_late=True,
+    time_limit=600,
+    soft_time_limit=540,
 )
 def generate_weekly_health_report(self):
     """
@@ -302,6 +312,8 @@ def generate_weekly_health_report(self):
     max_retries=2,
     default_retry_delay=60,
     acks_late=True,
+    time_limit=1800,
+    soft_time_limit=1700,
 )
 def run_code_analyzer(self, use_ai: bool = True):
     """
@@ -341,6 +353,8 @@ def run_code_analyzer(self, use_ai: bool = True):
     bind=True,
     max_retries=1,
     acks_late=True,
+    time_limit=120,
+    soft_time_limit=100,
 )
 def check_critical_issues(self):
     """

@@ -29,6 +29,8 @@ logger = get_task_logger(__name__)
     max_retries=3,
     default_retry_delay=60,
     acks_late=True,
+    time_limit=120,
+    soft_time_limit=100,
 )
 def check_and_send_reminders(self):
     """
@@ -75,6 +77,8 @@ def check_and_send_reminders(self):
     acks_late=True,
     retry_backoff=True,
     retry_backoff_max=300,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_text: str):
     """
@@ -149,42 +153,34 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
             track_reminder_delivery(reminder_id, "failed", str(exc))
             raise self.retry(exc=exc)
 
-        # SMS sent successfully - mark as sent
-        # Release the FOR UPDATE lock first, then use a fresh connection to update
-        # This avoids any connection state issues with the long-held transaction
+        # SMS sent successfully - mark as sent in the SAME transaction
+        # This keeps the FOR UPDATE lock held until both SMS send and flag update
+        # are committed atomically, preventing duplicate sends on mark failure.
         try:
-            conn.commit()  # Release the FOR UPDATE lock
-            logger.info(f"Released lock for reminder {reminder_id}, now marking as sent")
-        except Exception as e:
-            logger.error(f"Failed to release lock for reminder {reminder_id}: {e}")
-
-        # Use a completely fresh connection to mark as sent
-        # This ensures no transaction state issues
-        from database import get_db_connection as get_fresh_conn, return_db_connection as return_fresh_conn
-        mark_conn = None
-        try:
-            mark_conn = get_fresh_conn()
-            mark_cursor = mark_conn.cursor()
-            mark_cursor.execute('UPDATE reminders SET sent = TRUE WHERE id = %s', (reminder_id,))
-            mark_conn.commit()
-
-            # Verify the update actually persisted
-            mark_cursor.execute('SELECT sent FROM reminders WHERE id = %s', (reminder_id,))
-            verify_result = mark_cursor.fetchone()
-            if verify_result and verify_result[0]:
-                logger.info(f"[VERIFIED] Reminder {reminder_id} marked as sent (sent={verify_result[0]})")
-            else:
-                logger.error(f"[VERIFY FAILED] Reminder {reminder_id} sent flag is still {verify_result}")
-                # Try one more time with explicit transaction
-                mark_cursor.execute('BEGIN')
-                mark_cursor.execute('UPDATE reminders SET sent = TRUE WHERE id = %s', (reminder_id,))
-                mark_cursor.execute('COMMIT')
-                logger.info(f"Retried with explicit BEGIN/COMMIT for reminder {reminder_id}")
+            c.execute('UPDATE reminders SET sent = TRUE WHERE id = %s', (reminder_id,))
+            conn.commit()  # Atomic: releases lock AND marks sent in one commit
+            logger.info(f"[VERIFIED] Reminder {reminder_id} marked as sent and lock released")
         except Exception as e:
             logger.exception(f"Failed to mark reminder {reminder_id} as sent: {e}")
-        finally:
-            if mark_conn:
-                return_fresh_conn(mark_conn)
+            # SMS was already sent — do NOT retry the task (would duplicate SMS).
+            # Try to commit on a fresh connection as a last resort.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            from database import get_db_connection as get_fresh_conn, return_db_connection as return_fresh_conn
+            mark_conn = None
+            try:
+                mark_conn = get_fresh_conn()
+                mark_cursor = mark_conn.cursor()
+                mark_cursor.execute('UPDATE reminders SET sent = TRUE WHERE id = %s', (reminder_id,))
+                mark_conn.commit()
+                logger.info(f"[FALLBACK] Marked reminder {reminder_id} as sent via fresh connection")
+            except Exception as fallback_err:
+                logger.critical(f"[CRITICAL] Reminder {reminder_id} SMS sent but could not mark as sent: {fallback_err}")
+            finally:
+                if mark_conn:
+                    return_fresh_conn(mark_conn)
 
     except Exception as outer_exc:
         # Catch-all for any unexpected errors
@@ -192,7 +188,7 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
         if conn:
             try:
                 conn.rollback()
-            except:
+            except Exception:
                 pass
         raise self.retry(exc=outer_exc)
     finally:
@@ -218,7 +214,7 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
     }
 
 
-@celery_app.task
+@celery_app.task(time_limit=60, soft_time_limit=50)
 def release_stale_claims_task():
     """
     Release reminders that were claimed but not processed.
@@ -236,7 +232,7 @@ def release_stale_claims_task():
         raise
 
 
-@celery_app.task
+@celery_app.task(time_limit=600, soft_time_limit=540)
 def analyze_conversations_task():
     """
     Analyze recent conversations for quality issues.
@@ -371,7 +367,7 @@ def generate_first_occurrence(recurring_id):
         return None
 
 
-@celery_app.task
+@celery_app.task(time_limit=300, soft_time_limit=270)
 def generate_recurring_reminders():
     """
     Generate concrete reminders from recurring patterns.
@@ -469,6 +465,8 @@ def generate_recurring_reminders():
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=120,
+    soft_time_limit=100,
 )
 def send_daily_summaries(self):
     """
@@ -594,6 +592,8 @@ def format_daily_summary(reminders, first_name, date, user_tz):
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def send_abandoned_onboarding_followups(self):
     """
@@ -650,6 +650,8 @@ def send_abandoned_onboarding_followups(self):
     bind=True,
     max_retries=2,
     default_retry_delay=30,
+    time_limit=60,
+    soft_time_limit=50,
 )
 def send_delayed_sms(self, to_number: str, message: str, media_url: str = None):
     """
@@ -669,6 +671,8 @@ def send_delayed_sms(self, to_number: str, message: str, media_url: str = None):
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=120,
+    soft_time_limit=100,
 )
 def send_engagement_nudge(self, phone_number: str):
     """
@@ -752,6 +756,8 @@ def send_engagement_nudge(self, phone_number: str):
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def check_trial_expirations(self):
     """
@@ -858,10 +864,7 @@ After your trial, you'll move to the free plan (2 reminders/day).
 
 Text UPGRADE to keep unlimited reminders — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7.50/mo)."""
                 update_field = 'trial_warning_7d_sent'
-
-                # Also mark mid-trial reminder as sent to prevent duplicate
-                c.execute("UPDATE users SET mid_trial_reminder_sent = TRUE WHERE phone_number = %s", (phone_number,))
-                conn.commit()
+                # mid_trial_reminder_sent will also be marked after SMS succeeds (below)
 
             elif 0 < days_remaining <= 1 and not warning_1d_sent:
                 # 1 day remaining warning — include usage stats
@@ -890,10 +893,7 @@ Text UPGRADE now — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7
                 update_field = 'trial_warning_1d_sent'
 
             elif days_remaining <= 0 and not warning_0d_sent:
-                # Trial expired - downgrade to free and send message
-                c.execute("UPDATE users SET premium_status = 'free' WHERE phone_number = %s", (phone_number,))
-                conn.commit()
-
+                # Trial expired - downgrade to free (committed atomically with flag after SMS succeeds)
                 warning_to_send = f"""Your Premium trial has ended. You're now on the free plan:
 • 2 reminders/day
 • 5 lists, 5 memories
@@ -904,7 +904,8 @@ All your data is safe!
 Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7.50/mo)."""
                 update_field = 'trial_warning_0d_sent'
 
-            # Send warning if needed
+            # Send warning if needed — SMS + flag update are atomic
+            # (flag only committed if SMS succeeds, preventing silent skips)
             if warning_to_send and update_field:
                 try:
                     send_sms(phone_number, warning_to_send)
@@ -912,12 +913,26 @@ Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/mo or {PREM
                     # Mark warning as sent using existing connection (not create_or_update_user
                     # which opens a new connection and silently swallows errors)
                     c.execute(f"UPDATE users SET {update_field} = TRUE WHERE phone_number = %s", (phone_number,))
-                    conn.commit()
+
+                    # Day 7: also mark mid-trial reminder to prevent duplicate from that task
+                    if update_field == 'trial_warning_7d_sent':
+                        c.execute("UPDATE users SET mid_trial_reminder_sent = TRUE WHERE phone_number = %s", (phone_number,))
+
+                    # Day 0: downgrade to free tier now that SMS has been sent
+                    if update_field == 'trial_warning_0d_sent':
+                        c.execute("UPDATE users SET premium_status = 'free' WHERE phone_number = %s", (phone_number,))
+
+                    conn.commit()  # Atomic: flag + any state changes only if SMS succeeded
 
                     warnings_sent += 1
                     logger.info(f"Sent trial warning (day {days_remaining}) to ...{phone_number[-4:]}")
 
                 except Exception as sms_error:
+                    # Rollback any pending DB changes since SMS failed
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                     logger.error(f"Failed to send trial warning to ...{phone_number[-4:]}: {sms_error}")
                     continue
 
@@ -937,6 +952,8 @@ Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/mo or {PREM
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def send_mid_trial_value_reminders(self):
     """
@@ -949,7 +966,6 @@ def send_mid_trial_value_reminders(self):
     import pytz
     from datetime import datetime
     from database import get_db_connection, return_db_connection
-    from models.user import create_or_update_user
     from models.list_model import get_list_count
     from services.tier_service import get_memory_count
 
@@ -1052,16 +1068,19 @@ def send_mid_trial_value_reminders(self):
 
                 message = "\n".join(message_lines)
 
-                # Send the reminder
+                # Send the reminder, then mark flag atomically with existing connection
                 send_sms(phone_number, message)
-
-                # Mark as sent
-                create_or_update_user(phone_number, mid_trial_reminder_sent=True)
+                c.execute("UPDATE users SET mid_trial_reminder_sent = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
 
                 reminders_sent += 1
                 logger.info(f"Sent mid-trial value reminder to ...{phone_number[-4:]}")
 
             except Exception as reminder_error:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.error(f"Failed to send mid-trial reminder to ...{phone_number[-4:]}: {reminder_error}")
                 continue
 
@@ -1085,6 +1104,8 @@ def send_mid_trial_value_reminders(self):
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def send_day_3_engagement_nudges(self):
     """
@@ -1097,7 +1118,6 @@ def send_day_3_engagement_nudges(self):
     import pytz
     from datetime import datetime, timedelta
     from database import get_db_connection, return_db_connection
-    from models.user import create_or_update_user
 
     logger.info("Starting Day 3 engagement nudge check")
 
@@ -1162,12 +1182,17 @@ Have you tried these yet?
 Just text me naturally — I'll figure out what you need!"""
 
                 send_sms(phone_number, message)
-                create_or_update_user(phone_number, day_3_nudge_sent=True)
+                c.execute("UPDATE users SET day_3_nudge_sent = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
 
                 nudges_sent += 1
                 logger.info(f"Sent Day 3 nudge to ...{phone_number[-4:]}")
 
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.error(f"Failed to send Day 3 nudge to ...{phone_number[-4:]}: {e}")
                 continue
 
@@ -1191,6 +1216,8 @@ Just text me naturally — I'll figure out what you need!"""
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def send_post_trial_reengagement(self):
     """
@@ -1203,7 +1230,6 @@ def send_post_trial_reengagement(self):
     import pytz
     from datetime import datetime, timedelta
     from database import get_db_connection, return_db_connection
-    from models.user import create_or_update_user
     from config import PREMIUM_MONTHLY_PRICE
 
     logger.info("Starting post-trial re-engagement check")
@@ -1265,12 +1291,17 @@ You're on the free plan (2 reminders/day). Want unlimited reminders, lists & mem
 Text UPGRADE for Premium at {PREMIUM_MONTHLY_PRICE}/month — pick up right where you left off."""
 
                 send_sms(phone_number, message)
-                create_or_update_user(phone_number, post_trial_reengagement_sent=True)
+                c.execute("UPDATE users SET post_trial_reengagement_sent = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
 
                 messages_sent += 1
                 logger.info(f"Sent post-trial re-engagement to ...{phone_number[-4:]}")
 
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.error(f"Failed to send post-trial re-engagement to ...{phone_number[-4:]}: {e}")
                 continue
 
@@ -1294,6 +1325,8 @@ Text UPGRADE for Premium at {PREMIUM_MONTHLY_PRICE}/month — pick up right wher
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def send_14d_post_trial_touchpoint(self):
     """
@@ -1306,7 +1339,6 @@ def send_14d_post_trial_touchpoint(self):
     import pytz
     from datetime import datetime, timedelta
     from database import get_db_connection, return_db_connection
-    from models.user import create_or_update_user
     from models.list_model import get_list_count
     from services.tier_service import get_memory_count, get_recurring_reminder_count
     from config import PREMIUM_MONTHLY_PRICE, PREMIUM_ANNUAL_PRICE
@@ -1385,12 +1417,17 @@ def send_14d_post_trial_touchpoint(self):
 Text UPGRADE to get unlimited access back — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr."""
 
                 send_sms(phone_number, message)
-                create_or_update_user(phone_number, post_trial_14d_sent=True)
+                c.execute("UPDATE users SET post_trial_14d_sent = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
 
                 messages_sent += 1
                 logger.info(f"Sent 14-day post-trial touchpoint to ...{phone_number[-4:]}")
 
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.error(f"Failed to send 14-day touchpoint to ...{phone_number[-4:]}: {e}")
                 continue
 
@@ -1414,6 +1451,8 @@ Text UPGRADE to get unlimited access back — {PREMIUM_MONTHLY_PRICE}/mo or {PRE
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
 )
 def send_30d_winback(self):
     """
@@ -1426,7 +1465,6 @@ def send_30d_winback(self):
     import pytz
     from datetime import datetime, timedelta
     from database import get_db_connection, return_db_connection
-    from models.user import create_or_update_user
     from config import PREMIUM_MONTHLY_PRICE, PREMIUM_ANNUAL_PRICE
 
     logger.info("Starting 30-day win-back check")
@@ -1486,12 +1524,17 @@ Text UPGRADE to unlock unlimited access — {PREMIUM_MONTHLY_PRICE}/mo or {PREMI
 Or just text me anything to keep using the free plan!"""
 
                 send_sms(phone_number, message)
-                create_or_update_user(phone_number, winback_30d_sent=True)
+                c.execute("UPDATE users SET winback_30d_sent = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
 
                 messages_sent += 1
                 logger.info(f"Sent 30-day win-back to ...{phone_number[-4:]}")
 
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.error(f"Failed to send 30-day win-back to ...{phone_number[-4:]}: {e}")
                 continue
 

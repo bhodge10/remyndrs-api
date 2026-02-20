@@ -100,9 +100,13 @@ def get_monitoring_connection():
 
 
 def return_monitoring_connection(conn):
-    """Return a monitoring connection to the pool"""
+    """Return a monitoring connection to the pool, rolling back any aborted transaction first"""
     global _monitoring_pool
     if _monitoring_pool and conn:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         _monitoring_pool.putconn(conn)
 
 
