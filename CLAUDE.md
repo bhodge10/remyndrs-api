@@ -447,3 +447,12 @@ Comprehensive audit of the full codebase identified 6 critical issues, all fixed
 - **L4 — Contact form sanitization:** Applied `sanitize_text()` to the message body in `/api/contact` endpoint (`main.py`) to strip control characters from web form submissions.
 
 **Files changed:** `admin_dashboard.py`, `config.py`, `main.py`, `tasks/reminder_tasks.py`
+
+### Cancel Not Working During NEEDS_TIME Pending State (Feb 2026)
+Two bugs fixed in PR #154:
+
+1. **"Cancel" intercepted by UNDO handler:** When a user texted "cancel" during the `NEEDS_TIME` flow (system asking "what time?"), the UNDO handler (line 912) intercepted it because "cancel" is in `is_undo_command`. The `has_pending_time_clarify` guard at line 1212 specifically excluded `NEEDS_TIME` (`!= "NEEDS_TIME"`), so the UNDO handler ran and offered to delete the most recent action instead of cancelling the pending time. Fixed by removing the `!= "NEEDS_TIME"` exclusion so the UNDO handler defers to the vague time handler's cancel logic for ALL pending time states.
+
+2. **New intent blocked by NEEDS_TIME:** When a user sent a clear new-intent message (e.g., "Remember the show...") during `NEEDS_TIME`, the handler blocked with "I still need a time..." instead of context-switching. Added `is_new_intent` detection for keywords (`remember`, `add to`, `my lists`, `help`, `status`, `upgrade`, `memories`, `summary`) that auto-cancels the pending time state and lets the new intent fall through to normal processing.
+
+**Files changed:** `main.py`
