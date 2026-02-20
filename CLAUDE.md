@@ -387,3 +387,22 @@ Beta user reported receiving "Premium Trial has expired" SMS every other morning
 - `send_30d_winback` — `crontab(minute=25)`
 
 **Files changed:** `celery_config.py`, `database.py`, `tasks/reminder_tasks.py`
+
+### Round 5 Audit — Critical Fixes (Feb 2026)
+Comprehensive audit of the full codebase identified 6 critical issues, all fixed in PR #146:
+
+**C1 — Duplicate SMS race condition:** `send_single_reminder` released the `FOR UPDATE` lock via `conn.commit()` before marking `sent=TRUE` on a separate connection. If the second connection failed, the lock expired and the reminder was re-sent. Fixed by keeping the lock and marking sent in a single atomic commit. Added a fresh-connection fallback with `CRITICAL` log level as last resort (SMS already sent, must not retry).
+
+**C2 — Trial SMS + flag atomicity:** Trial lifecycle tasks committed DB flag changes (e.g., `trial_warning_7d_sent`) BEFORE sending SMS. If SMS failed, the flag was set but the user never received the message (silent skip). Fixed by moving all state changes (flags, Day 0 `premium_status='free'` downgrade, Day 7 `mid_trial_reminder_sent`) to AFTER SMS send, committed atomically. Converted 5 trial tasks from `create_or_update_user()` (which opens its own connection and silently swallows errors) to direct SQL with existing cursor + `conn.rollback()` in exception handlers.
+
+**C3 — Monitoring connection pool poisoning:** `return_monitoring_connection()` returned connections without rolling back aborted transactions. An error in one monitoring task could leave the connection in a broken state, causing cascading failures. Fixed by adding `conn.rollback()` before `putconn()` (same pattern already existed for the main pool).
+
+**C4 — Missing Celery task timeouts:** 22 Celery tasks across `reminder_tasks.py` and `monitoring_tasks.py` lacked `time_limit`/`soft_time_limit`, meaning a hung task could block a worker indefinitely. Added appropriate timeouts to all tasks (60s–3600s depending on expected duration).
+
+**C5 — PII exposure in admin API:** `/admin/stats` endpoint returned full phone numbers in the `top_users` response. Fixed by masking to `***-***-1234` format.
+
+**C6 — SQL injection in cost analytics:** `get_cost_analytics()` in `metrics_service.py` used f-string interpolation for `INTERVAL '{interval}'`. While `interval` came from a hardcoded dict (not user input), this violated parameterized query best practices. Fixed with `%s::interval` parameterized casting.
+
+**Bonus:** Fixed bare `except:` to `except Exception:` in `reminder_tasks.py` outer exception handler.
+
+**Files changed:** `database.py`, `main.py`, `services/metrics_service.py`, `tasks/monitoring_tasks.py`, `tasks/reminder_tasks.py`
