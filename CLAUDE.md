@@ -423,3 +423,17 @@ Comprehensive audit of the full codebase identified 6 critical issues, all fixed
 - **H11 — SQL identifier quoting:** Dynamic table/column names in DELETE queries now use `psycopg2.sql.Identifier()` instead of f-strings in `admin_dashboard.py` and `main.py`.
 
 **Files changed:** `admin_dashboard.py`, `celery_config.py`, `database.py`, `main.py`, `services/reminder_service.py`, `services/sms_service.py`, `tasks/reminder_tasks.py`, `utils/encryption.py`
+
+### Round 5 Audit — Medium-Priority Fixes (Feb 2026)
+10 medium-priority issues fixed in PR #150:
+
+- **M1 — Hardcoded trial days:** Replaced hardcoded `14` with `FREE_TRIAL_DAYS` constant in Day 3 nudge calculation (`tasks/reminder_tasks.py`).
+- **M2/M9 — Session ID validation:** Added regex validation (`cs_[a-zA-Z0-9_]+`) on `/payment/success` and `/api/payment-info` to reject malformed Stripe session IDs. URL-encodes session_id on redirect.
+- **M3 — TCPA opt-out keywords:** Added STOPALL, UNSUBSCRIBE, END, QUIT handling alongside STOP to ensure `opted_out` flag stays in sync.
+- **M4/M10 — PII in admin delete:** Masked phone numbers in admin user deletion log and API response (`***-***-1234` format).
+- **M5 — Public endpoint rate limiting:** Added IP-based rate limiting (5 requests per 5 minutes) on `/api/signup` and `/api/contact` to prevent SMS spam.
+- **M6 — Auth failure rate limiting:** Added brute force protection (5 failures per 5 minutes lockout) on admin `verify_admin()` with `AUTH_LOCKOUT` security event.
+- **M7 — CS portal audit logging:** Added logging for which credential type (CS vs admin) was used and failed attempts in `cs_portal.py`.
+- **M8 — Webhook idempotency:** Added MessageSid deduplication in SMS webhook to prevent duplicate message processing on Twilio retries. Uses in-memory dict with periodic cleanup.
+
+**Files changed:** `main.py`, `admin_dashboard.py`, `cs_portal.py`, `tasks/reminder_tasks.py`
