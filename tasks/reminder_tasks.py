@@ -5,6 +5,7 @@ Implements atomic reminder claiming with SELECT FOR UPDATE SKIP LOCKED.
 
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from psycopg2 import sql
 
 from celery_app import celery_app
 from models.reminder import (
@@ -909,13 +910,18 @@ Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/mo or {PREM
 
             # Send warning if needed — SMS + flag update are atomic
             # (flag only committed if SMS succeeds, preventing silent skips)
+            VALID_TRIAL_FIELDS = {'trial_warning_7d_sent', 'trial_warning_1d_sent', 'trial_warning_0d_sent'}
             if warning_to_send and update_field:
+                if update_field not in VALID_TRIAL_FIELDS:
+                    logger.error(f"Invalid trial update_field: {update_field}")
+                    conn.rollback()
+                    continue
                 try:
                     send_sms(phone_number, warning_to_send)
 
                     # Mark warning as sent using existing connection (not create_or_update_user
                     # which opens a new connection and silently swallows errors)
-                    c.execute(f"UPDATE users SET {update_field} = TRUE WHERE phone_number = %s", (phone_number,))
+                    c.execute(sql.SQL("UPDATE users SET {} = TRUE WHERE phone_number = %s").format(sql.Identifier(update_field)), (phone_number,))
 
                     # Day 7: also mark mid-trial reminder to prevent duplicate from that task
                     if update_field == 'trial_warning_7d_sent':
