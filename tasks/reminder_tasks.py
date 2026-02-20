@@ -223,7 +223,7 @@ def release_stale_claims_task():
     but before sending. Runs every 5 minutes via Beat.
     """
     try:
-        count = release_stale_claims(timeout_minutes=5)
+        count = release_stale_claims(timeout_minutes=15)
         if count > 0:
             logger.warning(f"Released {count} stale reminder claims")
         return {"released": count}
@@ -513,8 +513,11 @@ def send_daily_summaries(self):
                 # Get today's reminders
                 reminders = get_reminders_for_date(phone_number, user_today, timezone_str)
 
-                # Format and send summary
+                # Format and send summary (truncate if too long for SMS)
                 message = format_daily_summary(reminders, first_name, user_today, user_tz)
+                if len(message) > 1500:
+                    # Truncate to fit SMS limit with a note
+                    message = message[:1450] + "\n\n...and more. Text MY REMINDERS for full list."
                 send_sms(phone_number, message)
 
                 sent_count += 1

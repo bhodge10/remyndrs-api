@@ -81,7 +81,7 @@ def send_reminder_atomically(reminder_id: int, phone_number: str, reminder_text:
         if conn:
             try:
                 conn.rollback()
-            except:
+            except Exception:
                 pass
         return False
     finally:

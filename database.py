@@ -576,14 +576,22 @@ def init_db():
         for migration in migrations:
             try:
                 c.execute(migration)
-            except Exception:
-                pass  # Column likely already exists
+            except Exception as e:
+                err_msg = str(e).lower()
+                if 'already exists' in err_msg or 'duplicate' in err_msg:
+                    pass  # Expected — column/table already exists
+                else:
+                    logger.error(f"Unexpected migration error: {migration[:80]}... — {e}")
 
         for index_migration in index_migrations:
             try:
                 c.execute(index_migration)
-            except Exception:
-                pass  # Index likely already exists
+            except Exception as e:
+                err_msg = str(e).lower()
+                if 'already exists' in err_msg or 'duplicate' in err_msg:
+                    pass  # Expected — index already exists
+                else:
+                    logger.error(f"Unexpected index migration error: {index_migration[:80]}... — {e}")
 
         conn.commit()
         return_db_connection(conn)

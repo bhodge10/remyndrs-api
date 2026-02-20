@@ -446,12 +446,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         c.execute("ROLLBACK TO SAVEPOINT mi_lookup")
 
                     if mi_ids:
-                        for table in ['code_analysis', 'issue_pattern_links', 'fix_proposals', 'issue_resolutions']:
+                        # Use indexed savepoint names to avoid SQL injection via table names
+                        monitoring_tables = ['code_analysis', 'issue_pattern_links', 'fix_proposals', 'issue_resolutions']
+                        for idx, table in enumerate(monitoring_tables):
                             try:
-                                c.execute(f"SAVEPOINT del_{table}")
-                                c.execute(f"DELETE FROM {table} WHERE issue_id = ANY(%s)", (mi_ids,))
+                                c.execute(f"SAVEPOINT del_mon_{idx}")
+                                from psycopg2 import sql
+                                c.execute(sql.SQL("DELETE FROM {} WHERE issue_id = ANY(%s)").format(sql.Identifier(table)), (mi_ids,))
                             except Exception:
-                                c.execute(f"ROLLBACK TO SAVEPOINT del_{table}")
+                                c.execute(f"ROLLBACK TO SAVEPOINT del_mon_{idx}")
                         try:
                             c.execute("SAVEPOINT del_mi")
                             c.execute("DELETE FROM monitoring_issues WHERE id = ANY(%s)", (mi_ids,))
@@ -462,12 +465,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     c.execute("DELETE FROM conversation_analysis WHERE log_id = ANY(%s)", (log_ids,))
 
                 # Delete remaining monitoring/analysis rows by phone_number
-                for table in ['conversation_analysis', 'monitoring_issues']:
+                cleanup_tables = ['conversation_analysis', 'monitoring_issues']
+                for idx, table in enumerate(cleanup_tables):
                     try:
-                        c.execute(f"SAVEPOINT del_{table}_ph")
-                        c.execute(f"DELETE FROM {table} WHERE phone_number = %s", (phone_number,))
+                        c.execute(f"SAVEPOINT del_ph_{idx}")
+                        from psycopg2 import sql
+                        c.execute(sql.SQL("DELETE FROM {} WHERE phone_number = %s").format(sql.Identifier(table)), (phone_number,))
                     except Exception:
-                        c.execute(f"ROLLBACK TO SAVEPOINT del_{table}_ph")
+                        c.execute(f"ROLLBACK TO SAVEPOINT del_ph_{idx}")
                 c.execute("DELETE FROM support_messages WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM support_tickets WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM confidence_logs WHERE phone_number = %s", (phone_number,))
@@ -3782,7 +3787,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 date_obj = datetime.strptime(reminder_date, '%Y-%m-%d')
                 date_str = date_obj.strftime('%A, %B %d')
                 reply_text = f"I'll remind you on {date_str} to {reminder_text}. What time would you like the reminder?"
-            except:
+            except (ValueError, TypeError):
                 reply_text = ai_response.get("response", "What time would you like the reminder?")
             log_interaction(phone_number, incoming_msg, reply_text, "clarify_date_time", True)
 
@@ -3824,7 +3829,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     try:
                         date_obj = datetime.strptime(reminder_date_only, '%Y-%m-%d')
                         date_str = date_obj.strftime('%A, %B %d')
-                    except:
+                    except (ValueError, TypeError):
                         date_str = "that day"
                     reply_text = f"I'll remind you on {date_str} to {reminder_text}. What time would you like the reminder?"
                     log_interaction(phone_number, incoming_msg, reply_text, "clarify_date_time", True)
@@ -4142,7 +4147,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     try:
                         hour, minute = map(int, time_str.split(':'))
                         display_time = datetime(2000, 1, 1, hour, minute).strftime('%I:%M %p').lstrip('0')
-                    except:
+                    except (ValueError, TypeError, AttributeError):
                         display_time = time_str
 
                     # Format recurrence pattern for display

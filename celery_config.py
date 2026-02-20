@@ -116,7 +116,7 @@ beat_schedule = {
     "monitoring-agent1-detect": {
         "task": "tasks.monitoring_tasks.run_interaction_monitor",
         "schedule": timedelta(hours=4),
-        "args": [24],  # Analyze last 24 hours (duplicates prevented by unique constraint)
+        "args": [4],  # Analyze last 4 hours (matches 4-hour schedule to avoid overlap)
         "options": {
             "expires": 1800,  # 30 minute expiry
         },

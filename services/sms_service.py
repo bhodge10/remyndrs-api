@@ -38,6 +38,11 @@ def send_sms(to_number, message, media_url=None):
         logger.info(f"[TEST MODE] Would send SMS to {to_number}: {message[:50]}...")
         return None
 
+    # Validate outbound message length (Twilio limit is 1600 chars)
+    if len(message) > 1600:
+        logger.warning(f"Outbound SMS to {to_number} truncated from {len(message)} to 1600 chars")
+        message = message[:1550] + "\n\n(Message truncated)"
+
     try:
         kwargs = {
             "body": message,

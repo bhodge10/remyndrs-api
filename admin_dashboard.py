@@ -8,6 +8,7 @@ import asyncio
 import threading
 import time
 from datetime import datetime
+from html import escape as html_escape
 import pytz
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -699,7 +700,7 @@ def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str, sen
                     (broadcast_id,)
                 )
                 conn.commit()
-            except:
+            except Exception:
                 pass
     finally:
         if conn:
@@ -709,6 +710,8 @@ def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str, sen
 def check_scheduled_broadcasts():
     """Background thread that checks for due scheduled broadcasts"""
     logger.info("Starting scheduled broadcast checker")
+    consecutive_failures = 0
+    max_consecutive_failures = 10
 
     while True:
         conn = None
@@ -746,11 +749,18 @@ def check_scheduled_broadcasts():
                 except Exception as send_err:
                     logger.error(f"Error sending scheduled broadcast {broadcast_id}: {send_err}")
 
-        except Exception as e:
-            logger.error(f"Error in scheduled broadcast checker: {e}")
+            consecutive_failures = 0  # Reset on successful loop
 
-        # Check every 60 seconds
-        time.sleep(60)
+        except Exception as e:
+            consecutive_failures += 1
+            logger.error(f"Error in scheduled broadcast checker ({consecutive_failures}/{max_consecutive_failures}): {e}")
+            if consecutive_failures >= max_consecutive_failures:
+                logger.critical(f"Broadcast checker exceeded {max_consecutive_failures} consecutive failures, stopping thread")
+                return
+
+        # Backoff on repeated failures (60s normal, up to 5min on failures)
+        sleep_time = min(60 * (2 ** min(consecutive_failures, 3)), 300) if consecutive_failures > 0 else 60
+        time.sleep(sleep_time)
 
 
 def start_broadcast_checker():
@@ -945,7 +955,12 @@ async def delete_user(phone_number: str, admin: str = Depends(verify_admin)):
 
         for table_name, column in tables:
             try:
-                c.execute(f'DELETE FROM {table_name} WHERE {column} = %s', (phone_number,))
+                # Use identifier quoting for table/column names (hardcoded whitelist above)
+                from psycopg2 import sql
+                query = sql.SQL('DELETE FROM {} WHERE {} = %s').format(
+                    sql.Identifier(table_name), sql.Identifier(column)
+                )
+                c.execute(query, (phone_number,))
                 deleted_counts[table_name] = c.rowcount
             except Exception:
                 # Table may not exist in all environments
@@ -2118,7 +2133,7 @@ async def get_alert_settings(admin: str = Depends(verify_admin)):
                 from urllib.parse import urlparse
                 parsed = urlparse(webhook_url)
                 webhook_display = f"***{parsed.netloc}***"
-            except:
+            except Exception:
                 webhook_display = "***configured***"
 
         # Mask phone numbers for security
@@ -2445,9 +2460,9 @@ async def public_updates_page():
 
             entries_html += f'''
             <div class="changelog-entry">
-                <span class="entry-badge" style="background-color: {badge_color}">{badge_label}</span>
-                <span class="entry-title">{title}</span>
-                {f'<p class="entry-description">{description}</p>' if description else ''}
+                <span class="entry-badge" style="background-color: {badge_color}">{html_escape(badge_label)}</span>
+                <span class="entry-title">{html_escape(title)}</span>
+                {f'<p class="entry-description">{html_escape(description)}</p>' if description else ''}
             </div>
             '''
 

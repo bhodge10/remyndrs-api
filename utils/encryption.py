@@ -42,13 +42,12 @@ def _get_hash_key() -> bytes:
 
 
 def generate_keys() -> Tuple[bytes, bytes]:
-    """Generate new encryption and hash keys (run once for setup)"""
+    """Generate new encryption and hash keys (run once for setup).
+    Returns the raw key bytes. Caller must securely store them."""
     encryption_key = os.urandom(32)  # 256 bits for AES-256
     hash_key = os.urandom(32)  # 256 bits for HMAC
 
-    print("Add these to your environment variables:")
-    print(f"ENCRYPTION_KEY={base64.b64encode(encryption_key).decode()}")
-    print(f"HASH_KEY={base64.b64encode(hash_key).decode()}")
+    logger.info("Generated new encryption and hash keys — store them securely in environment variables")
     return encryption_key, hash_key
 
 
@@ -139,8 +138,9 @@ def safe_decrypt(encrypted: str, fallback: str = "") -> str:
 
     try:
         return decrypt_field(encrypted)
-    except Exception:
+    except Exception as e:
         # Field might not be encrypted yet (during migration)
+        logger.warning(f"Decryption failed (possibly unencrypted migration data): {type(e).__name__}")
         return encrypted if encrypted else fallback
 
 
@@ -156,5 +156,5 @@ def is_encrypted(value: str) -> bool:
         decoded = base64.b64decode(value)
         # Encrypted values should have at least nonce (12) + some ciphertext + tag (16)
         return len(decoded) >= 28
-    except Exception:
+    except (ValueError, Exception):
         return False
