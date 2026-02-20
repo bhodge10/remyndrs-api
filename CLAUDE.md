@@ -456,3 +456,14 @@ Two bugs fixed in PR #154:
 2. **New intent blocked by NEEDS_TIME:** When a user sent a clear new-intent message (e.g., "Remember the show...") during `NEEDS_TIME`, the handler blocked with "I still need a time..." instead of context-switching. Added `is_new_intent` detection for keywords (`remember`, `add to`, `my lists`, `help`, `status`, `upgrade`, `memories`, `summary`) that auto-cancels the pending time state and lets the new intent fall through to normal processing.
 
 **Files changed:** `main.py`
+
+### Test Suite Fixes — 3 Failing Tests (Feb 2026)
+Three long-standing test failures fixed in PR #156. Suite now at 112 passed, 0 failed.
+
+1. **`test_due_reminder_gets_sent`:** `check_and_send_reminders()` dispatches via `send_single_reminder.delay()`, but no Celery broker was configured for tests. Tasks silently failed to execute. Fixed by adding `task_always_eager=True` and `task_eager_propagates=True` to Celery config in `conftest.py`. Also fixed mock target from `services.sms_service.send_sms` to `tasks.reminder_tasks.send_sms` (must patch where the function is used, not where it's defined).
+
+2. **`test_every_day_for_next_five_days` / `test_multi_day_reminder_not_classified`:** The `onboarded_user` fixture creates a free-tier user (2 reminders/day limit). The `multiple` action handler processed 5 or 3 sub-actions but `can_create_reminder()` blocked after the 2nd. Fixed by setting test users to an active trial (`premium_status='trial'`, `trial_end_date = NOW() + 14 days`).
+
+3. **`test_sent_reminder_not_resent`:** `save_reminder()` returns `None` (not the inserted ID). The test did `UPDATE SET sent=TRUE WHERE id=NULL` — matching no rows. The reminder stayed `sent=FALSE` and was picked up by `claim_due_reminders`. Fixed by matching on `phone_number + reminder_text` instead of ID.
+
+**Files changed:** `tests/conftest.py`, `tests/test_background_tasks.py`, `tests/test_reminders.py`
