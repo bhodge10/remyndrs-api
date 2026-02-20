@@ -27,7 +27,7 @@ Additionally, all `sms:` links site-wide replaced with desktop alternatives (scr
 **Remaining:**
 - No "About Us" or team info
 - Privacy messaging buried mid-page
-- Only 1 testimonial
+- ~~Only 1 testimonial~~ - Now 9 testimonials with persona filtering + stats bar
 - No security badges/certifications
 
 ### 3. Unclear Post-Trial Journey ✅ **RESOLVED - Feb 2026**
@@ -63,13 +63,13 @@ Clarify: monthly billing (not upfront), when promo price ends, remove fake scarc
 4. **Desktop Signup Flow** - DONE (Feb 2026). All SMS links site-wide also replaced with desktop alternatives.
 5. **Add FAQ Section** - DONE (`faq.html`)
 6. **Clarify Pricing Copy** - Explicit post-trial explanation, remove fake scarcity, add annual option
-7. **Expand Social Proof** - 3-5 more testimonials, metrics, trust badges
+7. **Expand Social Proof** - DONE (Feb 2026). Added stats bar (10,000+ reminders, 99.9% delivery, 4.9/5 satisfaction), 3 new testimonials (college student, parent, ADHD personas), updated persona mappings, Schema.org aggregateRating.
 
 ### PHASE 3: Feature Communication (OPTIMIZATION)
 
 8. **Rewrite Feature Benefits** - Specific, measurable outcomes
 9. **Create Demo Video** - 30 seconds showing text -> confirmation -> reminder delivery
-10. **Mobile Optimization Pass** - Device testing, tap targets, animation fixes
+10. **Mobile Optimization Pass** - Hamburger nav consistency fixed across all subpages (Feb 2026). Further device testing, tap targets, animation fixes remain.
 
 ### PHASE 4: Testing & Iteration (Ongoing)
 
@@ -128,7 +128,7 @@ Backend changes affecting the website contact form and support flow:
 6. Contact form integration with support ticket system
 
 ### ⏳ Nice-to-Have (Post-Launch):
-1. Add 2-3 more customer testimonials
+1. ~~Add 2-3 more customer testimonials~~ - DONE (3 added: Taylor M., Danielle K., Chris W.)
 2. Add trust badges (encryption, phone compatibility)
 3. "About Us" team page
 4. Demo video (30 seconds)
