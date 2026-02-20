@@ -969,12 +969,13 @@ async def delete_user(phone_number: str, admin: str = Depends(verify_admin)):
         conn.commit()
         return_db_connection(conn)
 
-        logger.info(f"Admin '{admin}' deleted user {phone_number}: {deleted_counts}")
+        masked_phone = f"***-***-{phone_number[-4:]}" if phone_number and len(phone_number) >= 4 else "***"
+        logger.info(f"Admin '{admin}' deleted user {masked_phone}: {deleted_counts}")
         return JSONResponse(content={
             "success": True,
-            "phone_number": phone_number,
+            "phone_number": masked_phone,
             "deleted_counts": deleted_counts,
-            "message": f"User {phone_number} and all associated data deleted"
+            "message": f"User {masked_phone} and all associated data deleted"
         })
     except HTTPException:
         return_db_connection(conn)

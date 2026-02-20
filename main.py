@@ -241,6 +241,9 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Rate limiting storage: {phone_number: [timestamp1, timestamp2, ...]}
 rate_limit_store = defaultdict(list)
 
+# Webhook idempotency: track processed MessageSids to prevent duplicate handling
+_processed_message_sids = {}
+
 def check_rate_limit(phone_number: str) -> bool:
     """Check if phone number has exceeded rate limit. Returns True if allowed."""
     current_time = time.time()
@@ -260,6 +263,38 @@ def check_rate_limit(phone_number: str) -> bool:
     rate_limit_store[phone_number].append(current_time)
     return True
 
+# IP-based rate limiting for public endpoints (signup, contact)
+_ip_rate_store = defaultdict(list)
+_IP_RATE_LIMIT = 5  # max requests per window
+_IP_RATE_WINDOW = 300  # 5 minute window
+
+def check_ip_rate_limit(ip: str) -> bool:
+    """Check if IP has exceeded public endpoint rate limit. Returns True if allowed."""
+    current_time = time.time()
+    window_start = current_time - _IP_RATE_WINDOW
+    _ip_rate_store[ip] = [ts for ts in _ip_rate_store[ip] if ts > window_start]
+    if len(_ip_rate_store[ip]) >= _IP_RATE_LIMIT:
+        log_security_event("IP_RATE_LIMIT", {"ip": ip, "count": len(_ip_rate_store[ip])})
+        return False
+    _ip_rate_store[ip].append(current_time)
+    return True
+
+# Auth failure rate limiting (per username)
+_auth_fail_store = defaultdict(list)
+_AUTH_FAIL_LIMIT = 5  # max failures per window
+_AUTH_FAIL_WINDOW = 300  # 5 minute lockout window
+
+def check_auth_rate_limit(username: str) -> bool:
+    """Check if username has exceeded auth failure rate limit. Returns True if allowed."""
+    current_time = time.time()
+    window_start = current_time - _AUTH_FAIL_WINDOW
+    _auth_fail_store[username] = [ts for ts in _auth_fail_store[username] if ts > window_start]
+    return len(_auth_fail_store[username]) < _AUTH_FAIL_LIMIT
+
+def record_auth_failure(username: str):
+    """Record an auth failure for rate limiting."""
+    _auth_fail_store[username].append(time.time())
+
 # HTTP Basic Auth for admin endpoints
 security = HTTPBasic()
 
@@ -268,10 +303,19 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     if not ADMIN_PASSWORD:
         raise HTTPException(status_code=500, detail="Admin password not configured")
 
+    # Check auth failure rate limit before attempting verification
+    if not check_auth_rate_limit(credentials.username):
+        log_security_event("AUTH_LOCKOUT", {"username": credentials.username, "endpoint": "admin"})
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts. Try again in 5 minutes.",
+        )
+
     correct_username = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
     correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
 
     if not (correct_username and correct_password):
+        record_auth_failure(credentials.username)
         log_security_event("AUTH_FAILURE", {"username": credentials.username, "endpoint": "admin"})
         raise HTTPException(
             status_code=401,
@@ -329,6 +373,21 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             if not validator.validate(url, params, signature):
                 log_security_event("INVALID_SIGNATURE", {"ip": request.client.host, "url": url[:50]})
                 raise HTTPException(status_code=403, detail="Invalid signature")
+
+        # Webhook idempotency: deduplicate by MessageSid to prevent
+        # duplicate processing if Twilio retries the webhook
+        form_data_for_sid = await request.form()
+        message_sid = form_data_for_sid.get("MessageSid", "")
+        if message_sid and message_sid in _processed_message_sids:
+            logger.info(f"Duplicate webhook for MessageSid {message_sid}, skipping")
+            resp = MessagingResponse()
+            return Response(content=str(resp), media_type="application/xml")
+        if message_sid:
+            _processed_message_sids[message_sid] = time.time()
+            # Clean old entries (older than 10 minutes) periodically
+            if len(_processed_message_sids) > 1000:
+                cutoff = time.time() - 600
+                _processed_message_sids.clear()
 
         incoming_msg = Body.strip()
 
@@ -665,11 +724,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
-        # STOP - Twilio reserved keyword (handled by Twilio Messaging Service)
-        # Return empty response so only Twilio's message is sent
+        # STOP / STOPALL / UNSUBSCRIBE / END / QUIT — TCPA opt-out keywords
+        # Twilio handles STOP natively; we also handle alternative keywords
+        # to ensure our opted_out flag stays in sync
         # ==========================================
-        if incoming_msg.upper() == "STOP":
-            logger.info(f"STOP command received from {mask_phone_number(phone_number)}")
+        if incoming_msg.upper() in ("STOP", "STOPALL", "UNSUBSCRIBE", "END", "QUIT"):
+            logger.info(f"Opt-out command '{incoming_msg.upper()}' received from {mask_phone_number(phone_number)}")
 
             # Mark user as opted out in our database
             mark_user_opted_out(phone_number)
@@ -5126,7 +5186,7 @@ async def payment_info(session_id: str = None):
     plan = "Premium"
     first_name = None
 
-    if session_id and STRIPE_ENABLED:
+    if session_id and STRIPE_ENABLED and re.match(r'^cs_[a-zA-Z0-9_]+$', session_id):
         try:
             import stripe
             session = stripe.checkout.Session.retrieve(session_id)
@@ -5144,9 +5204,10 @@ async def payment_info(session_id: str = None):
 @app.get("/payment/success")
 async def payment_success(session_id: str = None):
     """Redirect to Netlify success page"""
+    import urllib.parse
     redirect_url = "https://remyndrs.com/payment/success"
-    if session_id:
-        redirect_url += f"?session_id={session_id}"
+    if session_id and re.match(r'^cs_[a-zA-Z0-9_]+$', session_id):
+        redirect_url += f"?session_id={urllib.parse.quote(session_id)}"
     return RedirectResponse(url=redirect_url, status_code=302)
 
 
@@ -5179,6 +5240,14 @@ async def desktop_signup(request: Request):
     User enters phone number on website, receives text to begin onboarding.
     """
     try:
+        # IP rate limiting to prevent SMS spam
+        client_ip = request.client.host if request.client else "unknown"
+        if not check_ip_rate_limit(client_ip):
+            return JSONResponse(
+                status_code=429,
+                content={"success": False, "error": "Too many requests. Please try again in a few minutes."}
+            )
+
         data = await request.json()
         phone_number = data.get('phone')
 
@@ -5254,6 +5323,14 @@ async def website_contact(request: Request):
     who can't use SMS links directly.
     """
     try:
+        # IP rate limiting to prevent spam
+        client_ip = request.client.host if request.client else "unknown"
+        if not check_ip_rate_limit(client_ip):
+            return JSONResponse(
+                status_code=429,
+                content={"success": False, "error": "Too many requests. Please try again in a few minutes."}
+            )
+
         data = await request.json()
         phone_number = data.get('phone')
         contact_type = data.get('type', '').lower()

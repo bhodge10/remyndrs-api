@@ -1163,10 +1163,11 @@ def send_day_3_engagement_nudges(self):
             if not (9 <= user_local_hour < 10):
                 continue
 
-            # Calculate days since signup (trial is 14 days, so days_in = 14 - days_remaining)
+            # Calculate days since signup (trial is FREE_TRIAL_DAYS, so days_in = total - remaining)
+            from config import FREE_TRIAL_DAYS
             time_remaining = trial_end_date - now_utc
             days_remaining = time_remaining.days
-            days_in_trial = 14 - days_remaining
+            days_in_trial = FREE_TRIAL_DAYS - days_remaining
 
             # Only send on Day 3 (range check to handle signup time-of-day)
             if not (2 <= days_in_trial <= 3):

@@ -25,9 +25,14 @@ def verify_cs_auth(credentials: HTTPBasicCredentials = Depends(security)):
     admin_user_ok = secrets.compare_digest(credentials.username.encode("utf8"), ADMIN_USERNAME.encode("utf8"))
     admin_pass_ok = ADMIN_PASSWORD and secrets.compare_digest(credentials.password.encode("utf8"), ADMIN_PASSWORD.encode("utf8"))
 
-    if (cs_user_ok and cs_pass_ok) or (admin_user_ok and admin_pass_ok):
+    if cs_user_ok and cs_pass_ok:
+        logger.info(f"CS portal access: user=cs_user")
+        return credentials.username
+    elif admin_user_ok and admin_pass_ok:
+        logger.info(f"CS portal access: user=admin (admin credentials used for CS portal)")
         return credentials.username
 
+    logger.warning(f"CS portal auth failure: username={credentials.username}")
     raise HTTPException(
         status_code=401,
         detail="Invalid credentials",
