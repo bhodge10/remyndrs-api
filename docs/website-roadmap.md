@@ -68,7 +68,7 @@ Users receive SMS notifications on day 7, day 1, and day 0 explaining:
 ### PHASE 3: Feature Communication (OPTIMIZATION)
 
 8. **Rewrite Feature Benefits** - DONE (Feb 2026). Vague features replaced with outcome-focused copy and concrete usage examples.
-9. **Create Demo Video** - 30 seconds showing text -> confirmation -> reminder delivery
+9. **Create Demo Video** - DONE (Feb 2026). 30-second animated demo showing text -> confirmation -> reminder delivery.
 10. **Mobile Optimization Pass** - DONE (Feb 2026). Hamburger tap targets enlarged to 44x44px minimum (all 5 pages). Conversation popup width responsive on 320px screens. Footer/inline contact buttons enlarged for tap targets. SMS disclaimer font bumped to 13px on mobile. Animation performance hints (will-change) added. Nav link tap targets widened with horizontal padding. Hamburger aria-controls added for accessibility.
 
 ### PHASE 4: Testing & Iteration (Ongoing)
@@ -131,7 +131,7 @@ Backend changes affecting the website contact form and support flow:
 1. ~~Add 2-3 more customer testimonials~~ - DONE (3 added: Taylor M., Danielle K., Chris W.)
 2. ~~Add trust badges (encryption, phone compatibility)~~ - DONE (already in hero)
 3. "About Us" team page
-4. Demo video (30 seconds)
+4. ~~Demo video (30 seconds)~~ - DONE
 5. A/B test headlines
 6. Live chat integration
 
