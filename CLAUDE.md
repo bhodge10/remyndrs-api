@@ -467,3 +467,12 @@ Three long-standing test failures fixed in PR #156. Suite now at 112 passed, 0 f
 3. **`test_sent_reminder_not_resent`:** `save_reminder()` returns `None` (not the inserted ID). The test did `UPDATE SET sent=TRUE WHERE id=NULL` — matching no rows. The reminder stayed `sent=FALSE` and was picked up by `claim_due_reminders`. Fixed by matching on `phone_number + reminder_text` instead of ID.
 
 **Files changed:** `tests/conftest.py`, `tests/test_background_tasks.py`, `tests/test_reminders.py`
+
+### Webhook Timeout Resilience — Keep-Warm Ping + SMS Fallback (Feb 2026)
+After onboarding, users sometimes received no reply to their first messages. Root cause: if webhook processing exceeds Twilio's 15-second timeout (slow OpenAI response + DB overhead), Twilio abandons the webhook and the TwiML response is lost — the user gets nothing. Two fixes in PR #158:
+
+1. **Keep-warm Celery Beat task:** `keep_web_service_warm()` in `tasks/reminder_tasks.py` pings the web service health check endpoint (`/`) every 5 minutes via `urllib`. Keeps DB connection pools warm and prevents idle timeouts. Uses `RENDER_EXTERNAL_URL` env var (must be set on Celery worker/beat services manually since they're separate from the web service).
+
+2. **SMS fallback for slow responses:** `twiml_or_sms_fallback()` helper in `main.py` checks elapsed time before returning the webhook response. If processing took >14 seconds (`TWILIO_WEBHOOK_TIMEOUT` in `config.py`), sends the reply via direct `send_sms()` instead of TwiML (which Twilio has likely already abandoned). Returns empty TwiML to avoid duplicate messages. If the SMS fallback also fails, includes the message in TwiML as a last resort. Logs a warning at 10+ seconds for monitoring near-timeout requests. Applied to both the main AI response path and the error handler.
+
+**Files changed:** `config.py`, `main.py`, `tasks/reminder_tasks.py`, `celery_config.py`
