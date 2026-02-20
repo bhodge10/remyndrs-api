@@ -365,3 +365,6 @@ Comprehensive mobile optimization across all 5 website HTML files (`index.html`,
 
 ### Demo Video — Website (Feb 2026)
 Added a 30-second animated demo video to `index.html` showing the SMS flow: user texts a reminder, gets confirmation, and receives the reminder at the right time. Embedded in the Remyndrs-Website repo.
+
+### Website Roadmap Phase 3 Complete (Feb 2026)
+All Phase 3 (Feature Communication) items in `docs/website-roadmap.md` are now done: feature benefits rewrite (#8), demo video (#9), and mobile optimization pass (#10). Phase header updated to COMPLETED.
