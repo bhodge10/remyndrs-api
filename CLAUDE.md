@@ -437,3 +437,13 @@ Comprehensive audit of the full codebase identified 6 critical issues, all fixed
 - **M8 — Webhook idempotency:** Added MessageSid deduplication in SMS webhook to prevent duplicate message processing on Twilio retries. Uses in-memory dict with periodic cleanup.
 
 **Files changed:** `main.py`, `admin_dashboard.py`, `cs_portal.py`, `tasks/reminder_tasks.py`
+
+### Round 5 Audit — Low-Priority Fixes (Feb 2026)
+4 low-priority issues fixed in PR #152:
+
+- **L1 — Admin error message sanitization:** Replaced 48 instances of `detail=str(e)` with `detail="Internal server error"` in `admin_dashboard.py`. All errors were already logged before the raise, so no diagnostic info is lost — this just prevents leaking stack traces to the admin UI.
+- **L2 — BETA_MODE default:** Changed default from `"true"` to `"false"` in `config.py`. Production should require explicit opt-in via `BETA_MODE=true` env var rather than defaulting to beta behavior.
+- **L3 — Dynamic SQL field whitelist:** Added whitelist validation (`VALID_TRIAL_FIELDS` set) for the `update_field` variable in `check_trial_expirations` (`tasks/reminder_tasks.py`). Replaced f-string SQL with `psycopg2.sql.Identifier()` for parameterized column names.
+- **L4 — Contact form sanitization:** Applied `sanitize_text()` to the message body in `/api/contact` endpoint (`main.py`) to strip control characters from web form submissions.
+
+**Files changed:** `admin_dashboard.py`, `config.py`, `main.py`, `tasks/reminder_tasks.py`
