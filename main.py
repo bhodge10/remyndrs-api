@@ -54,7 +54,7 @@ from services.trial_messaging_service import (
 from services.metrics_service import track_user_activity, increment_message_count, set_referral_source
 from utils.timezone import get_user_current_time
 from utils.formatting import get_help_text, format_reminders_list, format_reminder_confirmation
-from utils.validation import mask_phone_number, validate_list_name, validate_item_text, validate_message, log_security_event, detect_sensitive_data, get_sensitive_data_warning
+from utils.validation import mask_phone_number, validate_list_name, validate_item_text, validate_message, log_security_event, detect_sensitive_data, get_sensitive_data_warning, sanitize_text
 from admin_dashboard import router as dashboard_router, start_broadcast_checker
 from cs_portal import router as cs_router
 from monitoring_dashboard import router as monitoring_router
@@ -5334,7 +5334,7 @@ async def website_contact(request: Request):
         data = await request.json()
         phone_number = data.get('phone')
         contact_type = data.get('type', '').lower()
-        message = data.get('message', '').strip()
+        message = sanitize_text(data.get('message', '').strip())
 
         if not phone_number:
             return JSONResponse(

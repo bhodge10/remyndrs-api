@@ -124,7 +124,7 @@ else:
     logger.warning("SMTP not fully configured - support email notifications disabled")
 
 # Beta Mode - allows all users to access premium features like support
-BETA_MODE = os.environ.get("BETA_MODE", "true").lower() == "true"
+BETA_MODE = os.environ.get("BETA_MODE", "false").lower() == "true"
 if BETA_MODE:
     logger.info("Beta mode enabled - all users can access support")
 
