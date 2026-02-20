@@ -350,3 +350,15 @@ Narrow-scope audit focused on three questions: (1) Do trial messages fire correc
   - Day 3 nudge: `!= 3` → `not (2 <= days_in_trial <= 3)`
   - Post-trial Day 3: `!= 3` → `not (2 <= days_since_expiry <= 3)`
   - 14-day touchpoint: `!= 14` → `not (13 <= days_since_expiry <= 14)`
+
+### Mobile Optimization Pass — Website (Feb 2026)
+Comprehensive mobile optimization across all 5 website HTML files (`index.html`, `faq.html`, `commands.html`, `privacy.html`, `terms.html`). Changes made in the Remyndrs-Website repo:
+
+- **Hamburger tap target:** Enlarged from `padding: 4px 8px` (~24px) to `padding: 10px 12px` with `min-width: 44px; min-height: 44px` to meet WCAG/Apple/Google 44x44px minimum (all 5 files).
+- **Conversation popup width:** Changed from fixed `width: 320px` to `max-width: 320px; width: calc(100% - 20px)` so popups shrink on 320px-wide phones (`index.html`).
+- **Footer contact buttons:** Enlarged from `padding: 10px 18px; font-size: 13px` to `padding: 12px 20px; font-size: 14px` for ~40px tap height (`index.html`, `faq.html`, `commands.html`).
+- **Inline contact buttons:** Enlarged from `padding: 12px 20px` to `padding: 14px 22px` for ~44px tap height (`index.html`).
+- **SMS disclaimer readability:** Added `font-size: 13px` in `@media (max-width: 768px)` block, up from 12px base (`index.html`).
+- **Animation performance:** Added `will-change: transform, opacity` on `.conversation-message` and `will-change: transform` on `.pricing-card.featured` for GPU compositing on budget phones (`index.html`).
+- **Nav link tap targets:** Changed mobile nav from `padding: 10px 0` to `padding: 12px 20px` for full-width comfortable taps (all 5 files).
+- **Hamburger accessibility:** Added `aria-controls="main-nav"` to hamburger button and `id="main-nav"` to `<nav>` element (`index.html`).
