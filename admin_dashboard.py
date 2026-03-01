@@ -7679,7 +7679,7 @@ async def beta_reward_preview(admin: str = Depends(verify_admin)):
 
 @router.post("/admin/beta-reward/apply")
 async def beta_reward_apply(admin: str = Depends(verify_admin)):
-    """Grant 3 months free Premium to all users who signed up on Feb 27, 2026."""
+    """Grant 3 months free Premium to all users who signed up before March 1, 2026."""
     conn = None
     try:
         conn = get_db_connection()
@@ -7689,8 +7689,7 @@ async def beta_reward_apply(admin: str = Depends(verify_admin)):
             SET premium_status = 'premium',
                 premium_since = COALESCE(premium_since, NOW()),
                 trial_end_date = '2026-06-01 00:00:00'
-            WHERE created_at >= '2026-02-27 00:00:00'
-              AND created_at < '2026-02-28 00:00:00'
+            WHERE created_at < '2026-03-01 00:00:00'
         """)
         updated = c.rowcount
         conn.commit()
