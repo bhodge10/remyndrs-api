@@ -7640,3 +7640,67 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     """
 
     return HTMLResponse(content=html)
+
+
+# ── One-time: Grant Feb 27 beta testers 3 months free Premium ────────────
+
+@router.get("/admin/beta-reward/preview")
+async def beta_reward_preview(admin: str = Depends(verify_admin)):
+    """Preview which users signed up on Feb 27, 2026 (dry run)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT phone_number, first_name, premium_status, trial_end_date, created_at
+            FROM users
+            WHERE created_at >= '2026-02-27 00:00:00'
+              AND created_at < '2026-02-28 00:00:00'
+            ORDER BY created_at
+        """)
+        rows = c.fetchall()
+        users = []
+        for r in rows:
+            users.append({
+                "phone": mask_phone_number(r[0]) if r[0] else None,
+                "first_name": safe_decrypt(r[1]) if r[1] else None,
+                "premium_status": r[2],
+                "trial_end_date": str(r[3]) if r[3] else None,
+                "created_at": str(r[4]) if r[4] else None,
+            })
+        return JSONResponse({"count": len(users), "users": users})
+    except Exception as e:
+        logger.error(f"Beta reward preview error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.post("/admin/beta-reward/apply")
+async def beta_reward_apply(admin: str = Depends(verify_admin)):
+    """Grant 3 months free Premium to all users who signed up on Feb 27, 2026."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            UPDATE users
+            SET premium_status = 'premium',
+                premium_since = COALESCE(premium_since, NOW()),
+                trial_end_date = '2026-06-01 00:00:00'
+            WHERE created_at >= '2026-02-27 00:00:00'
+              AND created_at < '2026-02-28 00:00:00'
+        """)
+        updated = c.rowcount
+        conn.commit()
+        logger.info(f"Beta reward applied: {updated} users upgraded to Premium until 2026-06-01")
+        return JSONResponse({"status": "success", "users_updated": updated})
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Beta reward apply error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            return_db_connection(conn)
