@@ -42,6 +42,7 @@ from models.list_model import (
 from services.sms_service import send_sms
 from services.ai_service import process_with_ai, parse_list_items
 from services.onboarding_service import handle_onboarding
+from services.onboarding_recovery_service import track_onboarding_progress
 from services.first_action_service import should_prompt_daily_summary, mark_daily_summary_prompted, get_daily_summary_prompt_message
 from services.trial_messaging_service import (
     is_pricing_question, is_comparison_question, is_acknowledgment,
@@ -5795,19 +5796,34 @@ async def desktop_signup(request: Request):
                 content={"success": False, "error": "Please enter a valid US phone number"}
             )
 
-        # Check if user already exists
-        from models.user import get_user
+        # Check if user already exists and is onboarded
         existing_user = get_user(formatted_phone)
 
-        # Always send new user message (for consistent testing experience)
-        # In production, you could customize this for returning users
-        message = """👋 Welcome to Remyndrs!
+        if existing_user and is_user_onboarded(formatted_phone):
+            # User already completed onboarding - send a welcome-back message
+            from services.sms_service import send_sms
+            send_sms(formatted_phone, "Welcome back to Remyndrs! 👋 You're already set up. Just text me anytime to create reminders, save memories, or manage lists.")
+            log_interaction(formatted_phone, "Desktop signup (returning)", "Welcome back SMS sent", "desktop_signup_returning", True)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "success": True,
+                    "message": "Check your phone! We just sent you a text to get started."
+                }
+            )
+
+        # New user or incomplete onboarding - create/update user record at step 1
+        # so when they reply with their name, handle_onboarding sees step=1
+        create_or_update_user(formatted_phone, onboarding_step=1)
+        track_onboarding_progress(formatted_phone, 1)
+
+        message = """Welcome to Remyndrs! 👋
 
 I'm your AI-powered reminder assistant. I'll help you remember anything—from daily tasks to important dates.
 
 No app needed - just text me naturally and I'll handle the rest!
 
-Reply with your first name to get started, or text HELP for more info."""
+Let's get you set up in under a minute. What's your first name?"""
 
         # Send SMS
         from services.sms_service import send_sms
