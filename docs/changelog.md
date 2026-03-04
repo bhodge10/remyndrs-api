@@ -1,5 +1,18 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## Beta vs Live Data Filter on Admin Dashboard (Feb 2026)
+Added a sticky filter bar to the admin dashboard that toggles between beta test data (before March 1, 2026) and live production data (March 1 onward). Live mode includes an adjustable date picker defaulting to March 1.
+
+**New endpoint:** `GET /admin/stats/overview` — returns all overview metrics as JSON with optional `start_date`/`end_date` query params, replacing the server-rendered overview with AJAX so it responds to filter changes without a page reload.
+
+**Backend changes:** Added optional `start_date`/`end_date` query params to 10 existing endpoints (broadcast history, feedback, contact messages, costs, conversations, flagged conversations, recurring reminders, changelog, support tickets). All default to `None` for full backward compatibility. Added `_date_filter()` helper in `metrics_service.py` and `parse_date_filter()` in `admin_dashboard.py`.
+
+**Updated service functions:** `get_all_metrics()`, `get_active_users()`, `get_daily_signups()`, `get_new_user_counts()`, `get_premium_stats()`, `get_reminder_completion_rate()`, `get_engagement_stats()`, `get_referral_breakdown()`, `get_cost_analytics()`, `get_twilio_actual_costs()` in metrics service; `get_recent_logs()`, `get_flagged_conversations()` in database; `get_contact_messages()`, `get_all_tickets()` in support service.
+
+**Dashboard UI:** Sticky filter bar below nav with Beta/Live toggle buttons and date picker. All overview cards, tables, and chart have element IDs for dynamic updates. `loadOverviewStats()` fetches and renders overview data via AJAX. All 9 existing load functions (`loadHistory`, `loadFeedback`, `loadCostData`, `loadConversations`, `loadFlaggedConversations`, `loadChangelog`, `loadContactMessages`, `loadSupportTickets`, `loadRecurring`) use `appendDateFilter()` to include date params.
+
+**Sections not filtered:** Broadcast send form, scheduled broadcasts, maintenance message, settings, customer service search (operational/config, not historical).
+
 ## Contact Message Reply from Admin Dashboard (Feb 2026)
 Admins can now reply to contact messages (feedback, bug reports, questions) directly via SMS without creating a support ticket. Adds an inline reply button to each message card in the Contact Messages section.
 
