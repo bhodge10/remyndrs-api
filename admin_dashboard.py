@@ -452,6 +452,45 @@ def send_broadcast_messages(broadcast_id: int, phone_numbers: list, message: str
             return_db_connection(conn)
 
 
+@router.post("/admin/broadcast-vcf")
+async def broadcast_vcf(admin: str = Depends(verify_admin)):
+    """One-off: send VCF contact card + pin tip to all onboarded, non-opted-out users."""
+    from config import API_BASE_URL
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT phone_number FROM users
+            WHERE onboarding_complete = TRUE
+              AND (opted_out IS NULL OR opted_out = FALSE)
+        """)
+        users = c.fetchall()
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+    vcf_url = f"{API_BASE_URL}/contact.vcf"
+    vcf_message = """📱 Tap to save Remyndrs to your contacts!
+
+Tip: Pin this conversation to keep me at the top of your texts — that way I'm always one tap away when you need to remember something!"""
+
+    import time
+    sent = 0
+    failed = 0
+    for (phone,) in users:
+        try:
+            send_sms(phone, vcf_message, media_url=vcf_url)
+            sent += 1
+        except Exception as e:
+            logger.error(f"Failed VCF broadcast to {phone}: {e}")
+            failed += 1
+        time.sleep(0.1)
+
+    return {"sent": sent, "failed": failed, "total": len(users)}
+
+
 @router.post("/admin/broadcast/send")
 async def send_broadcast(request: BroadcastRequest, background_tasks: BackgroundTasks, admin: str = Depends(verify_admin)):
     """Send a broadcast message to selected audience (only users within 8am-8pm local time)"""
