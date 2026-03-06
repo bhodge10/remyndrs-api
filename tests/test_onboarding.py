@@ -21,17 +21,9 @@ class TestOnboardingFlow:
 
         # Step 2: Provide first name
         result = await simulator.send_message(phone, "John")
-        assert "last name" in result["output"].lower()
-
-        # Step 3: Provide last name
-        result = await simulator.send_message(phone, "Smith")
-        assert "email" in result["output"].lower()
-
-        # Step 4: Provide email
-        result = await simulator.send_message(phone, "john@example.com")
         assert "zip" in result["output"].lower() or "code" in result["output"].lower()
 
-        # Step 5: Provide ZIP code - should complete onboarding
+        # Step 3: Provide ZIP code - should complete onboarding
         result = await simulator.send_message(phone, "90210")
         # Should confirm setup complete and mention first saved memory
         assert any(word in result["output"].lower() for word in ["all set", "saved", "memory"])
@@ -47,30 +39,8 @@ class TestOnboardingFlow:
         # Provide full name
         result = await simulator.send_message(phone, "John Smith")
 
-        # Should skip last name and go to email
-        assert "email" in result["output"].lower()
-
-    @pytest.mark.asyncio
-    async def test_onboarding_invalid_email(self, simulator, clean_test_user):
-        """Test that invalid email is rejected with helpful message."""
-        phone = clean_test_user
-
-        # Get to email step
-        await simulator.send_message(phone, "Hi")
-        await simulator.send_message(phone, "John")
-        await simulator.send_message(phone, "Smith")
-
-        # Try invalid email
-        result = await simulator.send_message(phone, "not-an-email")
-        assert "email" in result["output"].lower()  # Should ask again
-
-        # Try another invalid format
-        result = await simulator.send_message(phone, "test@")
-        assert "email" in result["output"].lower()
-
-        # Valid email should proceed
-        result = await simulator.send_message(phone, "john@example.com")
-        assert "zip" in result["output"].lower()
+        # Should skip to ZIP
+        assert "zip" in result["output"].lower() or "code" in result["output"].lower()
 
     @pytest.mark.asyncio
     async def test_onboarding_invalid_zip(self, simulator, clean_test_user):
@@ -80,8 +50,6 @@ class TestOnboardingFlow:
         # Get to ZIP step
         await simulator.send_message(phone, "Hi")
         await simulator.send_message(phone, "John")
-        await simulator.send_message(phone, "Smith")
-        await simulator.send_message(phone, "john@example.com")
 
         # Try invalid ZIP
         result = await simulator.send_message(phone, "123")  # Too short
@@ -118,18 +86,18 @@ class TestOnboardingFlow:
         assert "name" in result["output"].lower() or "welcome" in result["output"].lower()
 
     @pytest.mark.asyncio
-    async def test_onboarding_skip_email(self, simulator, clean_test_user):
-        """Test that user can skip optional email."""
+    async def test_onboarding_skip_zip(self, simulator, clean_test_user):
+        """Test that user cannot skip ZIP code."""
         phone = clean_test_user
 
-        # Get to email step
+        # Get to ZIP step
         await simulator.send_message(phone, "Hi")
         await simulator.send_message(phone, "John")
-        await simulator.send_message(phone, "Smith")
 
         # Try to skip
         result = await simulator.send_message(phone, "skip")
-        # Should either proceed or explain why email is needed
+        # Should explain why ZIP is needed
+        assert "zip" in result["output"].lower() or "timezone" in result["output"].lower()
 
 
 class TestOnboardingEdgeCases:
@@ -153,10 +121,7 @@ class TestOnboardingEdgeCases:
 
         # Name with special characters
         result = await simulator.send_message(phone, "José")
-        assert "last name" in result["output"].lower()
-
-        result = await simulator.send_message(phone, "O'Brien")
-        assert "email" in result["output"].lower()
+        assert "zip" in result["output"].lower() or "code" in result["output"].lower()
 
     @pytest.mark.asyncio
     async def test_onboarding_very_long_name(self, simulator, clean_test_user):
@@ -204,8 +169,6 @@ class TestOnboardingTimezones:
         # Complete onboarding with NYC ZIP
         await simulator.send_message(phone, "Hi")
         await simulator.send_message(phone, "John")
-        await simulator.send_message(phone, "Smith")
-        await simulator.send_message(phone, "john@example.com")
         await simulator.send_message(phone, "10001")  # NYC
 
         # Verify timezone was set correctly
@@ -220,8 +183,6 @@ class TestOnboardingTimezones:
 
         await simulator.send_message(phone, "Hi")
         await simulator.send_message(phone, "John")
-        await simulator.send_message(phone, "Smith")
-        await simulator.send_message(phone, "john@example.com")
         await simulator.send_message(phone, "90210")  # Beverly Hills, CA
 
         from models.user import get_user_timezone
@@ -235,8 +196,6 @@ class TestOnboardingTimezones:
 
         await simulator.send_message(phone, "Hi")
         await simulator.send_message(phone, "John")
-        await simulator.send_message(phone, "Smith")
-        await simulator.send_message(phone, "john@example.com")
         await simulator.send_message(phone, "60601")  # Chicago
 
         from models.user import get_user_timezone

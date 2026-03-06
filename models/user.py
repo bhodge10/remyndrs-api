@@ -41,6 +41,8 @@ ALLOWED_USER_FIELDS = {
     # Smart nudges
     'smart_nudges_enabled', 'smart_nudge_time', 'smart_nudge_last_sent',
     'pending_nudge_response',
+    # Day 4 email collection
+    'day_4_email_sent', 'awaiting_email_collection',
 }
 
 

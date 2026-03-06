@@ -1381,6 +1381,118 @@ Just text me naturally — I'll figure out what you need!"""
 
 
 # =====================================================
+# DAY 4 EMAIL COLLECTION
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def send_day_4_email_collection(self):
+    """
+    Collect email address on Day 4 of trial for users who onboarded without one.
+    Targets users who signed up ~4 days ago and don't have an email set.
+
+    Runs hourly via Celery Beat. Timezone-aware: only sends at 9-10 AM local.
+    Only sends once per user (tracks with day_4_email_sent flag).
+    """
+    import pytz
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+    from models.user import create_or_update_user
+
+    logger.info("Starting Day 4 email collection check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date, timezone
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date > %s
+              AND onboarding_complete = TRUE
+              AND (day_4_email_sent IS NULL OR day_4_email_sent = FALSE)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (email IS NULL OR email = '')
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for Day 4 email collection")
+            return {"emails_sent": 0}
+
+        emails_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date, timezone_str = user
+
+            # Only send when it's 9-10 AM in user's local timezone
+            try:
+                user_tz = pytz.timezone(timezone_str or 'America/New_York')
+            except pytz.exceptions.UnknownTimeZoneError:
+                user_tz = pytz.timezone('America/New_York')
+            user_local_hour = datetime.now(pytz.utc).astimezone(user_tz).hour
+            if not (9 <= user_local_hour < 10):
+                continue
+
+            # Calculate days since signup
+            from config import FREE_TRIAL_DAYS
+            time_remaining = trial_end_date - now_utc
+            days_remaining = time_remaining.days
+            days_in_trial = FREE_TRIAL_DAYS - days_remaining
+
+            # Only send on Day 3-4 (range check to handle signup time-of-day)
+            if not (3 <= days_in_trial <= 4):
+                continue
+
+            try:
+                greeting = f"Hey {first_name}!" if first_name else "Hey there!"
+
+                message = f"""{greeting} Quick question — what's your email address?
+
+I only need it for account recovery (in case you get a new phone number).
+
+No spam, no marketing — just a safety net for your data.
+
+(Reply with your email or text SKIP if you'd rather not)"""
+
+                send_sms(phone_number, message)
+                c.execute("UPDATE users SET day_4_email_sent = TRUE, awaiting_email_collection = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
+
+                emails_sent += 1
+                logger.info(f"Sent Day 4 email collection to ...{phone_number[-4:]}")
+
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.error(f"Failed to send Day 4 email collection to ...{phone_number[-4:]}: {e}")
+                continue
+
+        logger.info(f"Day 4 email collection complete: {emails_sent} sent")
+        return {"emails_sent": emails_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_day_4_email_collection")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
 # POST-TRIAL RE-ENGAGEMENT
 # =====================================================
 

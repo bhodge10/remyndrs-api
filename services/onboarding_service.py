@@ -36,25 +36,6 @@ def validate_email(email):
     return True, None
 
 
-def get_email_error_message(error_type):
-    """Return appropriate error message for email validation failure"""
-    messages = {
-        "spaces": """Email addresses can't have spaces in them!
-
-What's your email address?
-(Should look like: name@email.com)""",
-        "no_at": """Oops! That email is missing the @ symbol.
-
-It should look like: yourname@gmail.com
-
-What's your email address?""",
-        "no_domain": """Almost! But that email needs a domain (like @gmail.com or @yahoo.com).
-
-What's your email address?"""
-    }
-    return messages.get(error_type, "Please enter a valid email address:")
-
-
 def validate_zip_code(zip_input):
     """Validate ZIP code and return (cleaned_zip, error_type)"""
     zip_code = zip_input.strip().upper()
@@ -134,14 +115,13 @@ def handle_onboarding(phone_number, message):
 
         # Handle help request during onboarding
         if message_lower in ['help', '?'] and step > 0:
-            resp.message(f"""I'm helping you set up your account! It's quick - just 4 questions total.
+            resp.message(f"""I'm helping you set up your account! It's quick - just 2 questions total.
 
-You're currently on step {step} of 4:
+You're currently on step {step} of 2:
 {get_onboarding_prompt(step)}
 
 Why I need this info:
 • Name: Personalize your experience
-• Email: Account recovery & important updates only
 • ZIP: Set your timezone for accurate reminders
 
 Text "cancel" to cancel setup, or just answer the question to continue!""")
@@ -185,20 +165,9 @@ What's your first name?""")
 What's your first name?""")
             return Response(content=str(resp), media_type="application/xml")
 
-        # Handle skip requests during email/ZIP steps
+        # Handle skip requests during ZIP step
         if message_lower in ['skip', 'pass', "i don't want to", "dont want to"]:
-            if step == 3:
-                resp.message("""I understand privacy concerns! But I need your email for account recovery - if you forget your info or get a new phone, this is how you get back in.
-
-I promise we only use it for:
-✅ Account recovery
-✅ Critical service updates (like scheduled maintenance)
-❌ No marketing emails
-❌ No selling your data
-
-What's your email address?""")
-                return Response(content=str(resp), media_type="application/xml")
-            elif step == 4:
+            if step == 2:
                 resp.message("""I totally get it! But here's why I need it:
 
 Without your ZIP code, I can't figure out your timezone. That means reminders might arrive at the wrong time (imagine getting a 2pm reminder at 5am 😬).
@@ -210,11 +179,11 @@ What's your ZIP code?""")
 
         # Check if user is trying to use the service before completing onboarding
         if any(keyword in message_lower for keyword in service_keywords) and step > 0:
-            remaining = 4 - step + 1
+            remaining = 2 - step + 1
             question_word = "question" if remaining == 1 else "questions"
             resp.message(f"""⚠️ Almost there! Please finish setup first.
 
-You're on step {step} of 4 - just {remaining} more {question_word}!
+You're on step {step} of 2 - just {remaining} more {question_word}!
 
 {get_onboarding_prompt(step)}""")
             return Response(content=str(resp), media_type="application/xml")
@@ -231,7 +200,7 @@ I'm your AI-powered reminder assistant. I'll help you remember anything—from d
 
 No app needed - just text me naturally and I'll handle the rest!
 
-Let's get you set up in under a minute. What's your first name?""")
+Let's get you set up in 30 seconds. What's your first name?""")
 
         elif step == 1:
             # Check if user sent START again (maybe trying to restart)
@@ -243,55 +212,33 @@ What's your first name?""")
 
             # Check if user accidentally entered an email address
             if '@' in message_stripped and '.' in message_stripped:
-                resp.message("""That looks like an email address! I'll ask for that in a moment.
-
-What's your first name?""")
+                resp.message("""That looks like an email! What's your first name?""")
                 return Response(content=str(resp), media_type="application/xml")
 
             # Check for full name (two words)
             words = message_stripped.split()
             if len(words) == 2 and all(word.isalpha() for word in words):
-                # User provided full name - skip to email
+                # User provided full name - skip to ZIP
                 first_name, last_name = words[0].title(), words[1].title()
-                create_or_update_user(phone_number, first_name=first_name, last_name=last_name, onboarding_step=3)
-                track_onboarding_progress(phone_number, 3, first_name=first_name, last_name=last_name)
+                create_or_update_user(phone_number, first_name=first_name, last_name=last_name, onboarding_step=2)
+                track_onboarding_progress(phone_number, 2, first_name=first_name, last_name=last_name)
                 resp.message(f"""Nice to meet you, {first_name} {last_name}!
 
-Email for account recovery?
+Last question: ZIP code?
 
-(We only use this for important updates - no spam!)""")
+(This helps me send reminders at the right time in your timezone)""")
             else:
-                # Store first name, ask for last name
+                # Store first name, ask for ZIP code
                 first_name = message_stripped.title()
                 create_or_update_user(phone_number, first_name=first_name, onboarding_step=2)
                 track_onboarding_progress(phone_number, 2, first_name=first_name)
-                resp.message(f"Nice to meet you, {first_name}! Last name?")
+                resp.message(f"""Nice to meet you, {first_name}!
 
-        elif step == 2:
-            # Store last name, ask for email
-            last_name = message_stripped.title()
-            create_or_update_user(phone_number, last_name=last_name, onboarding_step=3)
-            track_onboarding_progress(phone_number, 3, last_name=last_name)
-            resp.message("""Got it! Email for account recovery?
-
-(We only use this for important updates - no spam!)""")
-
-        elif step == 3:
-            # Validate and store email, ask for zip code
-            email = message_stripped
-            is_valid, error_type = validate_email(email)
-
-            if not is_valid:
-                resp.message(get_email_error_message(error_type))
-                return Response(content=str(resp), media_type="application/xml")
-
-            create_or_update_user(phone_number, email=email, onboarding_step=4)
-            track_onboarding_progress(phone_number, 4, email=email)
-            resp.message("""Perfect! Last question: ZIP code?
+Last question: ZIP code?
 
 (This helps me send reminders at the right time in your timezone)""")
 
-        elif step == 4:
+        elif step == 2:
             # Validate and store zip code, calculate timezone, complete onboarding
             zip_code, error_type = validate_zip_code(message_stripped)
 
@@ -311,7 +258,7 @@ Email for account recovery?
                 zip_code=zip_code,
                 timezone=timezone,
                 onboarding_complete=True,
-                onboarding_step=5,
+                onboarding_step=3,
                 premium_status=TIER_PREMIUM,
                 trial_end_date=trial_end_date
             )

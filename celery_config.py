@@ -91,6 +91,14 @@ beat_schedule = {
             "expires": 3500,
         },
     },
+    # Send Day 4 email collection hourly — timezone-aware (9-10 AM local)
+    "send-day-4-email-collection": {
+        "task": "tasks.reminder_tasks.send_day_4_email_collection",
+        "schedule": crontab(minute=12),  # Every hour, at :12
+        "options": {
+            "expires": 3500,
+        },
+    },
     # Send post-trial re-engagement hourly — timezone-aware (9-10 AM local)
     "send-post-trial-reengagement": {
         "task": "tasks.reminder_tasks.send_post_trial_reengagement",

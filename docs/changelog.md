@@ -1,5 +1,27 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## Shortened Onboarding + Day 4 Email Collection (Mar 2026)
+Reduced onboarding from 4-5 steps to 3 (Welcome → First Name → ZIP Code) to reduce drop-off. Email is now collected on Day 4 via a Celery task instead of during onboarding.
+
+**Onboarding changes:**
+- Removed last name (step 2) and email (step 3) from onboarding flow.
+- Step 1 (first name) now goes directly to ZIP code. Full name shortcut (two words) stores both names and proceeds to ZIP.
+- Updated help text, step counts ("2 questions total"), and welcome message ("set up in 30 seconds").
+- Removed `get_email_error_message()` from onboarding_service (email validation still exists for Day 4 collection).
+
+**Day 4 email collection:**
+- New Celery task `send_day_4_email_collection` targets users on Day 3-4 of trial who have no email set.
+- Runs hourly at :12 (between Day 3 nudge at :10 and post-trial at :15). Timezone-aware: 9-10 AM local.
+- Sets `awaiting_email_collection = TRUE` on user when sending.
+- Response handler in `main.py` checks `awaiting_email_collection` flag before smart nudge handling.
+  - "skip"/"no"/"pass" → clears flag, suggests texting EMAIL later.
+  - Valid email (contains @ and .) → validates, saves, clears flag.
+  - Anything else → clears flag, processes normally (no trapping).
+
+**New columns:** `day_4_email_sent BOOLEAN DEFAULT FALSE`, `awaiting_email_collection BOOLEAN DEFAULT FALSE` on `users` table.
+
+**Files modified:** `services/onboarding_service.py`, `utils/formatting.py`, `services/onboarding_recovery_service.py`, `database.py`, `tasks/reminder_tasks.py`, `celery_config.py`, `main.py`, `models/user.py`, `tests/conftest.py`, `tests/test_onboarding.py`, `CLAUDE.md`.
+
 ## Beta vs Live Data Filter on Admin Dashboard (Feb 2026)
 Added a sticky filter bar to the admin dashboard that toggles between beta test data (before March 1, 2026) and live production data (March 1 onward). Live mode includes an adjustable date picker defaulting to March 1.
 

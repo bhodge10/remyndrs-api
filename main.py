@@ -947,6 +947,48 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         is_undo_command = msg_lower_clean in ['undo', "that's wrong", 'thats wrong', 'wrong', 'fix that', 'that was wrong', 'not what i meant', 'cancel']
 
         # ==========================================
+        # DAY 4 EMAIL COLLECTION RESPONSE HANDLING
+        # ==========================================
+        if not is_undo_command and not is_new_reminder_request:
+            # Check awaiting_email_collection flag from user record
+            from database import get_db_connection, return_db_connection
+            _ec_conn = None
+            try:
+                _ec_conn = get_db_connection()
+                _ec_c = _ec_conn.cursor()
+                _ec_c.execute("SELECT awaiting_email_collection FROM users WHERE phone_number = %s", (phone_number,))
+                _ec_row = _ec_c.fetchone()
+                awaiting_email = _ec_row[0] if _ec_row and _ec_row[0] else False
+            except Exception:
+                awaiting_email = False
+            finally:
+                if _ec_conn:
+                    return_db_connection(_ec_conn)
+
+            if awaiting_email:
+                msg_check = incoming_msg.strip().lower()
+                if msg_check in ['skip', 'no', 'pass', 'nah', 'nope']:
+                    create_or_update_user(phone_number, awaiting_email_collection=False)
+                    reply_text = "No problem! You can always add it later by texting EMAIL."
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(reply_text))
+                    log_interaction(phone_number, incoming_msg, reply_text, "email_collection_skip", True)
+                    return Response(content=str(resp), media_type="application/xml")
+                elif '@' in incoming_msg and '.' in incoming_msg:
+                    from services.onboarding_service import validate_email
+                    email_input = incoming_msg.strip()
+                    is_valid, _ = validate_email(email_input)
+                    if is_valid:
+                        create_or_update_user(phone_number, email=email_input, awaiting_email_collection=False)
+                        reply_text = "Got it! Email saved for account recovery. 👍"
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix(reply_text))
+                        log_interaction(phone_number, incoming_msg, reply_text, "email_collection_success", True)
+                        return Response(content=str(resp), media_type="application/xml")
+                # Not a skip or valid email — clear flag and process normally
+                create_or_update_user(phone_number, awaiting_email_collection=False)
+
+        # ==========================================
         # SMART NUDGE RESPONSE HANDLING
         # ==========================================
         # Check if user is responding to a smart nudge
