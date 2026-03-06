@@ -291,18 +291,18 @@ You have full Premium access until {trial_end_str} — unlimited reminders, list
 
 I just saved your first memory: "{first_memory}"
 
-Try asking me: "What do I have saved?"
+Try asking me: "What do I have saved?" """)
 
-(Tip: Check your next message to save me as a contact!)""")
-
-            # Send VCF contact card after 5-second delay (fall back to immediate if Celery unavailable)
+            # Send VCF contact card after 1-hour delay — acts as a warm touchback
             vcf_url = f"{API_BASE_URL}/contact.vcf"
-            vcf_message = "📱 Tap to save Remyndrs to your contacts!"
+            vcf_message = """📱 Tap to save Remyndrs to your contacts!
+
+Tip: Pin this conversation to keep me at the top of your texts — that way I'm always one tap away when you need to remember something!"""
             try:
                 send_delayed_sms.apply_async(
                     args=[phone_number, vcf_message],
                     kwargs={"media_url": vcf_url},
-                    countdown=5
+                    countdown=3600  # 1 hour
                 )
             except Exception as celery_error:
                 # Celery not available - fall back to immediate send
