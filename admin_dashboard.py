@@ -452,21 +452,6 @@ def send_broadcast_messages(broadcast_id: int, phone_numbers: list, message: str
             return_db_connection(conn)
 
 
-@router.post("/admin/test-vcf/{phone}")
-async def test_vcf_send(phone: str, admin: str = Depends(verify_admin)):
-    """Temporary endpoint: send VCF contact card + pin tip to a phone number for testing."""
-    from config import API_BASE_URL
-    vcf_url = f"{API_BASE_URL}/contact.vcf"
-    vcf_message = """📱 Tap to save Remyndrs to your contacts!
-
-Tip: Pin this conversation to keep me at the top of your texts — that way I'm always one tap away when you need to remember something!"""
-    try:
-        send_sms(f"+1{phone}" if not phone.startswith("+") else phone, vcf_message, media_url=vcf_url)
-        return {"status": "sent", "phone": phone}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/admin/broadcast/send")
 async def send_broadcast(request: BroadcastRequest, background_tasks: BackgroundTasks, admin: str = Depends(verify_admin)):
     """Send a broadcast message to selected audience (only users within 8am-8pm local time)"""
