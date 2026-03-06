@@ -181,8 +181,11 @@ Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION
 ### Smart Nudges
 Proactive AI intelligence layer — sends ONE contextual insight per day. 8 nudge types, tier-gated. OFF by default. See `docs/changelog.md` for full implementation details.
 
+### Onboarding Flow
+3-step flow: Welcome (step 0) → First Name (step 1) → ZIP Code (step 2) → Done. Email is collected on Day 4 via a Celery task instead of during onboarding. If user provides full name (two words) at step 1, both first and last name are stored and flow proceeds to ZIP.
+
 ### Trial Lifecycle
-7 automated messages from Day 3 to Day 44 post-signup. All timezone-aware (9-10 AM local). Celery tasks staggered hourly at :00/:05/:10/:15/:20/:25. See `docs/changelog.md` "Trial Lifecycle Timeline" for full schedule.
+8 automated messages from Day 3 to Day 44 post-signup. All timezone-aware (9-10 AM local). Celery tasks staggered hourly at :00/:05/:10/:12/:15/:20/:25. Day 4 email collection (:12) asks users for email (skipped during shortened onboarding). See `docs/changelog.md` "Trial Lifecycle Timeline" for full schedule.
 
 ## Environment Variables
 

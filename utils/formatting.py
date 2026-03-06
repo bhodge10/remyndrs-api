@@ -63,11 +63,7 @@ def get_onboarding_prompt(step):
     """Get the appropriate prompt for the current onboarding step"""
     prompts = {
         1: "What's your first name?",
-        2: "What's your last name?",
-        3: """Email for account recovery?
-
-(We only use this for important updates - no spam!)""",
-        4: """ZIP code?
+        2: """ZIP code?
 
 (This helps me send reminders at the right time in your timezone)"""
     }

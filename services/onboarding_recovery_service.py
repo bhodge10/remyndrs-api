@@ -211,10 +211,8 @@ def get_onboarding_progress(phone_number):
 def get_step_info(step):
     """Get info about what's needed at a given onboarding step"""
     step_info = {
-        1: {'needed': 'first name', 'remaining': 4},
-        2: {'needed': 'last name', 'remaining': 3},
-        3: {'needed': 'email address', 'remaining': 2},
-        4: {'needed': 'ZIP code', 'remaining': 1},
+        1: {'needed': 'first name', 'remaining': 2},
+        2: {'needed': 'ZIP code', 'remaining': 1},
     }
     return step_info.get(step, {'needed': 'information', 'remaining': 1})
 

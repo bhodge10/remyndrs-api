@@ -594,6 +594,12 @@ def init_db():
             )""",
             # Admin reply to contact messages
             "ALTER TABLE contact_messages ADD COLUMN IF NOT EXISTS admin_reply TEXT",
+            # Day 4 email collection (shortened onboarding)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS day_4_email_sent BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS awaiting_email_collection BOOLEAN DEFAULT FALSE",
+            # Backfill NULLs to FALSE
+            "UPDATE users SET day_4_email_sent = FALSE WHERE day_4_email_sent IS NULL",
+            "UPDATE users SET awaiting_email_collection = FALSE WHERE awaiting_email_collection IS NULL",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

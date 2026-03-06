@@ -1,5 +1,34 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## Shortened Onboarding + Day 4 Email Collection (Mar 2026)
+Reduced onboarding from 4-5 steps to 3 (Welcome → First Name → ZIP Code) to reduce drop-off. Email is now collected on Day 4 via a Celery task instead of during onboarding.
+
+**Onboarding changes:**
+- Removed last name (step 2) and email (step 3) from onboarding flow.
+- Step 1 (first name) now goes directly to ZIP code. Full name shortcut (two words) stores both names and proceeds to ZIP.
+- Updated help text, step counts ("2 questions total"), and welcome message ("set up in 30 seconds").
+- Removed `get_email_error_message()` from onboarding_service (email validation still exists for Day 4 collection).
+
+**Day 4 email collection:**
+- New Celery task `send_day_4_email_collection` targets users on Day 3-4 of trial who have no email set.
+- Runs hourly at :12 (between Day 3 nudge at :10 and post-trial at :15). Timezone-aware: 9-10 AM local.
+- Sets `awaiting_email_collection = TRUE` on user when sending.
+- Response handler in `main.py` checks `awaiting_email_collection` flag before smart nudge handling.
+  - "skip"/"no"/"pass" → clears flag, suggests texting EMAIL later.
+  - Valid email (contains @ and .) → validates, saves, clears flag.
+  - Anything else → clears flag, processes normally (no trapping).
+
+**New columns:** `day_4_email_sent BOOLEAN DEFAULT FALSE`, `awaiting_email_collection BOOLEAN DEFAULT FALSE` on `users` table.
+
+**Files modified:** `services/onboarding_service.py`, `utils/formatting.py`, `services/onboarding_recovery_service.py`, `database.py`, `tasks/reminder_tasks.py`, `celery_config.py`, `main.py`, `models/user.py`, `tests/conftest.py`, `tests/test_onboarding.py`, `CLAUDE.md`.
+
+## Beta Tester Reward: 3 Months Free Premium (Mar 2026)
+Granted all 31 pre-launch beta testers (signed up before March 1, 2026) three months of free Premium tier through June 1, 2026. Applied via temporary admin endpoints that were added, used, and removed in PRs #190–#192.
+
+**What changed:** `premium_status` set to `premium`, `premium_since` set to current timestamp (preserved if already set), `trial_end_date` extended to `2026-06-01`. No Stripe fields modified — users will naturally revert to free tier after June 1 unless they subscribe.
+
+**How it works:** `get_user_tier()` in `tier_service.py` returns `'premium'` whenever `trial_end_date > now`, so extending the trial end date is sufficient to grant premium access without Stripe involvement.
+
 ## Contact Message Reply from Admin Dashboard (Feb 2026)
 Admins can now reply to contact messages (feedback, bug reports, questions) directly via SMS without creating a support ticket. Adds an inline reply button to each message card in the Contact Messages section.
 

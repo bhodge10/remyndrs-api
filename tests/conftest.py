@@ -265,8 +265,8 @@ class ConversationSimulator:
             results.append(result)
         return results
 
-    async def complete_onboarding(self, phone_number, first_name="Test", last_name="User",
-                                   email="test@example.com", zip_code="10001"):
+    async def complete_onboarding(self, phone_number, first_name="Test",
+                                   zip_code="10001", **kwargs):
         """
         Complete the onboarding flow for a test user.
         Returns the conversation history.
@@ -274,8 +274,6 @@ class ConversationSimulator:
         messages = [
             "START",  # Initial trigger
             first_name,  # First name
-            last_name,  # Last name
-            email,  # Email
             zip_code  # ZIP code
         ]
         return await self.run_conversation(phone_number, messages)
