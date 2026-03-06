@@ -4135,9 +4135,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     <div id="overviewSection">
         <div class="cards">
             <div class="card">
-                <div class="card-title">Total Users</div>
+                <div class="card-title">All Users</div>
+                <div class="card-value" id="overviewAllUsers">{metrics.get('total_users_all_time', 0)}</div>
+                <div class="card-subtitle">all-time signups</div>
+            </div>
+            <div class="card">
+                <div class="card-title" id="overviewFilteredUsersTitle">New Signups</div>
                 <div class="card-value" id="overviewTotalUsers">{metrics.get('total_users', 0)}</div>
-                <div class="card-subtitle">completed onboarding</div>
+                <div class="card-subtitle" id="overviewFilteredUsersSub">since launch</div>
             </div>
             <div class="card orange">
                 <div class="card-title">Pending Onboarding</div>
@@ -4147,13 +4152,13 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             </div>
             <div class="card green">
                 <div class="card-title">Active (7 days)</div>
-                <div class="card-value" id="overviewActive7d">{metrics.get('active_7d', 0)}</div>
-                <div class="card-subtitle">sent a message</div>
+                <div class="card-value" id="overviewActive7dAll">{metrics.get('active_7d_all', 0)}</div>
+                <div class="card-subtitle">all users · filtered: <span id="overviewActive7d">{metrics.get('active_7d', 0)}</span></div>
             </div>
             <div class="card blue">
                 <div class="card-title">Active (30 days)</div>
-                <div class="card-value" id="overviewActive30d">{metrics.get('active_30d', 0)}</div>
-                <div class="card-subtitle">sent a message</div>
+                <div class="card-value" id="overviewActive30dAll">{metrics.get('active_30d_all', 0)}</div>
+                <div class="card-subtitle">all users · filtered: <span id="overviewActive30d">{metrics.get('active_30d', 0)}</span></div>
             </div>
             <div class="card purple">
                 <div class="card-title">Premium Users</div>
@@ -5040,7 +5045,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         }}
 
         // Call on page load
-        document.addEventListener('DOMContentLoaded', restoreCollapsedStates);
+        document.addEventListener('DOMContentLoaded', function() {{
+            restoreCollapsedStates();
+            reloadAllSections();
+        }});
 
         // ===== Date Filter State & Helpers =====
         const LIVE_DATE = '2026-03-01';
@@ -5108,9 +5116,20 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
 
                 // Update card values
                 const el = (id) => document.getElementById(id);
+                el('overviewAllUsers').textContent = m.total_users_all_time || 0;
                 el('overviewTotalUsers').textContent = m.total_users || 0;
+                // Update filtered users label based on view mode
+                if (dateFilterMode === 'beta') {{
+                    el('overviewFilteredUsersTitle').textContent = 'Beta Users';
+                    el('overviewFilteredUsersSub').textContent = 'before launch';
+                }} else {{
+                    el('overviewFilteredUsersTitle').textContent = 'New Signups';
+                    el('overviewFilteredUsersSub').textContent = 'since launch';
+                }}
                 el('overviewPendingOnboarding').textContent = m.pending_onboarding || 0;
+                el('overviewActive7dAll').textContent = m.active_7d_all || 0;
                 el('overviewActive7d').textContent = m.active_7d || 0;
+                el('overviewActive30dAll').textContent = m.active_30d_all || 0;
                 el('overviewActive30d').textContent = m.active_30d || 0;
 
                 const ps = m.premium_stats || {{}};

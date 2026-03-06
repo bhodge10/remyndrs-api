@@ -622,7 +622,11 @@ def get_all_metrics(start_date=None, end_date=None):
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Total users (completed onboarding)
+        # Total users all-time (never date-filtered)
+        c.execute('SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE')
+        total_users_all_time = c.fetchone()[0]
+
+        # Total users (completed onboarding) - date-filtered
         query = 'SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE'
         params = []
         df, dp = _date_filter('created_at', start_date, end_date)
@@ -647,9 +651,12 @@ def get_all_metrics(start_date=None, end_date=None):
 
         return {
             'total_users': total_users,
+            'total_users_all_time': total_users_all_time,
             'pending_onboarding': pending_onboarding,
             'active_7d': get_active_users(7, start_date=start_date, end_date=end_date),
+            'active_7d_all': get_active_users(7),
             'active_30d': get_active_users(30, start_date=start_date, end_date=end_date),
+            'active_30d_all': get_active_users(30),
             'new_users': get_new_user_counts(start_date=start_date, end_date=end_date),
             'premium_stats': get_premium_stats(start_date=start_date, end_date=end_date),
             'reminder_stats': get_reminder_completion_rate(start_date=start_date, end_date=end_date),
