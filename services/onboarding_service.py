@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from fastapi.responses import Response
 from twilio.twiml.messaging_response import MessagingResponse
 
-from config import logger, FREE_TRIAL_DAYS, TIER_PREMIUM, APP_BASE_URL, PREMIUM_MONTHLY_PRICE
+from config import logger, FREE_TRIAL_DAYS, TIER_PREMIUM, API_BASE_URL, PREMIUM_MONTHLY_PRICE
 from models.user import get_user, get_onboarding_step, create_or_update_user
 from models.memory import save_memory
 from utils.timezone import get_timezone_from_zip, get_user_current_time
@@ -296,7 +296,7 @@ Try asking me: "What do I have saved?"
 (Tip: Check your next message to save me as a contact!)""")
 
             # Send VCF contact card after 5-second delay (fall back to immediate if Celery unavailable)
-            vcf_url = f"{APP_BASE_URL}/contact.vcf"
+            vcf_url = f"{API_BASE_URL}/contact.vcf"
             vcf_message = "📱 Tap to save Remyndrs to your contacts!"
             try:
                 send_delayed_sms.apply_async(

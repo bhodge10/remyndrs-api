@@ -147,6 +147,9 @@ STRIPE_PRICE_IDS = {
 # Base URL for redirects (set in environment)
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://remyndrs.com")
 
+# API base URL for serving files (VCF contact card, etc.)
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://sms-reminders-api-1gmm.onrender.com")
+
 STRIPE_ENABLED = bool(STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
 if STRIPE_ENABLED:
     logger.info("Stripe payments enabled")
