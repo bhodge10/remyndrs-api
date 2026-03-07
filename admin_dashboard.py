@@ -3896,6 +3896,77 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         .cleanup-btn:hover {{
             background: #c0392b;
         }}
+        .view-stuck-btn {{
+            margin-top: 5px;
+            padding: 5px 10px;
+            font-size: 0.75em;
+            background: #e67e22;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }}
+        .view-stuck-btn:hover {{
+            background: #d35400;
+        }}
+        .stuck-modal {{
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }}
+        .stuck-modal.active {{
+            display: flex;
+        }}
+        .stuck-modal-content {{
+            background: #1e1e1e;
+            border-radius: 8px;
+            padding: 24px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            color: #eee;
+        }}
+        .stuck-modal-content h3 {{
+            margin-top: 0;
+            color: #e67e22;
+        }}
+        .stuck-modal-content table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }}
+        .stuck-modal-content th, .stuck-modal-content td {{
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+            font-size: 0.9em;
+        }}
+        .stuck-modal-content th {{
+            color: #aaa;
+            font-weight: 600;
+        }}
+        .stuck-step-header {{
+            margin-top: 16px;
+            margin-bottom: 4px;
+            color: #e67e22;
+            font-weight: 600;
+        }}
+        .stuck-modal-close {{
+            float: right;
+            background: none;
+            border: none;
+            color: #aaa;
+            font-size: 1.5em;
+            cursor: pointer;
+        }}
+        .stuck-modal-close:hover {{
+            color: #fff;
+        }}
 
         /* Conversation Viewer Styles */
         .conversation-section {{
@@ -4199,6 +4270,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <div class="card-value" id="overviewPendingOnboarding">{metrics.get('pending_onboarding', 0)}</div>
                 <div class="card-subtitle">started but not finished</div>
                 <button class="cleanup-btn" onclick="cleanupIncomplete()">Clean Up</button>
+                <button class="view-stuck-btn" onclick="viewStuckUsers()">View Stuck</button>
             </div>
             <div class="card green">
                 <div class="card-title">Active (7 days)</div>
@@ -7346,6 +7418,47 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        async function viewStuckUsers() {{
+            const modal = document.getElementById('stuckModal');
+            const body = document.getElementById('stuckModalBody');
+            body.innerHTML = 'Loading...';
+            modal.classList.add('active');
+
+            try {{
+                const response = await fetch('/admin/onboarding/stuck', {{
+                    headers: {{ 'Authorization': 'Basic ' + btoa('{ADMIN_USERNAME}:{ADMIN_PASSWORD}') }}
+                }});
+                const data = await response.json();
+
+                if (data.total_stuck === 0) {{
+                    body.innerHTML = '<p>No users stuck in onboarding.</p>';
+                    return;
+                }}
+
+                let html = `<p>${{data.total_stuck}} user(s) stuck in onboarding:</p>`;
+                for (const [step, users] of Object.entries(data.by_step)) {{
+                    html += `<div class="stuck-step-header">${{step}} (${{users.length}})</div>`;
+                    html += `<table><tr><th>Phone</th><th>Name</th><th>Signed Up</th><th>Last Active</th><th>Follow-ups</th></tr>`;
+                    for (const u of users) {{
+                        const followups = [];
+                        if (u.followup_24h_sent) followups.push('24h');
+                        if (u.followup_7d_sent) followups.push('7d');
+                        html += `<tr>
+                            <td>***${{u.phone}}</td>
+                            <td>${{u.first_name || '-'}}</td>
+                            <td>${{u.created_at ? u.created_at.substring(0, 10) : '-'}}</td>
+                            <td>${{u.last_activity ? u.last_activity.substring(0, 10) : '-'}}</td>
+                            <td>${{followups.length ? followups.join(', ') + ' sent' : 'None sent'}}</td>
+                        </tr>`;
+                    }}
+                    html += '</table>';
+                }}
+                body.innerHTML = html;
+            }} catch (err) {{
+                body.innerHTML = '<p style="color: #e74c3c;">Error loading data: ' + err.message + '</p>';
+            }}
+        }}
+
         async function deleteUser(phone) {{
             if (!confirm(`Delete user ${{phone}} and ALL their data? This cannot be undone.`)) return;
             if (!confirm(`Are you SURE? This will permanently delete all reminders, lists, memories, and account data for ${{phone}}.`)) return;
@@ -7704,6 +7817,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
     </script>
+
+    <div class="stuck-modal" id="stuckModal" onclick="if(event.target===this)this.classList.remove('active')">
+        <div class="stuck-modal-content">
+            <button class="stuck-modal-close" onclick="document.getElementById('stuckModal').classList.remove('active')">&times;</button>
+            <h3>Stuck Onboarding Users</h3>
+            <div id="stuckModalBody">Loading...</div>
+        </div>
+    </div>
 </body>
 </html>
     """
