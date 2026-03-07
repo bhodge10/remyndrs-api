@@ -1078,6 +1078,56 @@ async def debug_users(admin: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/admin/onboarding/stuck")
+async def get_stuck_onboarding_users(admin: str = Depends(verify_admin)):
+    """Show users stuck in onboarding, grouped by step"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get stuck users from users table
+        c.execute('''
+            SELECT u.phone_number, u.first_name, u.onboarding_step, u.created_at,
+                   op.last_activity_at, op.followup_24h_sent, op.followup_7d_sent
+            FROM users u
+            LEFT JOIN onboarding_progress op ON u.phone_number = op.phone_number
+            WHERE u.onboarding_complete = FALSE AND u.onboarding_step > 0
+            ORDER BY u.onboarding_step, u.created_at DESC
+        ''')
+        users = c.fetchall()
+
+        # Group by step
+        step_labels = {
+            1: "Waiting for first name",
+            2: "Waiting for ZIP code"
+        }
+        by_step = {}
+        for u in users:
+            step = u[2]
+            label = step_labels.get(step, f"Step {step}")
+            if label not in by_step:
+                by_step[label] = []
+            by_step[label].append({
+                "phone": u[0][-4:] if u[0] else "N/A",
+                "first_name": u[1],
+                "onboarding_step": step,
+                "created_at": str(u[3]) if u[3] else None,
+                "last_activity": str(u[4]) if u[4] else None,
+                "followup_24h_sent": u[5] if u[5] is not None else False,
+                "followup_7d_sent": u[6] if u[6] is not None else False
+            })
+
+        return_db_connection(conn)
+
+        return JSONResponse(content={
+            "total_stuck": len(users),
+            "by_step": by_step
+        })
+    except Exception as e:
+        logger.error(f"Error getting stuck onboarding users: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.delete("/admin/users/incomplete")
 async def delete_incomplete_users(admin: str = Depends(verify_admin)):
     """Delete users who haven't completed onboarding"""
