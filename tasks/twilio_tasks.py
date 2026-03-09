@@ -65,27 +65,49 @@ def poll_twilio_costs():
         outbound_cost = abs(outbound_cost)
         total_cost = inbound_cost + outbound_cost
 
+        # Fetch failed + undelivered messages for yesterday to track wasted spend
+        yesterday_start = datetime(yesterday.year, yesterday.month, yesterday.day, tzinfo=timezone.utc)
+        yesterday_end = yesterday_start + timedelta(days=1)
+        failed_count = 0
+        failed_cost = 0.0
+        try:
+            for status in ("failed", "undelivered"):
+                msgs = twilio_client.messages.list(
+                    status=status,
+                    date_sent_after=yesterday_start,
+                    date_sent_before=yesterday_end,
+                )
+                for msg in msgs:
+                    failed_count += 1
+                    if msg.price:
+                        failed_cost += abs(float(msg.price))
+        except Exception as failed_err:
+            logger.warning(f"poll_twilio_costs: Could not fetch failed messages — {failed_err}")
+
         # Upsert into twilio_costs table
         conn = None
         try:
             conn = get_db_connection()
             c = conn.cursor()
             c.execute('''
-                INSERT INTO twilio_costs (cost_date, inbound_count, inbound_cost, outbound_count, outbound_cost, total_cost)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO twilio_costs (cost_date, inbound_count, inbound_cost, outbound_count, outbound_cost, total_cost, failed_count, failed_cost)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (cost_date) DO UPDATE SET
                     inbound_count = EXCLUDED.inbound_count,
                     inbound_cost = EXCLUDED.inbound_cost,
                     outbound_count = EXCLUDED.outbound_count,
                     outbound_cost = EXCLUDED.outbound_cost,
-                    total_cost = EXCLUDED.total_cost
-            ''', (yesterday, inbound_count, inbound_cost, outbound_count, outbound_cost, total_cost))
+                    total_cost = EXCLUDED.total_cost,
+                    failed_count = EXCLUDED.failed_count,
+                    failed_cost = EXCLUDED.failed_cost
+            ''', (yesterday, inbound_count, inbound_cost, outbound_count, outbound_cost, total_cost, failed_count, failed_cost))
             conn.commit()
 
             logger.info(
                 f"poll_twilio_costs: {yesterday} — "
                 f"inbound: {inbound_count} msgs / ${inbound_cost:.4f}, "
                 f"outbound: {outbound_count} msgs / ${outbound_cost:.4f}, "
+                f"failed: {failed_count} msgs / ${failed_cost:.4f}, "
                 f"total: ${total_cost:.4f}"
             )
         finally:
