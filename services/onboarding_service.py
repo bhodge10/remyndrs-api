@@ -287,7 +287,7 @@ Last question: ZIP code?
             # Send completion message - focused on immediate value + trial awareness
             resp.message(f"""Perfect! You're all set, {first_name}! 🎉
 
-You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories.
+You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories. After that, the core service is free forever — no credit card ever needed.
 
 I just saved your first memory: "{first_memory}"
 
