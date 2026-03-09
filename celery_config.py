@@ -194,6 +194,13 @@ beat_schedule = {
         "options": {"expires": 3600},
     },
 
+    # Check for failed messages every 12 hours — auto-opts-out repeat failures
+    "check-failed-messages": {
+        "task": "tasks.twilio_tasks.check_failed_messages",
+        "schedule": crontab(hour="6,18", minute=45),  # 6:45 AM and 6:45 PM UTC
+        "options": {"expires": 3600},
+    },
+
     # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)
     # ===========================================
