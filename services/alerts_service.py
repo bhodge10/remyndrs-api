@@ -191,7 +191,7 @@ def send_sms_alert(message: str, recipients: List[str] = None) -> bool:
     success_count = 0
     for phone in recipients:
         try:
-            result = send_sms(phone, message)
+            result = send_sms(phone, message, message_type="alert")
             if result:
                 success_count += 1
                 logger.info(f"SMS alert sent to ...{phone[-4:]}")

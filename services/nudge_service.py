@@ -362,7 +362,7 @@ def send_nudge_to_user(phone_number: str, nudge_data: dict[str, Any]) -> bool:
             return False
 
         # Send SMS
-        send_sms(phone_number, nudge_data['nudge_text'])
+        send_sms(phone_number, nudge_data['nudge_text'], message_type="smart_nudge")
 
         # Set pending response if the nudge expects a reply
         actionable_types = {'date_extraction', 'reminder_followup', 'stale_list', 'pattern_recognition'}

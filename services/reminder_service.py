@@ -50,7 +50,7 @@ def send_reminder_atomically(reminder_id: int, phone_number: str, reminder_text:
 
         # Send SMS while holding the lock
         try:
-            send_sms(phone_number, f"Reminder: {reminder_text}\n\n(Reply SNOOZE to snooze)")
+            send_sms(phone_number, f"Reminder: {reminder_text}\n\n(Reply SNOOZE to snooze)", message_type="reminder")
         except Exception as e:
             logger.error(f"Failed to send SMS for reminder {reminder_id}: {e}")
             conn.rollback()  # Release lock

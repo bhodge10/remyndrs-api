@@ -79,7 +79,7 @@ def twiml_or_sms_fallback(phone_number, reply_text, request_start_time):
     if elapsed > TWILIO_WEBHOOK_TIMEOUT:
         # Twilio has likely already timed out — send reply via direct SMS
         try:
-            send_sms(phone_number, staging_prefix(reply_text))
+            send_sms(phone_number, staging_prefix(reply_text), message_type="reply")
             logger.warning(f"Webhook took {elapsed:.1f}s (>{TWILIO_WEBHOOK_TIMEOUT}s) — sent reply via direct SMS to ...{phone_number[-4:]}")
         except Exception as sms_err:
             logger.error(f"SMS fallback also failed after {elapsed:.1f}s: {sms_err}")
@@ -5853,7 +5853,7 @@ Reply with your first name to get started, or text HELP for more info."""
 
         # Send SMS
         from services.sms_service import send_sms
-        send_sms(formatted_phone, message)
+        send_sms(formatted_phone, message, message_type="signup")
 
         # Track referral source if provided
         ref = data.get('ref', '').strip().lower()
@@ -5959,7 +5959,7 @@ async def website_contact(request: Request):
 
         try:
             confirmation_msg = f"We received your {type_label}. To continue the conversation, text us anytime at this number."
-            send_sms(formatted_phone, confirmation_msg)
+            send_sms(formatted_phone, confirmation_msg, message_type="reply")
         except Exception as e:
             logger.error(f"Error sending contact confirmation SMS: {e}")
             # Don't fail the request if SMS fails - the feedback was already saved

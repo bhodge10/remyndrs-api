@@ -271,7 +271,7 @@ def reply_to_contact_message(message_id: int, message: str) -> dict:
 
         # Send SMS
         sms_message = f"[Remyndrs]\n\n{message}"
-        send_sms(phone_number, sms_message)
+        send_sms(phone_number, sms_message, message_type="support")
 
         # Store the admin reply
         c.execute(
@@ -510,7 +510,7 @@ def reply_to_ticket(ticket_id: int, message: str) -> dict:
         # Send SMS to user with ticket number (so they stay in support mode context)
         # Include instructions for exiting support mode
         sms_message = f"[Support Ticket #{ticket_id}]\n\n{message}\n\n(Reply to continue, or text EXIT to return to normal use)"
-        send_sms(phone_number, sms_message)
+        send_sms(phone_number, sms_message, message_type="support")
 
         # Record outbound message
         c.execute(
@@ -577,7 +577,7 @@ def close_ticket(ticket_id: int, notify_user: bool = True) -> bool:
             if notify_user and phone_number:
                 try:
                     sms_message = f"[Support Ticket #{ticket_id}] Your support ticket has been closed. Thank you for contacting Remyndrs support! Text SUPPORT anytime to open a new ticket."
-                    send_sms(phone_number, sms_message)
+                    send_sms(phone_number, sms_message, message_type="support")
                     logger.info(f"Sent closure notification for ticket #{ticket_id}")
                 except Exception as e:
                     logger.error(f"Failed to send closure SMS for ticket #{ticket_id}: {e}")
