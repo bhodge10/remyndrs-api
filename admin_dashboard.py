@@ -5548,6 +5548,12 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             const diffColor = diff <= 0 ? '#27ae60' : '#e74c3c';
             const diffSign = diff <= 0 ? '' : '+';
 
+            const failedCount = actual.failed_count || 0;
+            const failedCost = actual.failed_cost || 0;
+            const deliveredCount = actual.outbound_count - failedCount;
+            const deliveredCost = actual.outbound_cost - failedCost;
+            const wastePercent = actual.outbound_count > 0 ? ((failedCount / actual.outbound_count) * 100).toFixed(1) : 0;
+
             container.style.display = 'block';
             container.innerHTML = `
                 <div style="display: flex; gap: 25px; align-items: center; flex-wrap: wrap;">
@@ -5560,6 +5566,15 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     Inbound: ${{actual.inbound_count}} msgs / ${{formatCurrency(actual.inbound_cost)}} |
                     Outbound: ${{actual.outbound_count}} msgs / ${{formatCurrency(actual.outbound_cost)}}
                 </div>
+                ${{failedCount > 0 ? `
+                <div style="margin-top: 8px; padding: 8px 12px; background: #fdf2f2; border-left: 3px solid #e74c3c; border-radius: 4px; font-size: 0.85em;">
+                    <strong style="color: #e74c3c;">Failed/Undelivered:</strong>
+                    <span style="color: #c0392b;">${{failedCount}} msgs / ${{formatCurrency(failedCost)}} wasted (${{wastePercent}}% of outbound)</span>
+                    <span style="margin-left: 10px; color: #27ae60;">Delivered: ${{deliveredCount}} msgs / ${{formatCurrency(deliveredCost)}}</span>
+                </div>` : `
+                <div style="margin-top: 8px; padding: 8px 12px; background: #f0faf0; border-left: 3px solid #27ae60; border-radius: 4px; font-size: 0.85em;">
+                    <strong style="color: #27ae60;">No failed messages</strong> — all outbound messages delivered successfully.
+                </div>`}}
             `;
         }}
 

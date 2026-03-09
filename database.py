@@ -592,6 +592,9 @@ def init_db():
                 total_cost NUMERIC(10,4) DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
+            # Twilio costs: track failed messages separately
+            "ALTER TABLE twilio_costs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0",
+            "ALTER TABLE twilio_costs ADD COLUMN IF NOT EXISTS failed_cost NUMERIC(10,4) DEFAULT 0",
             # Admin reply to contact messages
             "ALTER TABLE contact_messages ADD COLUMN IF NOT EXISTS admin_reply TEXT",
             # Day 4 email collection (shortened onboarding)

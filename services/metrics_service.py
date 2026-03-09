@@ -587,7 +587,9 @@ def get_twilio_actual_costs(start_date=None, end_date=None):
                     COALESCE(SUM(outbound_count), 0),
                     COALESCE(SUM(outbound_cost), 0),
                     COALESCE(SUM(total_cost), 0),
-                    COUNT(*)
+                    COUNT(*),
+                    COALESCE(SUM(failed_count), 0),
+                    COALESCE(SUM(failed_cost), 0)
                 FROM twilio_costs
                 WHERE cost_date >= CURRENT_DATE - %s::interval
             '''
@@ -603,6 +605,8 @@ def get_twilio_actual_costs(start_date=None, end_date=None):
                 'outbound_cost': float(row[3]),
                 'total_cost': float(row[4]),
                 'days_with_data': row[5],
+                'failed_count': row[6],
+                'failed_cost': float(row[7]),
             }
 
         return results
