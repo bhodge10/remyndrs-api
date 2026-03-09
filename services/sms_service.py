@@ -5,7 +5,14 @@ Handles sending SMS messages via Twilio
 
 import os
 from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 from config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, logger
+
+
+class UserOptedOutError(Exception):
+    """Raised when sending to a user who has opted out (Twilio error 21610).
+    Callers should NOT retry when this is raised."""
+    pass
 
 # Safety check: Detect test environment
 _ENVIRONMENT = os.environ.get("ENVIRONMENT", "production").lower()
@@ -55,6 +62,18 @@ def send_sms(to_number, message, media_url=None):
 
         twilio_client.messages.create(**kwargs)
         logger.info(f"Sent {'MMS' if media_url else 'SMS'} to {to_number}")
+    except TwilioRestException as e:
+        if e.code == 21610:
+            # User has unsubscribed at the carrier level — mark opted out and don't retry
+            logger.warning(f"Twilio 21610: User {to_number} is unsubscribed. Marking opted out.")
+            try:
+                from models.user import mark_user_opted_out
+                mark_user_opted_out(to_number)
+            except Exception as opt_out_err:
+                logger.error(f"Failed to mark {to_number} as opted out: {opt_out_err}")
+            raise UserOptedOutError(f"User {to_number} has opted out (Twilio 21610)")
+        logger.error(f"Twilio error sending SMS to {to_number}: {e}")
+        raise
     except Exception as e:
         logger.error(f"Error sending SMS to {to_number}: {e}")
         raise  # Re-raise so callers can handle/retry
