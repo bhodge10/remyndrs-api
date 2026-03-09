@@ -308,7 +308,7 @@ Tip: Pin this conversation to keep me at the top of your texts — that way I'm 
                 # Celery not available - fall back to immediate send
                 logger.info(f"Celery unavailable, sending VCF immediately: {celery_error}")
                 try:
-                    send_sms(phone_number, vcf_message, media_url=vcf_url)
+                    send_sms(phone_number, vcf_message, media_url=vcf_url, message_type="onboarding")
                 except Exception as sms_error:
                     logger.warning(f"Could not send VCF card for {phone_number}: {sms_error}")
 

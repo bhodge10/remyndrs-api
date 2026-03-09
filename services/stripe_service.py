@@ -500,7 +500,7 @@ def send_subscription_confirmation(phone_number: str, tier: str):
         plan_name = "Premium" if tier == TIER_PREMIUM else "Family Plan"
         message = f"Welcome to Remyndrs {plan_name}! Here's what you've unlocked:\n\n- Unlimited reminders per day\n- 20 lists (30 items each)\n- Unlimited saved memories\n- Recurring reminders\n- Priority support\n\nCancel anytime. Enjoy!"
 
-        send_sms(phone_number, message)
+        send_sms(phone_number, message, message_type="billing")
         logger.info(f"Sent subscription confirmation to {phone_number[-4:]}")
     except Exception as e:
         logger.error(f"Error sending subscription confirmation: {e}")
@@ -537,7 +537,7 @@ def send_cancellation_notice(phone_number: str):
             if conn_flag:
                 return_db_connection(conn_flag)
 
-        send_sms(phone_number, message)
+        send_sms(phone_number, message, message_type="billing")
         logger.info(f"Sent cancellation notice with feedback request to {phone_number[-4:]}")
     except Exception as e:
         logger.error(f"Error sending cancellation notice: {e}")
@@ -550,7 +550,7 @@ def send_payment_failed_notice(phone_number: str):
 
         message = "We couldn't process your Remyndrs payment. Please update your payment method to keep your premium features. Text ACCOUNT to manage your subscription."
 
-        send_sms(phone_number, message)
+        send_sms(phone_number, message, message_type="billing")
         logger.info(f"Sent payment failed notice to {phone_number[-4:]}")
     except Exception as e:
         logger.error(f"Error sending payment failed notice: {e}")

@@ -592,6 +592,15 @@ def init_db():
                 total_cost NUMERIC(10,4) DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
+            # Outbound SMS log for accurate cost tracking
+            """CREATE TABLE IF NOT EXISTS sms_outbound_log (
+                id SERIAL PRIMARY KEY,
+                phone_number TEXT NOT NULL,
+                message_type TEXT NOT NULL DEFAULT 'other',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_sms_outbound_log_created ON sms_outbound_log(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_sms_outbound_log_phone ON sms_outbound_log(phone_number)",
             # Twilio costs: track failed messages separately
             "ALTER TABLE twilio_costs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0",
             "ALTER TABLE twilio_costs ADD COLUMN IF NOT EXISTS failed_cost NUMERIC(10,4) DEFAULT 0",

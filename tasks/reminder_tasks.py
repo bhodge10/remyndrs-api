@@ -147,7 +147,7 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
             message = f"{opener} — {reminder_text}\n\n(Reply SNOOZE to snooze 15 min)"
 
             # Send SMS via Twilio
-            send_sms(phone_number, message)
+            send_sms(phone_number, message, message_type="reminder")
 
         except UserOptedOutError:
             # User unsubscribed — don't retry, mark as sent to prevent re-pickup
@@ -538,7 +538,7 @@ def send_daily_summaries(self):
                 if len(message) > 1500:
                     # Truncate to fit SMS limit with a note
                     message = message[:1450] + "\n\n...and more. Text MY REMINDERS for full list."
-                send_sms(phone_number, message)
+                send_sms(phone_number, message, message_type="daily_summary")
 
                 sent_count += 1
 
@@ -685,7 +685,7 @@ def send_abandoned_onboarding_followups(self):
                     user['first_name'],
                     user['current_step']
                 )
-                send_sms(user['phone_number'], message)
+                send_sms(user['phone_number'], message, message_type="onboarding_followup")
                 mark_followup_sent(user['phone_number'], '24h')
                 sent_count += 1
                 logger.info(f"Sent 24h onboarding followup to ...{user['phone_number'][-4:]}")
@@ -697,7 +697,7 @@ def send_abandoned_onboarding_followups(self):
         for user in abandoned_7d:
             try:
                 message = build_7d_followup_message(user['first_name'])
-                send_sms(user['phone_number'], message)
+                send_sms(user['phone_number'], message, message_type="onboarding_followup")
                 mark_followup_sent(user['phone_number'], '7d')
                 sent_count += 1
                 logger.info(f"Sent 7d onboarding followup to ...{user['phone_number'][-4:]}")
@@ -796,7 +796,7 @@ def send_engagement_nudge(self, phone_number: str):
         nudge_message = "Quick question: What's something you always forget?\n\n(I'm really good at remembering it for you 😊)"
 
         try:
-            send_sms(phone_number, nudge_message)
+            send_sms(phone_number, nudge_message, message_type="engagement_nudge")
             # Mark as sent
             create_or_update_user(phone_number, five_minute_nudge_sent=True)
             logger.info(f"Successfully sent engagement nudge to ...{phone_number[-4:]}")
@@ -991,7 +991,7 @@ Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/mo or {PREM
                     conn.rollback()
                     continue
                 try:
-                    send_sms(phone_number, warning_to_send)
+                    send_sms(phone_number, warning_to_send, message_type="trial_warning")
 
                     # Mark warning as sent using existing connection (not create_or_update_user
                     # which opens a new connection and silently swallows errors)
@@ -1152,7 +1152,7 @@ def send_mid_trial_value_reminders(self):
                 message = "\n".join(message_lines)
 
                 # Send the reminder, then mark flag atomically with existing connection
-                send_sms(phone_number, message)
+                send_sms(phone_number, message, message_type="trial_lifecycle")
                 c.execute("UPDATE users SET mid_trial_reminder_sent = TRUE WHERE phone_number = %s", (phone_number,))
                 conn.commit()
 
@@ -1377,7 +1377,7 @@ Have you tried these yet?
 
 Just text me naturally — I'll figure out what you need!"""
 
-                send_sms(phone_number, message)
+                send_sms(phone_number, message, message_type="trial_lifecycle")
                 c.execute("UPDATE users SET day_3_nudge_sent = TRUE WHERE phone_number = %s", (phone_number,))
                 conn.commit()
 
@@ -1489,7 +1489,7 @@ No spam, no marketing — just a safety net for your data.
 
 (Reply with your email or text SKIP if you'd rather not)"""
 
-                send_sms(phone_number, message)
+                send_sms(phone_number, message, message_type="trial_lifecycle")
                 c.execute("UPDATE users SET day_4_email_sent = TRUE, awaiting_email_collection = TRUE WHERE phone_number = %s", (phone_number,))
                 conn.commit()
 
@@ -1598,7 +1598,7 @@ You're on the free plan (2 reminders/day). Want unlimited reminders, lists & mem
 
 Text UPGRADE for Premium at {PREMIUM_MONTHLY_PRICE}/month — pick up right where you left off."""
 
-                send_sms(phone_number, message)
+                send_sms(phone_number, message, message_type="trial_lifecycle")
                 c.execute("UPDATE users SET post_trial_reengagement_sent = TRUE WHERE phone_number = %s", (phone_number,))
                 conn.commit()
 
@@ -1724,7 +1724,7 @@ def send_14d_post_trial_touchpoint(self):
 
 Text UPGRADE to get unlimited access back — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr."""
 
-                send_sms(phone_number, message)
+                send_sms(phone_number, message, message_type="trial_lifecycle")
                 c.execute("UPDATE users SET post_trial_14d_sent = TRUE WHERE phone_number = %s", (phone_number,))
                 conn.commit()
 
@@ -1831,7 +1831,7 @@ Text UPGRADE to unlock unlimited access — {PREMIUM_MONTHLY_PRICE}/mo or {PREMI
 
 Or just text me anything to keep using the free plan!"""
 
-                send_sms(phone_number, message)
+                send_sms(phone_number, message, message_type="trial_lifecycle")
                 c.execute("UPDATE users SET winback_30d_sent = TRUE WHERE phone_number = %s", (phone_number,))
                 conn.commit()
 

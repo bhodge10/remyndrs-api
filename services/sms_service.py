@@ -28,13 +28,32 @@ else:
     twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
-def send_sms(to_number, message, media_url=None):
+def _log_outbound(phone_number, message_type):
+    """Log an outbound SMS to sms_outbound_log for cost tracking."""
+    try:
+        from database import get_db_connection, return_db_connection
+        conn = get_db_connection()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'INSERT INTO sms_outbound_log (phone_number, message_type) VALUES (%s, %s)',
+                (phone_number, message_type)
+            )
+            conn.commit()
+        finally:
+            return_db_connection(conn)
+    except Exception as e:
+        logger.warning(f"Failed to log outbound SMS: {e}")
+
+
+def send_sms(to_number, message, media_url=None, message_type="other"):
     """Send an SMS/MMS message via Twilio
 
     Args:
         to_number: Recipient phone number
         message: Text message body
         media_url: Optional URL for MMS attachment (e.g., image, VCF file)
+        message_type: Category for cost tracking (e.g., 'reminder', 'nudge', 'trial', 'reply', 'other')
 
     Note:
         In test environments (ENVIRONMENT=test/development or test credentials),
@@ -62,6 +81,7 @@ def send_sms(to_number, message, media_url=None):
 
         twilio_client.messages.create(**kwargs)
         logger.info(f"Sent {'MMS' if media_url else 'SMS'} to {to_number}")
+        _log_outbound(to_number, message_type)
     except TwilioRestException as e:
         if e.code == 21610:
             # User has unsubscribed at the carrier level — mark opted out and don't retry

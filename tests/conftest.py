@@ -59,7 +59,7 @@ class SMSCapture:
         self.messages = []
         self.call_count = 0
 
-    def send_sms(self, to_number, message, media_url=None):
+    def send_sms(self, to_number, message, media_url=None, message_type="other"):
         """Capture SMS instead of sending via Twilio."""
         self.messages.append({
             "to": to_number,
@@ -574,7 +574,7 @@ def disable_twilio_globally():
         mock_msg.status = 'queued'
         return mock_msg
 
-    def mock_send_sms(to_number, message, media_url=None):
+    def mock_send_sms(to_number, message, media_url=None, message_type="other"):
         """Mock send_sms that doesn't call Twilio."""
         blocked_calls.append({
             'to': to_number,

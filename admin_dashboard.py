@@ -411,7 +411,7 @@ def send_broadcast_messages(broadcast_id: int, phone_numbers: list, message: str
 
         for i, phone in enumerate(phone_numbers):
             try:
-                send_sms(phone, full_message)
+                send_sms(phone, full_message, message_type="broadcast")
                 success_count += 1
             except Exception as e:
                 logger.error(f"Failed to send broadcast to {phone}: {e}")
@@ -783,7 +783,7 @@ def send_scheduled_broadcast(broadcast_id: int, message: str, audience: str, sen
         # Send messages with rate limiting
         for i, phone in enumerate(phone_numbers):
             try:
-                send_sms(phone, full_message)
+                send_sms(phone, full_message, message_type="broadcast")
                 success_count += 1
             except Exception as e:
                 logger.error(f"Failed to send scheduled broadcast to {phone}: {e}")

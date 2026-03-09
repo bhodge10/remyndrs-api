@@ -465,8 +465,9 @@ def get_cost_analytics(start_date=None, end_date=None):
             df_l, dp_l = _date_filter('l.created_at', start_date, end_date)
             df_a, dp_a = _date_filter('a.created_at', start_date, end_date)
 
-            # Get SMS costs by plan (count messages from logs table)
-            sms_query = '''
+            # Get SMS costs by plan — combine inbound (logs) + outbound (sms_outbound_log)
+            # Inbound: count from logs table (each row = 1 inbound message)
+            inbound_query = '''
                 SELECT
                     CASE
                         WHEN u.trial_end_date > NOW() AND u.premium_status IN ('premium', 'family')
@@ -478,12 +479,39 @@ def get_cost_analytics(start_date=None, end_date=None):
                 JOIN users u ON l.phone_number = u.phone_number
                 WHERE l.created_at >= NOW() - %s::interval
             '''
-            sms_params = [interval]
-            sms_query += df_l
-            sms_params.extend(dp_l)
-            sms_query += ' GROUP BY 1'
-            c.execute(sms_query, sms_params)
-            sms_by_plan = {row[0]: row[1] for row in c.fetchall()}
+            inbound_params = [interval]
+            inbound_query += df_l
+            inbound_params.extend(dp_l)
+            inbound_query += ' GROUP BY 1'
+            c.execute(inbound_query, inbound_params)
+            inbound_by_plan = {row[0]: row[1] for row in c.fetchall()}
+
+            # Outbound: count from sms_outbound_log table (every send_sms call)
+            df_o, dp_o = _date_filter('o.created_at', start_date, end_date)
+            outbound_query = '''
+                SELECT
+                    CASE
+                        WHEN u.trial_end_date > NOW() AND u.premium_status IN ('premium', 'family')
+                            THEN 'trial'
+                        ELSE COALESCE(u.premium_status, 'free')
+                    END as plan,
+                    COUNT(*) as message_count
+                FROM sms_outbound_log o
+                JOIN users u ON o.phone_number = u.phone_number
+                WHERE o.created_at >= NOW() - %s::interval
+            '''
+            outbound_params = [interval]
+            outbound_query += df_o
+            outbound_params.extend(dp_o)
+            outbound_query += ' GROUP BY 1'
+            c.execute(outbound_query, outbound_params)
+            outbound_by_plan = {row[0]: row[1] for row in c.fetchall()}
+
+            # Combine: total messages = inbound + outbound
+            all_plans = set(list(inbound_by_plan.keys()) + list(outbound_by_plan.keys()))
+            sms_by_plan = {}
+            for plan in all_plans:
+                sms_by_plan[plan] = inbound_by_plan.get(plan, 0) + outbound_by_plan.get(plan, 0)
 
             # Get AI costs by plan (from api_usage table)
             ai_query = '''
@@ -509,8 +537,7 @@ def get_cost_analytics(start_date=None, end_date=None):
             # Calculate costs for each plan tier (including trial)
             for plan in ['free', 'trial', 'premium', 'family']:
                 message_count = sms_by_plan.get(plan, 0)
-                # Each interaction = 1 inbound + 1 outbound
-                sms_cost = message_count * 2 * SMS_COST_PER_MESSAGE
+                sms_cost = message_count * SMS_COST_PER_MESSAGE
 
                 ai_tokens = ai_by_plan.get(plan, {'prompt': 0, 'completion': 0})
                 ai_cost = (
