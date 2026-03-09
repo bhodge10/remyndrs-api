@@ -63,9 +63,10 @@ def poll_twilio_costs():
         # Twilio reports costs as negative values — use absolute values
         inbound_cost = abs(inbound_cost)
         outbound_cost = abs(outbound_cost)
-        total_cost = inbound_cost + outbound_cost
 
         # Fetch failed + undelivered messages for yesterday to track wasted spend
+        # Note: Twilio Usage Records API does NOT include failed message costs,
+        # so we fetch them separately and add to the total.
         yesterday_start = datetime(yesterday.year, yesterday.month, yesterday.day, tzinfo=timezone.utc)
         yesterday_end = yesterday_start + timedelta(days=1)
         failed_count = 0
@@ -83,6 +84,9 @@ def poll_twilio_costs():
                         failed_cost += abs(float(msg.price))
         except Exception as failed_err:
             logger.warning(f"poll_twilio_costs: Could not fetch failed messages — {failed_err}")
+
+        # Total = usage records (inbound + outbound) + failed message costs
+        total_cost = inbound_cost + outbound_cost + failed_cost
 
         # Upsert into twilio_costs table
         conn = None
