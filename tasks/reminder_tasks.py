@@ -21,7 +21,7 @@ from models.reminder import (
     check_reminder_exists_for_recurring,
     update_recurring_reminder_generated,
 )
-from services.sms_service import send_sms
+from services.sms_service import send_sms, UserOptedOutError
 from services.metrics_service import track_reminder_delivery
 
 logger = get_task_logger(__name__)
@@ -148,6 +148,18 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
 
             # Send SMS via Twilio
             send_sms(phone_number, message)
+
+        except UserOptedOutError:
+            # User unsubscribed — don't retry, mark as sent to prevent re-pickup
+            conn.rollback()
+            logger.warning(f"Reminder {reminder_id}: user opted out, skipping")
+            track_reminder_delivery(reminder_id, "failed", "user_opted_out")
+            try:
+                c.execute('UPDATE reminders SET sent = TRUE WHERE id = %s', (reminder_id,))
+                conn.commit()
+            except Exception:
+                pass
+            return {"status": "skipped", "reason": "user_opted_out"}
 
         except Exception as exc:
             # SMS failed - rollback to release lock, then retry
@@ -716,6 +728,9 @@ def send_delayed_sms(self, to_number: str, message: str, media_url: str = None):
         send_sms(to_number, message, media_url=media_url)
         logger.info(f"Sent delayed SMS to ...{to_number[-4:]}")
         return {"success": True}
+    except UserOptedOutError:
+        logger.warning(f"Delayed SMS skipped: user ...{to_number[-4:]} opted out")
+        return {"success": False, "reason": "user_opted_out"}
     except Exception as exc:
         logger.error(f"Error sending delayed SMS: {exc}")
         raise self.retry(exc=exc)
@@ -787,10 +802,19 @@ def send_engagement_nudge(self, phone_number: str):
             logger.info(f"Successfully sent engagement nudge to ...{phone_number[-4:]}")
             return {"status": "sent"}
 
+        except UserOptedOutError:
+            logger.warning(f"Engagement nudge skipped: user ...{phone_number[-4:]} opted out")
+            create_or_update_user(phone_number, five_minute_nudge_sent=True)
+            return {"status": "skipped", "reason": "user_opted_out"}
+
         except TwilioException as twilio_exc:
             # Retry on Twilio errors
             logger.error(f"Twilio error sending engagement nudge to ...{phone_number[-4:]}: {twilio_exc}")
             raise self.retry(exc=twilio_exc)
+
+    except UserOptedOutError:
+        # Already handled above, but catch here to prevent retry
+        return {"status": "skipped", "reason": "user_opted_out"}
 
     except TwilioException:
         # Re-raise to trigger retry
