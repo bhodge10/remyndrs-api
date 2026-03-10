@@ -7586,6 +7586,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.detail || 'Server error');
                 alert(data.message);
+                viewPendingOnboarding();
             }} catch (err) {{
                 alert('Error: ' + err.message);
             }}
@@ -7609,6 +7610,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.detail || 'Server error');
                 alert(data.message);
+                viewPendingOnboarding();
             }} catch (err) {{
                 alert('Error: ' + err.message);
             }}
