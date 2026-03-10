@@ -74,6 +74,11 @@ class BroadcastRequest(BaseModel):
     phone_number: Optional[str] = None  # Required when audience == "single"
 
 
+class NudgeRequest(BaseModel):
+    phone_numbers: list[str]
+    message: str
+
+
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     """Verify admin credentials for protected endpoints"""
     if not ADMIN_PASSWORD:
@@ -1090,6 +1095,7 @@ async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
                    (SELECT MAX(l.created_at) FROM logs l WHERE l.phone_number = u.phone_number) as last_interaction
             FROM users u
             WHERE u.onboarding_complete = FALSE
+              AND (u.opted_out = FALSE OR u.opted_out IS NULL)
             ORDER BY u.created_at DESC
         ''')
         users = c.fetchall()
@@ -1104,6 +1110,7 @@ async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
         return JSONResponse(content={
             "users": [
                 {
+                    "phone_number": u[0],
                     "phone_last4": u[0][-4:] if u[0] else "N/A",
                     "first_name": u[1] or "—",
                     "onboarding_step": u[2],
@@ -1119,6 +1126,77 @@ async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
     except Exception as e:
         logger.error(f"Error getting pending onboarding users: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/admin/users/pending-onboarding/nudge")
+async def nudge_pending_users(request: NudgeRequest, admin: str = Depends(verify_admin)):
+    """Send a nudge message to pending onboarding users"""
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if not request.phone_numbers:
+        raise HTTPException(status_code=400, detail="No phone numbers provided")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Check for recent nudges to prevent spamming (within last 24 hours)
+        c.execute('''
+            SELECT COUNT(*) FROM broadcast_logs
+            WHERE audience = 'pending_onboarding_nudge'
+              AND created_at > NOW() - INTERVAL '24 hours'
+        ''')
+        recent_nudges = c.fetchone()[0]
+        if recent_nudges >= 3:
+            raise HTTPException(
+                status_code=429,
+                detail="Nudge limit reached (3 per 24 hours). Try again later."
+            )
+
+        # Log the nudge as a broadcast
+        c.execute('''
+            INSERT INTO broadcast_logs (sender, message, audience, recipient_count, status, source)
+            VALUES (%s, %s, 'pending_onboarding_nudge', %s, 'sending', 'immediate')
+            RETURNING id
+        ''', (admin, request.message.strip(), len(request.phone_numbers)))
+        nudge_id = c.fetchone()[0]
+        conn.commit()
+
+        success_count = 0
+        fail_count = 0
+
+        for phone in request.phone_numbers:
+            try:
+                send_sms(phone, request.message.strip(), message_type="broadcast")
+                success_count += 1
+                logger.info(f"Nudge sent to pending user {phone[-4:]}")
+            except Exception as e:
+                logger.error(f"Failed to nudge {phone[-4:]}: {e}")
+                fail_count += 1
+
+        # Update the log entry with results
+        c.execute('''
+            UPDATE broadcast_logs
+            SET success_count = %s, fail_count = %s, status = 'completed', completed_at = NOW()
+            WHERE id = %s
+        ''', (success_count, fail_count, nudge_id))
+        conn.commit()
+
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Sent {success_count} nudge(s), {fail_count} failed",
+            "success_count": success_count,
+            "fail_count": fail_count
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending nudges: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 @router.delete("/admin/users/incomplete")
@@ -4970,9 +5048,24 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
 
     <!-- Pending Onboarding Modal -->
     <div class="modal" id="pendingOnboardingModal">
-        <div class="modal-content" style="max-width: 750px;">
+        <div class="modal-content" style="max-width: 850px;">
             <h3 style="color: #e67e22; margin-top: 0;">Pending Onboarding Users</h3>
-            <div id="pendingOnboardingContent" style="max-height: 60vh; overflow-y: auto;">
+
+            <!-- Nudge Message Selector -->
+            <div id="nudgeControls" style="display: none; background: #fef9e7; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid #f0e6c0;">
+                <label style="font-weight: bold; font-size: 0.9em; color: #7d6608;">Nudge Message:</label>
+                <select id="nudgePreset" onchange="toggleCustomNudge()" style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em;">
+                    <option value="preset1">Hey! You started signing up for Remyndrs but didn't finish. Just reply with your first name to continue! Reply STOP to opt out.</option>
+                    <option value="preset2">Still interested in Remyndrs? Reply to pick up where you left off. Or reply STOP to opt out.</option>
+                    <option value="custom">Custom message...</option>
+                </select>
+                <textarea id="nudgeCustomMsg" style="display: none; width: 100%; min-height: 60px; padding: 8px; margin-top: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em;" placeholder="Type your custom nudge message..."></textarea>
+                <div style="margin-top: 10px; display: flex; gap: 8px;">
+                    <button class="btn" style="background: #e67e22; color: white; padding: 6px 14px; font-size: 0.85em;" onclick="nudgeAllPending()">Nudge All</button>
+                </div>
+            </div>
+
+            <div id="pendingOnboardingContent" style="max-height: 50vh; overflow-y: auto;">
                 <p style="color: #7f8c8d;">Loading...</p>
             </div>
             <div class="modal-buttons">
@@ -7368,10 +7461,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        let pendingOnboardingUsers = [];
+
         async function viewPendingOnboarding() {{
             const modal = document.getElementById('pendingOnboardingModal');
             const content = document.getElementById('pendingOnboardingContent');
+            const controls = document.getElementById('nudgeControls');
             content.innerHTML = '<p style="color: #7f8c8d;">Loading...</p>';
+            controls.style.display = 'none';
             modal.classList.add('active');
 
             try {{
@@ -7381,11 +7478,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.detail || 'Server error');
 
+                pendingOnboardingUsers = data.users;
+
                 if (data.users.length === 0) {{
                     content.innerHTML = '<p style="color: #27ae60; text-align: center; padding: 20px;">No users stuck in onboarding!</p>';
                     return;
                 }}
 
+                controls.style.display = 'block';
                 const stepColors = {{ 0: '#e74c3c', 1: '#e67e22', 2: '#f39c12' }};
 
                 let html = `<p style="margin-bottom: 12px; color: #7f8c8d;">${{data.total}} user(s) pending</p>`;
@@ -7397,6 +7497,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Signed Up</th>';
                 html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Last Activity</th>';
                 html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Source</th>';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Actions</th>';
                 html += '</tr></thead><tbody>';
 
                 data.users.forEach(u => {{
@@ -7405,6 +7506,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     const lastAct = u.last_interaction && u.last_interaction !== 'Never'
                         ? new Date(u.last_interaction).toLocaleDateString()
                         : 'Never';
+                    const phone = u.phone_number;
 
                     html += '<tr style="border-bottom: 1px solid #eee;">';
                     html += `<td style="padding: 8px; font-family: monospace;">***${{u.phone_last4}}</td>`;
@@ -7413,6 +7515,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     html += `<td style="padding: 8px;">${{created}}</td>`;
                     html += `<td style="padding: 8px;">${{lastAct}}</td>`;
                     html += `<td style="padding: 8px;">${{u.referral_source}}</td>`;
+                    html += `<td style="padding: 8px; white-space: nowrap;">`;
+                    html += `<button onclick="nudgePendingUser('${{phone}}')" style="background: #e67e22; color: white; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 0.85em; margin-right: 4px;">Nudge</button>`;
+                    html += `<button onclick="deleteUser('${{phone}}')" style="background: #e74c3c; color: white; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 0.85em;">Remove</button>`;
+                    html += `</td>`;
                     html += '</tr>';
                 }});
 
@@ -7420,6 +7526,65 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 content.innerHTML = html;
             }} catch (err) {{
                 content.innerHTML = `<p style="color: #e74c3c;">Error loading data: ${{err.message}}</p>`;
+            }}
+        }}
+
+        function toggleCustomNudge() {{
+            const sel = document.getElementById('nudgePreset');
+            const custom = document.getElementById('nudgeCustomMsg');
+            custom.style.display = sel.value === 'custom' ? 'block' : 'none';
+        }}
+
+        function getNudgeMessage() {{
+            const sel = document.getElementById('nudgePreset');
+            if (sel.value === 'custom') {{
+                return document.getElementById('nudgeCustomMsg').value.trim();
+            }}
+            return sel.options[sel.selectedIndex].text;
+        }}
+
+        async function nudgePendingUser(phone) {{
+            const msg = getNudgeMessage();
+            if (!msg) {{ alert('Please enter a nudge message.'); return; }}
+            if (!confirm(`Send nudge to ***${{phone.slice(-4)}}?\n\n"${{msg}}"`)) return;
+
+            try {{
+                const response = await fetch('/admin/users/pending-onboarding/nudge', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Basic ' + btoa('{ADMIN_USERNAME}:{ADMIN_PASSWORD}')
+                    }},
+                    body: JSON.stringify({{ phone_numbers: [phone], message: msg }})
+                }});
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Server error');
+                alert(data.message);
+            }} catch (err) {{
+                alert('Error: ' + err.message);
+            }}
+        }}
+
+        async function nudgeAllPending() {{
+            const msg = getNudgeMessage();
+            if (!msg) {{ alert('Please enter a nudge message.'); return; }}
+            const phones = pendingOnboardingUsers.map(u => u.phone_number);
+            if (!confirm(`Send nudge to ${{phones.length}} user(s)?\n\n"${{msg}}"`)) return;
+
+            try {{
+                const response = await fetch('/admin/users/pending-onboarding/nudge', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Basic ' + btoa('{ADMIN_USERNAME}:{ADMIN_PASSWORD}')
+                    }},
+                    body: JSON.stringify({{ phone_numbers: phones, message: msg }})
+                }});
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Server error');
+                alert(data.message);
+            }} catch (err) {{
+                alert('Error: ' + err.message);
             }}
         }}
 
