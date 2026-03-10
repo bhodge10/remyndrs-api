@@ -1087,7 +1087,7 @@ async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
         c.execute('''
             SELECT u.phone_number, u.first_name, u.onboarding_step, u.created_at,
                    u.referral_source,
-                   (SELECT MAX(i.created_at) FROM interactions i WHERE i.phone_number = u.phone_number) as last_interaction
+                   (SELECT MAX(l.created_at) FROM logs l WHERE l.phone_number = u.phone_number) as last_interaction
             FROM users u
             WHERE u.onboarding_complete = FALSE
             ORDER BY u.created_at DESC
@@ -7379,6 +7379,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     headers: {{ 'Authorization': 'Basic ' + btoa('{ADMIN_USERNAME}:{ADMIN_PASSWORD}') }}
                 }});
                 const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Server error');
 
                 if (data.users.length === 0) {{
                     content.innerHTML = '<p style="color: #27ae60; text-align: center; padding: 20px;">No users stuck in onboarding!</p>';
