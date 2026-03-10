@@ -1092,7 +1092,8 @@ async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
         c.execute('''
             SELECT u.phone_number, u.first_name, u.onboarding_step, u.created_at,
                    u.referral_source,
-                   (SELECT MAX(l.created_at) FROM logs l WHERE l.phone_number = u.phone_number) as last_interaction
+                   (SELECT MAX(l.created_at) FROM logs l WHERE l.phone_number = u.phone_number) as last_interaction,
+                   u.last_nudged_at
             FROM users u
             WHERE u.onboarding_complete = FALSE
               AND (u.opted_out = FALSE OR u.opted_out IS NULL)
@@ -1118,6 +1119,7 @@ async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
                     "created_at": str(u[3]) if u[3] else None,
                     "referral_source": u[4] or "—",
                     "last_interaction": str(u[5]) if u[5] else "Never",
+                    "last_nudged": str(u[6]) if u[6] else None,
                 }
                 for u in users
             ],
@@ -1141,17 +1143,21 @@ async def nudge_pending_users(request: NudgeRequest, admin: str = Depends(verify
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Check for recent nudges to prevent spamming (within last 24 hours)
+        # Filter out phones that have been nudged 2+ times in the last 24 hours
         c.execute('''
-            SELECT COUNT(*) FROM broadcast_logs
-            WHERE audience = 'pending_onboarding_nudge'
-              AND created_at > NOW() - INTERVAL '24 hours'
-        ''')
-        recent_nudges = c.fetchone()[0]
-        if recent_nudges >= 3:
+            SELECT phone_number FROM users
+            WHERE phone_number = ANY(%s)
+              AND last_nudged_at > NOW() - INTERVAL '24 hours'
+              AND nudge_count_24h >= 2
+        ''', (request.phone_numbers,))
+        blocked_phones = {row[0] for row in c.fetchall()}
+
+        eligible_phones = [p for p in request.phone_numbers if p not in blocked_phones]
+
+        if not eligible_phones:
             raise HTTPException(
                 status_code=429,
-                detail="Nudge limit reached (3 per 24 hours). Try again later."
+                detail=f"All {len(request.phone_numbers)} user(s) have already been nudged 2 times in the last 24 hours."
             )
 
         # Log the nudge as a broadcast
@@ -1159,16 +1165,28 @@ async def nudge_pending_users(request: NudgeRequest, admin: str = Depends(verify
             INSERT INTO broadcast_logs (sender, message, audience, recipient_count, status, source)
             VALUES (%s, %s, 'pending_onboarding_nudge', %s, 'sending', 'immediate')
             RETURNING id
-        ''', (admin, request.message.strip(), len(request.phone_numbers)))
+        ''', (admin, request.message.strip(), len(eligible_phones)))
         nudge_id = c.fetchone()[0]
         conn.commit()
 
         success_count = 0
         fail_count = 0
+        skipped_count = len(blocked_phones)
 
-        for phone in request.phone_numbers:
+        for phone in eligible_phones:
             try:
                 send_sms(phone, request.message.strip(), message_type="broadcast")
+                # Update per-phone nudge tracking
+                c.execute('''
+                    UPDATE users SET
+                        last_nudged_at = NOW(),
+                        nudge_count_24h = CASE
+                            WHEN last_nudged_at > NOW() - INTERVAL '24 hours' THEN nudge_count_24h + 1
+                            ELSE 1
+                        END
+                    WHERE phone_number = %s
+                ''', (phone,))
+                conn.commit()
                 success_count += 1
                 logger.info(f"Nudge sent to pending user {phone[-4:]}")
             except Exception as e:
@@ -1183,11 +1201,16 @@ async def nudge_pending_users(request: NudgeRequest, admin: str = Depends(verify
         ''', (success_count, fail_count, nudge_id))
         conn.commit()
 
+        msg = f"Sent {success_count} nudge(s), {fail_count} failed"
+        if skipped_count > 0:
+            msg += f", {skipped_count} skipped (already nudged 2x today)"
+
         return JSONResponse(content={
             "success": True,
-            "message": f"Sent {success_count} nudge(s), {fail_count} failed",
+            "message": msg,
             "success_count": success_count,
-            "fail_count": fail_count
+            "fail_count": fail_count,
+            "skipped_count": skipped_count
         })
     except HTTPException:
         raise
@@ -7497,6 +7520,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Signed Up</th>';
                 html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Last Activity</th>';
                 html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Source</th>';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Last Nudged</th>';
                 html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Actions</th>';
                 html += '</tr></thead><tbody>';
 
@@ -7515,6 +7539,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     html += `<td style="padding: 8px;">${{created}}</td>`;
                     html += `<td style="padding: 8px;">${{lastAct}}</td>`;
                     html += `<td style="padding: 8px;">${{u.referral_source}}</td>`;
+                    const lastNudged = u.last_nudged ? new Date(u.last_nudged).toLocaleString() : 'Never';
+                    html += `<td style="padding: 8px; font-size: 0.85em; color: ${{u.last_nudged ? '#e67e22' : '#95a5a6'}};">${{lastNudged}}</td>`;
                     html += `<td style="padding: 8px; white-space: nowrap;">`;
                     html += `<button onclick="nudgePendingUser('${{phone}}')" style="background: #e67e22; color: white; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 0.85em; margin-right: 4px;">Nudge</button>`;
                     html += `<button onclick="deleteUser('${{phone}}')" style="background: #e74c3c; color: white; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 0.85em;">Remove</button>`;

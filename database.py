@@ -612,6 +612,9 @@ def init_db():
             # Backfill NULLs to FALSE
             "UPDATE users SET day_4_email_sent = FALSE WHERE day_4_email_sent IS NULL",
             "UPDATE users SET awaiting_email_collection = FALSE WHERE awaiting_email_collection IS NULL",
+            # Nudge tracking for pending onboarding users
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_nudged_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS nudge_count_24h INTEGER DEFAULT 0",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
