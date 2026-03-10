@@ -1078,6 +1078,49 @@ async def debug_users(admin: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/admin/users/pending-onboarding")
+async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
+    """Get users who are stuck in the onboarding flow"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT u.phone_number, u.first_name, u.onboarding_step, u.created_at,
+                   u.referral_source,
+                   (SELECT MAX(i.created_at) FROM interactions i WHERE i.phone_number = u.phone_number) as last_interaction
+            FROM users u
+            WHERE u.onboarding_complete = FALSE
+            ORDER BY u.created_at DESC
+        ''')
+        users = c.fetchall()
+        return_db_connection(conn)
+
+        step_labels = {
+            0: "Welcome (not started)",
+            1: "Awaiting first name",
+            2: "Awaiting ZIP code",
+        }
+
+        return JSONResponse(content={
+            "users": [
+                {
+                    "phone_last4": u[0][-4:] if u[0] else "N/A",
+                    "first_name": u[1] or "—",
+                    "onboarding_step": u[2],
+                    "step_label": step_labels.get(u[2], f"Step {u[2]}"),
+                    "created_at": str(u[3]) if u[3] else None,
+                    "referral_source": u[4] or "—",
+                    "last_interaction": str(u[5]) if u[5] else "Never",
+                }
+                for u in users
+            ],
+            "total": len(users)
+        })
+    except Exception as e:
+        logger.error(f"Error getting pending onboarding users: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.delete("/admin/users/incomplete")
 async def delete_incomplete_users(admin: str = Depends(verify_admin)):
     """Delete users who haven't completed onboarding"""
@@ -4148,6 +4191,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <div class="card-title">Pending Onboarding</div>
                 <div class="card-value" id="overviewPendingOnboarding">{metrics.get('pending_onboarding', 0)}</div>
                 <div class="card-subtitle">started but not finished</div>
+                <button class="cleanup-btn" style="background: #2980b9;" onclick="viewPendingOnboarding()">View</button>
                 <button class="cleanup-btn" onclick="cleanupIncomplete()">Clean Up</button>
             </div>
             <div class="card green">
@@ -4921,6 +4965,19 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <span id="maintenanceSaveStatus" style="color: #27ae60; font-size: 0.9em;"></span>
             </div>
         </div>
+        </div>
+    </div>
+
+    <!-- Pending Onboarding Modal -->
+    <div class="modal" id="pendingOnboardingModal">
+        <div class="modal-content" style="max-width: 750px;">
+            <h3 style="color: #e67e22; margin-top: 0;">Pending Onboarding Users</h3>
+            <div id="pendingOnboardingContent" style="max-height: 60vh; overflow-y: auto;">
+                <p style="color: #7f8c8d;">Loading...</p>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn btn-secondary" onclick="document.getElementById('pendingOnboardingModal').classList.remove('active')">Close</button>
+            </div>
         </div>
     </div>
 
@@ -7308,6 +7365,60 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 location.reload();
             }} catch (err) {{
                 alert('Error: ' + err.message);
+            }}
+        }}
+
+        async function viewPendingOnboarding() {{
+            const modal = document.getElementById('pendingOnboardingModal');
+            const content = document.getElementById('pendingOnboardingContent');
+            content.innerHTML = '<p style="color: #7f8c8d;">Loading...</p>';
+            modal.classList.add('active');
+
+            try {{
+                const response = await fetch('/admin/users/pending-onboarding', {{
+                    headers: {{ 'Authorization': 'Basic ' + btoa('{ADMIN_USERNAME}:{ADMIN_PASSWORD}') }}
+                }});
+                const data = await response.json();
+
+                if (data.users.length === 0) {{
+                    content.innerHTML = '<p style="color: #27ae60; text-align: center; padding: 20px;">No users stuck in onboarding!</p>';
+                    return;
+                }}
+
+                const stepColors = {{ 0: '#e74c3c', 1: '#e67e22', 2: '#f39c12' }};
+
+                let html = `<p style="margin-bottom: 12px; color: #7f8c8d;">${{data.total}} user(s) pending</p>`;
+                html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">';
+                html += '<thead><tr style="background: #f8f9fa; text-align: left;">';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Phone</th>';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Name</th>';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Stage</th>';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Signed Up</th>';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Last Activity</th>';
+                html += '<th style="padding: 8px; border-bottom: 2px solid #ddd;">Source</th>';
+                html += '</tr></thead><tbody>';
+
+                data.users.forEach(u => {{
+                    const color = stepColors[u.onboarding_step] || '#95a5a6';
+                    const created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '—';
+                    const lastAct = u.last_interaction && u.last_interaction !== 'Never'
+                        ? new Date(u.last_interaction).toLocaleDateString()
+                        : 'Never';
+
+                    html += '<tr style="border-bottom: 1px solid #eee;">';
+                    html += `<td style="padding: 8px; font-family: monospace;">***${{u.phone_last4}}</td>`;
+                    html += `<td style="padding: 8px;">${{u.first_name}}</td>`;
+                    html += `<td style="padding: 8px;"><span style="background: ${{color}}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.85em;">${{u.step_label}}</span></td>`;
+                    html += `<td style="padding: 8px;">${{created}}</td>`;
+                    html += `<td style="padding: 8px;">${{lastAct}}</td>`;
+                    html += `<td style="padding: 8px;">${{u.referral_source}}</td>`;
+                    html += '</tr>';
+                }});
+
+                html += '</tbody></table>';
+                content.innerHTML = html;
+            }} catch (err) {{
+                content.innerHTML = `<p style="color: #e74c3c;">Error loading data: ${{err.message}}</p>`;
             }}
         }}
 
