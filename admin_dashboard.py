@@ -75,7 +75,7 @@ class BroadcastRequest(BaseModel):
 
 
 class NudgeRequest(BaseModel):
-    phone_numbers: list
+    phone_numbers: list[str]
     message: str
 
 
@@ -1136,24 +1136,67 @@ async def nudge_pending_users(request: NudgeRequest, admin: str = Depends(verify
     if not request.phone_numbers:
         raise HTTPException(status_code=400, detail="No phone numbers provided")
 
-    success_count = 0
-    fail_count = 0
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
 
-    for phone in request.phone_numbers:
-        try:
-            send_sms(phone, request.message.strip(), message_type="broadcast")
-            success_count += 1
-            logger.info(f"Nudge sent to pending user {phone[-4:]}")
-        except Exception as e:
-            logger.error(f"Failed to nudge {phone[-4:]}: {e}")
-            fail_count += 1
+        # Check for recent nudges to prevent spamming (within last 24 hours)
+        c.execute('''
+            SELECT COUNT(*) FROM broadcast_logs
+            WHERE audience = 'pending_onboarding_nudge'
+              AND created_at > NOW() - INTERVAL '24 hours'
+        ''')
+        recent_nudges = c.fetchone()[0]
+        if recent_nudges >= 3:
+            raise HTTPException(
+                status_code=429,
+                detail="Nudge limit reached (3 per 24 hours). Try again later."
+            )
 
-    return JSONResponse(content={
-        "success": True,
-        "message": f"Sent {success_count} nudge(s), {fail_count} failed",
-        "success_count": success_count,
-        "fail_count": fail_count
-    })
+        # Log the nudge as a broadcast
+        c.execute('''
+            INSERT INTO broadcast_logs (sender, message, audience, recipient_count, status, source)
+            VALUES (%s, %s, 'pending_onboarding_nudge', %s, 'sending', 'immediate')
+            RETURNING id
+        ''', (admin, request.message.strip(), len(request.phone_numbers)))
+        nudge_id = c.fetchone()[0]
+        conn.commit()
+
+        success_count = 0
+        fail_count = 0
+
+        for phone in request.phone_numbers:
+            try:
+                send_sms(phone, request.message.strip(), message_type="broadcast")
+                success_count += 1
+                logger.info(f"Nudge sent to pending user {phone[-4:]}")
+            except Exception as e:
+                logger.error(f"Failed to nudge {phone[-4:]}: {e}")
+                fail_count += 1
+
+        # Update the log entry with results
+        c.execute('''
+            UPDATE broadcast_logs
+            SET success_count = %s, fail_count = %s, status = 'completed', completed_at = NOW()
+            WHERE id = %s
+        ''', (success_count, fail_count, nudge_id))
+        conn.commit()
+
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Sent {success_count} nudge(s), {fail_count} failed",
+            "success_count": success_count,
+            "fail_count": fail_count
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending nudges: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 @router.delete("/admin/users/incomplete")
@@ -5012,7 +5055,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             <div id="nudgeControls" style="display: none; background: #fef9e7; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid #f0e6c0;">
                 <label style="font-weight: bold; font-size: 0.9em; color: #7d6608;">Nudge Message:</label>
                 <select id="nudgePreset" onchange="toggleCustomNudge()" style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em;">
-                    <option value="preset1">Hey! You started signing up for Remyndrs but didn't finish. Just reply with your first name to continue!</option>
+                    <option value="preset1">Hey! You started signing up for Remyndrs but didn't finish. Just reply with your first name to continue! Reply STOP to opt out.</option>
                     <option value="preset2">Still interested in Remyndrs? Reply to pick up where you left off. Or reply STOP to opt out.</option>
                     <option value="custom">Custom message...</option>
                 </select>
