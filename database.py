@@ -615,6 +615,10 @@ def init_db():
             # Nudge tracking for pending onboarding users
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_nudged_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS nudge_count_24h INTEGER DEFAULT 0",
+            # Backfill nudge timestamps for users nudged before tracking was added (2026-03-10)
+            "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%4793' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
+            "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%2936' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
+            "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%6167' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
