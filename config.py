@@ -225,6 +225,11 @@ COMBINED_NUDGE_MAX_CHARS = 1500    # Max total length for combined summary + nud
 # Anthropic API Key (for future Agent 4 AI file identification)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
+# Google Analytics & Search Console Configuration
+GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID")
+GA_CREDENTIALS_PATH = os.environ.get("GA_CREDENTIALS_PATH")
+SEARCH_CONSOLE_SITE_URL = os.environ.get("SEARCH_CONSOLE_SITE_URL")
+
 def get_tier_limits(tier: str) -> dict:
     """Get limits for a given tier. Defaults to free tier if unknown."""
     return TIER_LIMITS.get(tier, TIER_LIMITS[TIER_FREE])

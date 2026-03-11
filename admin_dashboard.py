@@ -3567,6 +3567,40 @@ async def cs_delete_reminder(
 
 
 # =====================================================
+# WEBSITE ANALYTICS ENDPOINTS
+# =====================================================
+
+@router.get("/admin/analytics/data")
+async def get_analytics_data(days: int = 7, admin: str = Depends(verify_admin)):
+    """Get GA4 and Search Console analytics data."""
+    try:
+        from services.analytics_service import get_all_analytics
+        data = get_all_analytics(days)
+        return JSONResponse(content=data)
+    except Exception as e:
+        logger.error(f"Error fetching analytics: {e}")
+        return JSONResponse(content={"error": str(e)})
+
+@router.get("/admin/analytics/export")
+async def export_analytics_data(days: int = 7, admin: str = Depends(verify_admin)):
+    """Export all analytics data as JSON for analysis."""
+    try:
+        from services.analytics_service import get_all_analytics
+        data = get_all_analytics(days)
+        return JSONResponse(content=data)
+    except Exception as e:
+        logger.error(f"Error exporting analytics: {e}")
+        return JSONResponse(content={"error": str(e)})
+
+@router.post("/admin/analytics/clear-cache")
+async def clear_analytics_cache_endpoint(admin: str = Depends(verify_admin)):
+    """Clear the analytics data cache."""
+    from services.analytics_service import clear_analytics_cache
+    clear_analytics_cache()
+    return JSONResponse(content={"status": "cache_cleared"})
+
+
+# =====================================================
 # DASHBOARD UI
 # =====================================================
 
@@ -4259,6 +4293,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <a href="#conversations">Conversations</a>
         <a href="#recurring">Recurring</a>
         <a href="#customer-service">Customer Service</a>
+        <a href="#website-analytics">Analytics</a>
         <a href="#settings">Settings</a>
     </div>
 
@@ -5000,6 +5035,173 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </div>
     </div>
 
+    <!-- Website Analytics Section -->
+    <div id="website-analytics" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('website-analytics')">
+            <h2>Website Analytics</h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 20px;">
+                <span style="font-weight: 500; color: #2c3e50;">Date Range:</span>
+                <button class="filter-btn analytics-range-btn active" onclick="setAnalyticsRange(7)" id="analyticsRange7">Last 7 days</button>
+                <button class="filter-btn analytics-range-btn" onclick="setAnalyticsRange(14)" id="analyticsRange14">Last 14 days</button>
+                <button class="filter-btn analytics-range-btn" onclick="setAnalyticsRange(30)" id="analyticsRange30">Last 30 days</button>
+                <button class="btn btn-secondary" style="margin-left: auto; padding: 6px 14px; font-size: 0.85em;" onclick="clearAnalyticsCache()">Clear Cache</button>
+                <button class="btn btn-primary" style="padding: 6px 14px; font-size: 0.85em;" onclick="exportAnalyticsJSON()">Export JSON</button>
+            </div>
+
+            <div id="analyticsLoading" style="text-align: center; padding: 40px; color: #95a5a6;">
+                Loading analytics data...
+            </div>
+
+            <div id="analyticsError" style="display: none; background: #fdf2f2; border: 1px solid #e74c3c; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+                <h4 style="color: #e74c3c; margin: 0 0 10px 0;">Analytics Not Available</h4>
+                <p id="analyticsErrorMsg" style="color: #7f8c8d; margin: 0;"></p>
+            </div>
+
+            <div id="analyticsContent" style="display: none;">
+                <!-- Summary Cards -->
+                <div class="cards" style="margin-bottom: 30px;">
+                    <div class="card blue">
+                        <div class="card-title">Total Users</div>
+                        <div class="card-value" id="anTotalUsers">0</div>
+                    </div>
+                    <div class="card green">
+                        <div class="card-title">Total Sessions</div>
+                        <div class="card-value" id="anTotalSessions">0</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Avg Engagement Time</div>
+                        <div class="card-value" id="anAvgEngagement">0s</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Engagement Rate</div>
+                        <div class="card-value" id="anEngagementRate">0%</div>
+                    </div>
+                </div>
+
+                <!-- Daily Traffic Trend -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Daily Traffic Trend</h3>
+                <div style="background: white; border-radius: 8px; padding: 20px; margin-bottom: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <canvas id="trafficChart" height="200"></canvas>
+                </div>
+
+                <!-- A/B Test Comparison -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">A/B Test Comparison</h3>
+                <div id="abTestSection" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px;">
+                    <div class="card" style="border-top: 3px solid #4A90A4;">
+                        <div class="card-title">Variant A (Long Form)</div>
+                        <div id="abVariantA" style="margin-top: 10px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span style="color: #7f8c8d;">Users</span>
+                                <span id="abAUsers" style="font-weight: 600;">-</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span style="color: #7f8c8d;">Event Count</span>
+                                <span id="abACount" style="font-weight: 600;">-</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card" style="border-top: 3px solid #50B688;">
+                        <div class="card-title">Variant B (Short Form)</div>
+                        <div id="abVariantB" style="margin-top: 10px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span style="color: #7f8c8d;">Users</span>
+                                <span id="abBUsers" style="font-weight: 600;">-</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span style="color: #7f8c8d;">Event Count</span>
+                                <span id="abBCount" style="font-weight: 600;">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="abWinner" style="text-align: center; margin-bottom: 30px; display: none;">
+                    <span id="abWinnerText" style="padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9em;"></span>
+                </div>
+
+                <!-- Traffic Sources -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Traffic Sources</h3>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead>
+                            <tr><th>Source / Medium</th><th>Sessions</th><th>Users</th><th>Engagement Rate</th><th>Avg Engagement Time</th></tr>
+                        </thead>
+                        <tbody id="trafficSourcesBody">
+                            <tr><td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Landing Page Performance -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Landing Page Performance</h3>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead>
+                            <tr><th>Page</th><th>Sessions</th><th>Users</th><th>Engagement Rate</th><th>Avg Engagement Time</th></tr>
+                        </thead>
+                        <tbody id="landingPagesBody">
+                            <tr><td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Device Breakdown -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Device Breakdown</h3>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead>
+                            <tr><th>Device</th><th>OS</th><th>Sessions</th><th>Users</th><th>%</th></tr>
+                        </thead>
+                        <tbody id="devicesBody">
+                            <tr><td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Engagement Events -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Engagement Events</h3>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead>
+                            <tr><th>Event Name</th><th>Event Count</th><th>Users</th></tr>
+                        </thead>
+                        <tbody id="keyEventsBody">
+                            <tr><td colspan="3" style="color: #95a5a6; text-align: center;">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Search Console: Top Queries -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Organic Search - Top Queries</h3>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead>
+                            <tr><th>Query</th><th>Impressions</th><th>Clicks</th><th>CTR</th><th>Avg Position</th></tr>
+                        </thead>
+                        <tbody id="searchQueriesBody">
+                            <tr><td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Search Console: Top Pages -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Organic Search - Top Pages</h3>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead>
+                            <tr><th>Page</th><th>Impressions</th><th>Clicks</th><th>CTR</th><th>Avg Position</th></tr>
+                        </thead>
+                        <tbody id="searchPagesBody">
+                            <tr><td colspan="5" style="color: #95a5a6; text-align: center;">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Settings Section -->
     <div id="settings" class="collapsible-section section-anchor">
         <div class="section-header" onclick="toggleSection('settings')">
@@ -5279,6 +5481,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             loadSupportTickets();
             loadContactMessages();
             loadRecurring();
+            loadAnalyticsData();
         }}
 
         async function loadOverviewStats() {{
@@ -7973,6 +8176,293 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 alert('Error: ' + e.message);
             }}
         }}
+        // =====================================================
+        // Website Analytics
+        // =====================================================
+        let analyticsRangeDays = 7;
+
+        function setAnalyticsRange(days) {{
+            analyticsRangeDays = days;
+            document.querySelectorAll('.analytics-range-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('analyticsRange' + days).classList.add('active');
+            loadAnalyticsData();
+        }}
+
+        async function loadAnalyticsData() {{
+            const loading = document.getElementById('analyticsLoading');
+            const error = document.getElementById('analyticsError');
+            const content = document.getElementById('analyticsContent');
+
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            content.style.display = 'none';
+
+            try {{
+                const response = await fetch('/admin/analytics/data?days=' + analyticsRangeDays);
+                const data = await response.json();
+
+                const ga4 = data.ga4 || {{}};
+                const sc = data.search_console || {{}};
+
+                if (ga4.error) {{
+                    loading.style.display = 'none';
+                    error.style.display = 'block';
+                    document.getElementById('analyticsErrorMsg').textContent = ga4.error;
+                    return;
+                }}
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+
+                // Summary cards
+                const totals = ga4.totals || {{}};
+                document.getElementById('anTotalUsers').textContent = (totals.total_users || 0).toLocaleString();
+                document.getElementById('anTotalSessions').textContent = (totals.total_sessions || 0).toLocaleString();
+                const engTime = totals.avg_engagement_time || 0;
+                document.getElementById('anAvgEngagement').textContent = engTime >= 60 ? Math.round(engTime / 60) + 'm ' + Math.round(engTime % 60) + 's' : Math.round(engTime) + 's';
+                document.getElementById('anEngagementRate').textContent = (totals.engagement_rate || 0) + '%';
+
+                // Daily traffic chart
+                renderTrafficChart(ga4.daily_trend || []);
+
+                // A/B test
+                renderABTest(ga4.ab_variants || [], ga4.ab_landing_pages || []);
+
+                // Traffic sources table
+                renderTable('trafficSourcesBody', ga4.traffic_sources || [], [
+                    {{ key: 'source_medium', label: 'Source/Medium', highlight: v => /\/(cpc|paid)/.test(v) }},
+                    {{ key: 'sessions' }},
+                    {{ key: 'users' }},
+                    {{ key: 'engagement_rate', format: v => typeof v === 'number' ? (v > 1 ? v.toFixed(1) : (v * 100).toFixed(1)) + '%' : v }},
+                    {{ key: 'avg_engagement_time', format: v => typeof v === 'number' ? Math.round(v) + 's' : v }},
+                ]);
+
+                // Landing pages table
+                renderTable('landingPagesBody', ga4.landing_pages || [], [
+                    {{ key: 'page' }},
+                    {{ key: 'sessions' }},
+                    {{ key: 'users' }},
+                    {{ key: 'engagement_rate', format: v => typeof v === 'number' ? (v > 1 ? v.toFixed(1) : (v * 100).toFixed(1)) + '%' : v }},
+                    {{ key: 'avg_engagement_time', format: v => typeof v === 'number' ? Math.round(v) + 's' : v }},
+                ]);
+
+                // Device breakdown
+                const devices = ga4.devices || [];
+                const totalDeviceSessions = devices.reduce((sum, d) => sum + (d.sessions || 0), 0);
+                renderTable('devicesBody', devices, [
+                    {{ key: 'device_category' }},
+                    {{ key: 'operating_system' }},
+                    {{ key: 'sessions' }},
+                    {{ key: 'users' }},
+                    {{ key: 'sessions', format: v => totalDeviceSessions ? ((v / totalDeviceSessions) * 100).toFixed(1) + '%' : '0%' }},
+                ]);
+
+                // Key events
+                renderTable('keyEventsBody', ga4.key_events || [], [
+                    {{ key: 'event_name' }},
+                    {{ key: 'event_count' }},
+                    {{ key: 'users' }},
+                ]);
+
+                // Search Console - queries
+                if (sc.error) {{
+                    document.getElementById('searchQueriesBody').innerHTML = '<tr><td colspan="5" style="color: #95a5a6; text-align: center;">' + sc.error + '</td></tr>';
+                    document.getElementById('searchPagesBody').innerHTML = '<tr><td colspan="5" style="color: #95a5a6; text-align: center;">' + sc.error + '</td></tr>';
+                }} else {{
+                    renderTable('searchQueriesBody', sc.top_queries || [], [
+                        {{ key: 'query' }},
+                        {{ key: 'impressions' }},
+                        {{ key: 'clicks' }},
+                        {{ key: 'ctr', format: v => v + '%' }},
+                        {{ key: 'position' }},
+                    ]);
+                    renderTable('searchPagesBody', sc.top_pages || [], [
+                        {{ key: 'page' }},
+                        {{ key: 'impressions' }},
+                        {{ key: 'clicks' }},
+                        {{ key: 'ctr', format: v => v + '%' }},
+                        {{ key: 'position' }},
+                    ]);
+                }}
+            }} catch (e) {{
+                loading.style.display = 'none';
+                error.style.display = 'block';
+                document.getElementById('analyticsErrorMsg').textContent = 'Failed to load analytics: ' + e.message;
+            }}
+        }}
+
+        function renderTable(tbodyId, rows, columns) {{
+            const tbody = document.getElementById(tbodyId);
+            if (!rows.length) {{
+                tbody.innerHTML = '<tr><td colspan="' + columns.length + '" style="color: #95a5a6; text-align: center;">No data</td></tr>';
+                return;
+            }}
+            tbody.innerHTML = rows.map(row => {{
+                const cells = columns.map(col => {{
+                    let val = row[col.key];
+                    if (val === undefined || val === null) val = '-';
+                    const displayVal = col.format ? col.format(val) : val;
+                    const style = col.highlight && col.highlight(String(val)) ? 'color: #e67e22; font-weight: 600;' : '';
+                    return '<td style="' + style + '">' + displayVal + '</td>';
+                }}).join('');
+                return '<tr>' + cells + '</tr>';
+            }}).join('');
+        }}
+
+        function renderTrafficChart(dailyData) {{
+            const canvas = document.getElementById('trafficChart');
+            const ctx = canvas.getContext('2d');
+
+            // Set actual pixel dimensions
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width - 40;
+            canvas.height = 200;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (!dailyData.length) {{
+                ctx.fillStyle = '#95a5a6';
+                ctx.font = '14px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('No data available', canvas.width / 2, 100);
+                return;
+            }}
+
+            const maxSessions = Math.max(...dailyData.map(d => d.sessions || 0), 1);
+            const maxUsers = Math.max(...dailyData.map(d => d.users || 0), 1);
+            const maxVal = Math.max(maxSessions, maxUsers);
+
+            const padding = {{ left: 50, right: 20, top: 20, bottom: 40 }};
+            const chartW = canvas.width - padding.left - padding.right;
+            const chartH = canvas.height - padding.top - padding.bottom;
+            const stepX = chartW / Math.max(dailyData.length - 1, 1);
+
+            // Grid lines
+            ctx.strokeStyle = '#ecf0f1';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {{
+                const y = padding.top + (chartH / 4) * i;
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(canvas.width - padding.right, y);
+                ctx.stroke();
+                ctx.fillStyle = '#95a5a6';
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(Math.round(maxVal * (1 - i / 4)), padding.left - 8, y + 4);
+            }}
+
+            // Sessions line (blue)
+            ctx.strokeStyle = '#4A90A4';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            dailyData.forEach((d, i) => {{
+                const x = padding.left + i * stepX;
+                const y = padding.top + chartH - (((d.sessions || 0) / maxVal) * chartH);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }});
+            ctx.stroke();
+
+            // Users line (green)
+            ctx.strokeStyle = '#50B688';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            dailyData.forEach((d, i) => {{
+                const x = padding.left + i * stepX;
+                const y = padding.top + chartH - (((d.users || 0) / maxVal) * chartH);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }});
+            ctx.stroke();
+
+            // X-axis labels
+            ctx.fillStyle = '#7f8c8d';
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'center';
+            const labelInterval = Math.max(1, Math.floor(dailyData.length / 7));
+            dailyData.forEach((d, i) => {{
+                if (i % labelInterval === 0 || i === dailyData.length - 1) {{
+                    const x = padding.left + i * stepX;
+                    const dateStr = d.date || '';
+                    const label = dateStr.length === 8 ? dateStr.substring(4, 6) + '/' + dateStr.substring(6) : dateStr;
+                    ctx.fillText(label, x, canvas.height - 10);
+                }}
+            }});
+
+            // Legend
+            ctx.font = '12px sans-serif';
+            ctx.fillStyle = '#4A90A4';
+            ctx.fillRect(canvas.width - 180, 10, 12, 12);
+            ctx.fillText('Sessions', canvas.width - 163, 21);
+            ctx.fillStyle = '#50B688';
+            ctx.fillRect(canvas.width - 100, 10, 12, 12);
+            ctx.fillText('Users', canvas.width - 83, 21);
+        }}
+
+        function renderABTest(variants, landingPages) {{
+            const aData = variants.find(v => v.variant === 'A') || {{}};
+            const bData = variants.find(v => v.variant === 'B') || {{}};
+
+            document.getElementById('abAUsers').textContent = (aData.users || 0).toLocaleString();
+            document.getElementById('abACount').textContent = (aData.event_count || 0).toLocaleString();
+            document.getElementById('abBUsers').textContent = (bData.users || 0).toLocaleString();
+            document.getElementById('abBCount').textContent = (bData.event_count || 0).toLocaleString();
+
+            // Show winner indicator
+            const winnerEl = document.getElementById('abWinner');
+            const winnerText = document.getElementById('abWinnerText');
+            const aUsers = aData.users || 0;
+            const bUsers = bData.users || 0;
+            if (aUsers > 0 || bUsers > 0) {{
+                winnerEl.style.display = 'block';
+                if (aUsers > bUsers) {{
+                    winnerText.textContent = 'Variant A leading (' + aUsers + ' vs ' + bUsers + ' users)';
+                    winnerText.style.background = '#e8f4fd';
+                    winnerText.style.color = '#4A90A4';
+                }} else if (bUsers > aUsers) {{
+                    winnerText.textContent = 'Variant B leading (' + bUsers + ' vs ' + aUsers + ' users)';
+                    winnerText.style.background = '#e8f8f0';
+                    winnerText.style.color = '#50B688';
+                }} else {{
+                    winnerText.textContent = 'Tied (' + aUsers + ' users each)';
+                    winnerText.style.background = '#f0f0f0';
+                    winnerText.style.color = '#7f8c8d';
+                }}
+            }} else {{
+                winnerEl.style.display = 'none';
+            }}
+        }}
+
+        async function clearAnalyticsCache() {{
+            try {{
+                await fetch('/admin/analytics/clear-cache', {{ method: 'POST' }});
+                loadAnalyticsData();
+            }} catch (e) {{
+                alert('Error clearing cache: ' + e.message);
+            }}
+        }}
+
+        async function exportAnalyticsJSON() {{
+            try {{
+                const response = await fetch('/admin/analytics/export?days=' + analyticsRangeDays);
+                const data = await response.json();
+                const json = JSON.stringify(data, null, 2);
+
+                // Copy to clipboard
+                if (navigator.clipboard) {{
+                    await navigator.clipboard.writeText(json);
+                    alert('Analytics JSON copied to clipboard! Paste into Claude for analysis.');
+                }} else {{
+                    // Fallback: open in new window
+                    const w = window.open('', '_blank');
+                    w.document.write('<pre>' + json + '</pre>');
+                }}
+            }} catch (e) {{
+                alert('Error exporting: ' + e.message);
+            }}
+        }}
+
     </script>
 </body>
 </html>
