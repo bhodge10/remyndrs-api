@@ -132,7 +132,7 @@ def get_ga4_data(days: int = 7) -> dict:
     try:
         from google.analytics.data_v1beta.types import (
             RunReportRequest, DateRange, Dimension, Metric, FilterExpression,
-            Filter, InListFilter
+            Filter
         )
 
         property_id = f"properties/{GA4_PROPERTY_ID}"
@@ -243,7 +243,7 @@ def get_ga4_data(days: int = 7) -> dict:
                 dimension_filter=FilterExpression(
                     filter=Filter(
                         field_name="eventName",
-                        in_list_filter=InListFilter(
+                        in_list_filter=Filter.InListFilter(
                             values=["scroll_depth", "persona_select", "demo_interaction", "android_form_mode"]
                         )
                     )
