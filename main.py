@@ -862,6 +862,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         REFERRAL_MESSAGES = {
             "hi, sign me up!": "website",
+            "hello": "website-ios",
             "hey, sign me up!": "facebook",
             "go": "facebook",
             "hi, i'd like to sign up!": "reddit",
@@ -870,11 +871,35 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             "sign me up!": "tiktok",
             "kristen": "influencer-kristen",
         }
+        # Fuzzy matching keywords: if message contains these phrases, match to source
+        REFERRAL_FUZZY = [
+            ("sign me up", "facebook", lambda msg: "hey" in msg),
+            ("sign me up", "reddit", lambda msg: "i'd like" in msg or "i would like" in msg),
+            ("sign me up", "google", lambda msg: "hey" in msg and "i'd like" in msg),
+            ("sign me up", "tiktok", lambda msg: msg.startswith("sign")),
+            ("facebook", "facebook", None),
+            ("reddit", "reddit", None),
+            ("tiktok", "tiktok", None),
+            ("google", "google", None),
+        ]
         if not is_user_onboarded(phone_number):
-            referral_source = REFERRAL_MESSAGES.get(incoming_msg.lower().strip())
-            if referral_source:
-                set_referral_source(phone_number, referral_source)
-                logger.info(f"Referral source detected for ...{phone_number[-4:]}: {referral_source}")
+            msg_lower = incoming_msg.lower().strip()
+            referral_source = REFERRAL_MESSAGES.get(msg_lower)
+
+            # Fuzzy fallback: check if message contains key phrases
+            if not referral_source:
+                for keyword, source, condition in REFERRAL_FUZZY:
+                    if keyword in msg_lower:
+                        if condition is None or condition(msg_lower):
+                            referral_source = source
+                            break
+
+            # Default: tag unmatched new users so they don't show as "Unknown"
+            if not referral_source:
+                referral_source = "sms-organic"
+
+            set_referral_source(phone_number, referral_source)
+            logger.info(f"Referral source detected for ...{phone_number[-4:]}: {referral_source}")
 
         # ==========================================
         # ONBOARDING CHECK
@@ -5894,11 +5919,10 @@ Reply with your first name to get started, or text HELP for more info."""
         from services.sms_service import send_sms
         send_sms(formatted_phone, message, message_type="signup")
 
-        # Track referral source if provided
-        ref = data.get('ref', '').strip().lower()
-        if ref:
-            set_referral_source(formatted_phone, ref)
-            logger.info(f"Desktop signup referral source for ...{formatted_phone[-4:]}: {ref}")
+        # Track referral source (default to "website" if not provided)
+        ref = data.get('ref', '').strip().lower() or "website"
+        set_referral_source(formatted_phone, ref)
+        logger.info(f"Desktop signup referral source for ...{formatted_phone[-4:]}: {ref}")
 
         # Log the signup
         log_interaction(formatted_phone, "Desktop signup", "Signup SMS sent", "desktop_signup", True)
