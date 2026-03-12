@@ -1208,6 +1208,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             offset_days = pending_confirmation.get('offset_days')
                             offset_weeks = pending_confirmation.get('offset_weeks')
                             offset_months = pending_confirmation.get('offset_months')
+                            target_time = pending_confirmation.get('target_time')
 
                             tz = pytz.timezone(user_tz_str)
                             now_local = datetime.now(tz)
@@ -1222,6 +1223,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                                 reminder_dt = now_local + timedelta(days=offset_months * 30)
                             else:
                                 reminder_dt = now_local + timedelta(hours=1)
+
+                            # Apply target_time if specified
+                            if target_time and (offset_days or offset_weeks or offset_months):
+                                try:
+                                    hour, minute = map(int, target_time.split(':'))
+                                    reminder_dt = reminder_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                                except (ValueError, AttributeError):
+                                    pass
 
                             local_time_str = reminder_dt.strftime('%H:%M')
                             reminder_date_utc = reminder_dt.astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')
@@ -4617,14 +4626,41 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_exceeded_limit", False)
                     return reply_text
 
-                # Calculate reminder time from current UTC
-                # Use relativedelta for months (handles variable month lengths correctly)
-                reminder_dt_utc = datetime.utcnow() + relativedelta(
-                    months=offset_months,
-                    weeks=offset_weeks,
-                    days=offset_days,
-                    minutes=offset_minutes
-                )
+                # Check if user specified a target time (e.g., "in 2 weeks at 8pm")
+                target_time = ai_response.get("target_time")
+
+                # Calculate reminder date/time
+                user_tz_str = get_user_timezone(phone_number)
+                tz = pytz.timezone(user_tz_str)
+                now_local = datetime.now(tz)
+
+                if target_time and (offset_days or offset_weeks or offset_months):
+                    # Relative date with specific time: calculate target date, then set the time
+                    target_date = now_local + relativedelta(
+                        months=offset_months,
+                        weeks=offset_weeks,
+                        days=offset_days
+                    )
+                    try:
+                        hour, minute = map(int, target_time.split(':'))
+                        target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    except (ValueError, AttributeError):
+                        logger.warning(f"Invalid target_time '{target_time}', falling back to current time")
+                        target_date = now_local + relativedelta(
+                            months=offset_months,
+                            weeks=offset_weeks,
+                            days=offset_days,
+                            minutes=offset_minutes
+                        )
+                    reminder_dt_utc = target_date.astimezone(pytz.UTC).replace(tzinfo=None)
+                else:
+                    # Pure relative offset from now (e.g., "in 30 minutes", "in 2 weeks")
+                    reminder_dt_utc = datetime.utcnow() + relativedelta(
+                        months=offset_months,
+                        weeks=offset_weeks,
+                        days=offset_days,
+                        minutes=offset_minutes
+                    )
                 reminder_date_utc = reminder_dt_utc.strftime('%Y-%m-%d %H:%M:%S')
 
                 # LOW CONFIDENCE: Ask for confirmation before creating reminder
@@ -4649,6 +4685,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                         'offset_days': offset_days,
                         'offset_weeks': offset_weeks,
                         'offset_months': offset_months,
+                        'target_time': target_time,
                         'confidence': confidence
                     })
                     create_or_update_user(phone_number, pending_reminder_confirmation=pending_data)

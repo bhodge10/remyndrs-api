@@ -216,7 +216,10 @@ For reminder requests with RELATIVE TIMES (use action "reminder_relative"):
 - "in 5 months" → Use reminder_relative with offset_months: 5
 - "5 months from now" → Use reminder_relative with offset_months: 5
 - "a week from now" → Use reminder_relative with offset_weeks: 1
+- "in 2 weeks at 8pm" → Use reminder_relative with offset_weeks: 2, target_time: "20:00"
+- "in 3 days at 9am" → Use reminder_relative with offset_days: 3, target_time: "09:00"
 IMPORTANT: For ANY relative time format ("in X minutes/hours/days/weeks/months" or "X time from now"), you MUST use action "reminder_relative". The server will calculate the exact date.
+IMPORTANT: If the user specifies BOTH a relative date AND a specific time (e.g., "in 2 weeks at 8pm"), include "target_time" in HH:MM 24-hour format. Without target_time, the reminder fires at the current time of day.
 
 For SPECIFIC TIME reminders (use action "reminder"):
 - "tomorrow at 9am" = tomorrow's date at 09:00:00
@@ -241,6 +244,8 @@ Examples:
 - "Remind me in 2 weeks" → action: "reminder_relative" with offset_weeks: 2
 - "Remind me in 5 months" → action: "reminder_relative" with offset_months: 5
 - "5 months from now remind me to wrap presents" → action: "reminder_relative" with offset_months: 5
+- "Remind me in 2 weeks at 8pm" → action: "reminder_relative" with offset_weeks: 2, target_time: "20:00"
+- "Remind me in 3 days at 9am" → action: "reminder_relative" with offset_days: 3, target_time: "09:00"
 - "Remind me tomorrow at 2pm" → action: "reminder" with tomorrow's date at 14:00:00
 - "Remind me every day at 7pm to take medicine" → action: "reminder_recurring" with recurrence_type: "daily", time: "19:00"
 - "Every Sunday at 6pm remind me to take out garbage" → action: "reminder_recurring" with recurrence_type: "weekly", recurrence_day: 6, time: "18:00"
@@ -365,9 +370,10 @@ For SETTING REMINDERS WITH RELATIVE TIME ("in X minutes/hours/days/weeks/months"
     "offset_days": number (optional - for days, e.g., 3 for "3 days"),
     "offset_weeks": number (optional - for weeks, e.g., 2 for "2 weeks"),
     "offset_months": number (optional - for months, e.g., 5 for "5 months"),
+    "target_time": "HH:MM" (optional - 24-hour format, use when user specifies a specific time like "at 8pm" or "at 9am"),
     "confidence": number 0-100 (how confident you are about the time parsing)
 }}
-IMPORTANT: Use this action for ANY relative time request. Only include ONE offset type. The server will calculate the exact date/time.
+IMPORTANT: Use this action for ANY relative time request. Only include ONE offset type. The server will calculate the exact date/time. Include target_time ONLY when the user specifies a clock time (e.g., "at 8pm", "at noon").
 
 For RECURRING REMINDERS ("every day", "every Sunday", "weekdays", etc.):
 {{
