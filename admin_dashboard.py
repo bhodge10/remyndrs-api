@@ -1083,6 +1083,77 @@ async def debug_users(admin: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/admin/debug/unknown-referrals")
+async def debug_unknown_referrals(
+    start_date: Optional[str] = "2026-03-01",
+    end_date: Optional[str] = None,
+    admin: str = Depends(verify_admin)
+):
+    """Show users with unknown referral source and their first message"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        query = '''
+            SELECT
+                u.phone_number,
+                u.first_name,
+                u.created_at AS signup_date,
+                u.onboarding_complete,
+                l.message_in AS first_message,
+                l.created_at AS first_message_at
+            FROM users u
+            LEFT JOIN LATERAL (
+                SELECT message_in, created_at
+                FROM logs l
+                WHERE l.phone_number = u.phone_number
+                ORDER BY l.created_at ASC
+                LIMIT 1
+            ) l ON true
+            WHERE u.referral_source IS NULL
+        '''
+        params = []
+
+        if start_date:
+            query += " AND u.created_at >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND u.created_at < %s"
+            params.append(end_date)
+
+        query += " ORDER BY u.created_at DESC"
+
+        c.execute(query, params)
+        rows = c.fetchall()
+
+        users = []
+        for r in rows:
+            first_name = safe_decrypt(r[1], "") if r[1] else ""
+            first_msg = safe_decrypt(r[4], "") if r[4] else ""
+            users.append({
+                "phone_last4": r[0][-4:] if r[0] else "N/A",
+                "first_name": first_name,
+                "signup_date": str(r[2]) if r[2] else None,
+                "onboarding_complete": r[3],
+                "first_message": first_msg,
+                "first_message_at": str(r[5]) if r[5] else None,
+            })
+
+        return JSONResponse(content={
+            "count": len(users),
+            "start_date": start_date,
+            "end_date": end_date,
+            "users": users
+        })
+    except Exception as e:
+        logger.error(f"Error in unknown referrals debug: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 @router.get("/admin/users/pending-onboarding")
 async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
     """Get users who are stuck in the onboarding flow"""
