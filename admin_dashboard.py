@@ -1154,6 +1154,32 @@ async def debug_unknown_referrals(
             return_db_connection(conn)
 
 
+@router.post("/admin/debug/backfill-referrals")
+async def backfill_unknown_referrals(admin: str = Depends(verify_admin)):
+    """Backfill NULL referral sources to 'sms-organic' for existing users"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            UPDATE users
+            SET referral_source = 'sms-organic'
+            WHERE referral_source IS NULL
+        ''')
+        updated = c.rowcount
+        conn.commit()
+        return JSONResponse(content={
+            "updated": updated,
+            "message": f"Backfilled {updated} users with 'sms-organic'"
+        })
+    except Exception as e:
+        logger.error(f"Error backfilling referrals: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 @router.get("/admin/users/pending-onboarding")
 async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
     """Get users who are stuck in the onboarding flow"""
