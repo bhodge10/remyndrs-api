@@ -4395,6 +4395,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <a href="#contact-messages">Contact Messages</a>
         <a href="#feedback">Feedback</a>
         <a href="#costs">Costs</a>
+        <a href="#changelog">Changelog</a>
         <a href="#conversations">Conversations</a>
         <a href="#recurring">Recurring</a>
         <a href="#customer-service">Customer Service</a>
@@ -4707,6 +4708,85 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </table>
     </div>
 
+    <!-- Support Tickets Section -->
+    <div id="support" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('support')">
+            <h2>🎧 Support Tickets <span id="openTicketCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <p style="color: #7f8c8d; margin-bottom: 15px;">
+                Users can text "Support [message]" to create tickets. Feedback and bug reports go to <a href="#contact-messages" style="color: #3498db;">Contact Messages</a>.
+                <a href="/cs" style="color: #3498db; font-weight: 600;">Open CS Portal</a> for full ticket management with filtering, assignment, and canned responses.
+            </p>
+
+            <div style="margin-bottom: 15px;">
+                <label style="margin-right: 10px;">
+                    <input type="checkbox" id="showClosedTickets" onchange="loadSupportTickets()"> Show closed tickets
+                </label>
+            </div>
+
+            <div id="supportTicketsList" style="margin-bottom: 20px;">
+                <p style="color: #95a5a6;">Loading...</p>
+            </div>
+        </div>
+
+        <!-- Ticket Detail Modal (outside section-content so it's not affected by collapse) -->
+        <div id="ticketModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+            <div style="background: white; max-width: 600px; margin: 50px auto; border-radius: 8px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
+                <div style="padding: 15px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <h3 style="margin: 0;" id="ticketModalTitle">Ticket #</h3>
+                        <button onclick="viewTicketCustomer()" class="btn" style="background: #9b59b6; color: white; font-size: 0.85em; padding: 5px 10px;">Customer Profile</button>
+                    </div>
+                    <button onclick="closeTicketModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
+                </div>
+                <div id="ticketMessages" style="flex: 1; overflow-y: auto; padding: 20px; background: #f5f6fa;">
+                    <!-- Messages will be loaded here -->
+                </div>
+                <div style="padding: 15px 20px; border-top: 1px solid #ddd; background: white;">
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="ticketReplyInput" placeholder="Type your reply..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                        <button onclick="sendTicketReply()" class="btn" style="background: #27ae60;">Send</button>
+                    </div>
+                    <div style="margin-top: 10px; display: flex; gap: 10px;">
+                        <button onclick="closeCurrentTicket()" id="closeTicketBtn" class="btn" style="background: #e74c3c;">Close Ticket</button>
+                        <button onclick="reopenCurrentTicket()" id="reopenTicketBtn" class="btn" style="background: #f39c12; display: none;">Reopen Ticket</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contact Messages Section -->
+    <div id="contact-messages" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('contact-messages')">
+            <h2>📨 Contact Messages <span id="contactMsgCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <p style="color: #7f8c8d; margin-bottom: 15px;">
+                Feedback, bug reports, and questions from SMS and web. These are lightweight messages — not support tickets.
+            </p>
+            <div style="margin-bottom: 15px; display: flex; gap: 15px; align-items: center;">
+                <label>
+                    <input type="checkbox" id="showResolvedContactMsgs" onchange="loadContactMessages()"> Show resolved
+                </label>
+                <label>Category:
+                    <select id="contactMsgCategory" onchange="loadContactMessages()" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="">All</option>
+                        <option value="feedback">Feedback</option>
+                        <option value="bug">Bug</option>
+                        <option value="question">Question</option>
+                    </select>
+                </label>
+            </div>
+            <div id="contactMessagesList">
+                <p style="color: #95a5a6;">Loading...</p>
+            </div>
+        </div>
+    </div>
+
     <!-- User Feedback Section -->
     <div id="feedback" class="section section-anchor">
         <h2>User Feedback <span id="feedbackCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
@@ -4814,85 +4894,6 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <h3>Recent Entries</h3>
         <div id="changelogEntries" style="max-height: 400px; overflow-y: auto;">
             <p style="color: #95a5a6;">Loading...</p>
-        </div>
-    </div>
-
-    <!-- Support Tickets Section -->
-    <div id="support" class="collapsible-section section-anchor">
-        <div class="section-header" onclick="toggleSection('support')">
-            <h2>🎧 Support Tickets <span id="openTicketCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
-            <span class="section-toggle">▼</span>
-        </div>
-        <div class="section-content">
-            <p style="color: #7f8c8d; margin-bottom: 15px;">
-                Users can text "Support [message]" to create tickets. Feedback and bug reports go to <a href="#contact-messages" style="color: #3498db;">Contact Messages</a>.
-                <a href="/cs" style="color: #3498db; font-weight: 600;">Open CS Portal</a> for full ticket management with filtering, assignment, and canned responses.
-            </p>
-
-            <div style="margin-bottom: 15px;">
-                <label style="margin-right: 10px;">
-                    <input type="checkbox" id="showClosedTickets" onchange="loadSupportTickets()"> Show closed tickets
-                </label>
-            </div>
-
-            <div id="supportTicketsList" style="margin-bottom: 20px;">
-                <p style="color: #95a5a6;">Loading...</p>
-            </div>
-        </div>
-
-        <!-- Ticket Detail Modal (outside section-content so it's not affected by collapse) -->
-        <div id="ticketModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-            <div style="background: white; max-width: 600px; margin: 50px auto; border-radius: 8px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
-                <div style="padding: 15px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
-                    <div style="display: flex; align-items: center; gap: 15px;">
-                        <h3 style="margin: 0;" id="ticketModalTitle">Ticket #</h3>
-                        <button onclick="viewTicketCustomer()" class="btn" style="background: #9b59b6; color: white; font-size: 0.85em; padding: 5px 10px;">Customer Profile</button>
-                    </div>
-                    <button onclick="closeTicketModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
-                </div>
-                <div id="ticketMessages" style="flex: 1; overflow-y: auto; padding: 20px; background: #f5f6fa;">
-                    <!-- Messages will be loaded here -->
-                </div>
-                <div style="padding: 15px 20px; border-top: 1px solid #ddd; background: white;">
-                    <div style="display: flex; gap: 10px;">
-                        <input type="text" id="ticketReplyInput" placeholder="Type your reply..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-                        <button onclick="sendTicketReply()" class="btn" style="background: #27ae60;">Send</button>
-                    </div>
-                    <div style="margin-top: 10px; display: flex; gap: 10px;">
-                        <button onclick="closeCurrentTicket()" id="closeTicketBtn" class="btn" style="background: #e74c3c;">Close Ticket</button>
-                        <button onclick="reopenCurrentTicket()" id="reopenTicketBtn" class="btn" style="background: #f39c12; display: none;">Reopen Ticket</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Contact Messages Section -->
-    <div id="contact-messages" class="collapsible-section section-anchor">
-        <div class="section-header" onclick="toggleSection('contact-messages')">
-            <h2>📨 Contact Messages <span id="contactMsgCount" style="font-size: 0.7em; color: #7f8c8d;"></span></h2>
-            <span class="section-toggle">▼</span>
-        </div>
-        <div class="section-content">
-            <p style="color: #7f8c8d; margin-bottom: 15px;">
-                Feedback, bug reports, and questions from SMS and web. These are lightweight messages — not support tickets.
-            </p>
-            <div style="margin-bottom: 15px; display: flex; gap: 15px; align-items: center;">
-                <label>
-                    <input type="checkbox" id="showResolvedContactMsgs" onchange="loadContactMessages()"> Show resolved
-                </label>
-                <label>Category:
-                    <select id="contactMsgCategory" onchange="loadContactMessages()" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #ddd;">
-                        <option value="">All</option>
-                        <option value="feedback">Feedback</option>
-                        <option value="bug">Bug</option>
-                        <option value="question">Question</option>
-                    </select>
-                </label>
-            </div>
-            <div id="contactMessagesList">
-                <p style="color: #95a5a6;">Loading...</p>
-            </div>
         </div>
     </div>
 
