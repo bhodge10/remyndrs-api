@@ -562,6 +562,9 @@ def init_db():
             "UPDATE users SET post_trial_reengagement_sent = FALSE WHERE post_trial_reengagement_sent IS NULL",
             "UPDATE users SET post_trial_14d_sent = FALSE WHERE post_trial_14d_sent IS NULL",
             "UPDATE users SET winback_30d_sent = FALSE WHERE winback_30d_sent IS NULL",
+            # Inactivity re-engagement nudge
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS inactivity_nudge_sent_at TIMESTAMP",
+            "UPDATE users SET inactivity_nudge_sent_at = NULL WHERE inactivity_nudge_sent_at IS NULL",
             # Smart Nudges: proactive AI intelligence layer
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS smart_nudges_enabled BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS smart_nudge_time TIME DEFAULT '09:00'",

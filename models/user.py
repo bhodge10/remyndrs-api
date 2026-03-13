@@ -43,6 +43,8 @@ ALLOWED_USER_FIELDS = {
     'pending_nudge_response',
     # Day 4 email collection
     'day_4_email_sent', 'awaiting_email_collection',
+    # Inactivity re-engagement
+    'inactivity_nudge_sent_at',
 }
 
 

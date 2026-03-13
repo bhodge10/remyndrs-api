@@ -123,6 +123,14 @@ beat_schedule = {
             "expires": 3500,
         },
     },
+    # Send inactivity re-engagement nudge hourly — timezone-aware (9-10 AM local)
+    "send-inactivity-nudge": {
+        "task": "tasks.reminder_tasks.send_inactivity_nudge",
+        "schedule": crontab(minute=30),  # Every hour, at :30
+        "options": {
+            "expires": 3500,
+        },
+    },
 
     # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)

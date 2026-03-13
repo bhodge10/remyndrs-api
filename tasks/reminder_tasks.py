@@ -1858,6 +1858,151 @@ Or just text me anything to keep using the free plan!"""
             return_db_connection(conn)
 
 
+# =====================================================
+# INACTIVITY RE-ENGAGEMENT NUDGE
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def send_inactivity_nudge(self):
+    """
+    Send a re-engagement nudge to users inactive for 7+ days.
+    Personalized based on whether the user has saved data (reminders, lists, memories).
+
+    Runs hourly via Celery Beat. Timezone-aware: only sends at 9-10 AM local.
+    Uses inactivity_nudge_sent_at timestamp with 7-day cooldown for repeat nudging.
+    First nudge: after 7 days inactive. Repeats weekly while user remains inactive.
+    """
+    import pytz
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+    from models.list_model import get_list_count
+    from services.tier_service import get_memory_count, get_recurring_reminder_count
+
+    logger.info("Starting inactivity re-engagement nudge check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+        inactive_threshold = now_utc - timedelta(days=7)
+        cooldown_threshold = now_utc - timedelta(days=7)
+
+        c.execute("""
+            SELECT phone_number, first_name, timezone
+            FROM users
+            WHERE last_active_at IS NOT NULL
+              AND last_active_at < %s
+              AND onboarding_complete = TRUE
+              AND (inactivity_nudge_sent_at IS NULL OR inactivity_nudge_sent_at < %s)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+        """, (inactive_threshold, cooldown_threshold))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for inactivity re-engagement nudge")
+            return {"messages_sent": 0}
+
+        messages_sent = 0
+
+        for user in users:
+            phone_number, first_name, timezone_str = user
+
+            # Only send when it's 9-10 AM in user's local timezone
+            try:
+                user_tz = pytz.timezone(timezone_str or 'America/New_York')
+            except pytz.exceptions.UnknownTimeZoneError:
+                user_tz = pytz.timezone('America/New_York')
+            user_local_hour = datetime.now(pytz.utc).astimezone(user_tz).hour
+            if not (9 <= user_local_hour < 10):
+                continue
+
+            try:
+                greeting = f"Hi {first_name}!" if first_name else "Hi there!"
+
+                # Check what data the user has saved
+                list_count = get_list_count(phone_number)
+                memory_count = get_memory_count(phone_number)
+                recurring_count = get_recurring_reminder_count(phone_number)
+
+                # Count active (non-sent) reminders
+                c.execute("""
+                    SELECT COUNT(*) FROM reminders
+                    WHERE phone_number = %s AND status = 'pending'
+                """, (phone_number,))
+                reminder_count = c.fetchone()[0]
+
+                total_data = list_count + memory_count + recurring_count + reminder_count
+
+                if total_data > 0:
+                    # Personalized message referencing what they have saved
+                    data_parts = []
+                    if reminder_count > 0:
+                        data_parts.append(f"{reminder_count} reminder{'s' if reminder_count != 1 else ''}")
+                    if recurring_count > 0:
+                        data_parts.append(f"{recurring_count} recurring reminder{'s' if recurring_count != 1 else ''}")
+                    if list_count > 0:
+                        data_parts.append(f"{list_count} list{'s' if list_count != 1 else ''}")
+                    if memory_count > 0:
+                        data_parts.append(f"{memory_count} memor{'ies' if memory_count != 1 else 'y'}")
+
+                    data_summary = ", ".join(data_parts)
+
+                    message = f"""{greeting} Just checking in — you have {data_summary} saved in Remyndrs.
+
+I'm here whenever you need me! Just text me to add a reminder, save a memory, or manage your lists.
+
+Reply STOP to opt out."""
+                else:
+                    # Starter message with example commands
+                    message = f"""{greeting} It's been a little while! Here are some things I can help with:
+
+\u2022 "Remind me to call Mom tomorrow at 5pm"
+\u2022 "Remember that my WiFi password is sunshine42"
+\u2022 "Add milk to my grocery list"
+
+Just text me anytime to get started!
+
+Reply STOP to opt out."""
+
+                send_sms(phone_number, message, message_type="trial_lifecycle")
+                c.execute(
+                    "UPDATE users SET inactivity_nudge_sent_at = %s WHERE phone_number = %s",
+                    (now_utc, phone_number)
+                )
+                conn.commit()
+
+                messages_sent += 1
+                logger.info(f"Sent inactivity nudge to ...{phone_number[-4:]}")
+
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.error(f"Failed to send inactivity nudge to ...{phone_number[-4:]}: {e}")
+                continue
+
+        logger.info(f"Inactivity re-engagement nudge complete: {messages_sent} sent")
+        return {"messages_sent": messages_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_inactivity_nudge")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 @celery_app.task(time_limit=15, soft_time_limit=10)
 def keep_web_service_warm():
     """
