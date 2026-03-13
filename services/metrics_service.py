@@ -646,6 +646,48 @@ def get_twilio_actual_costs(start_date=None, end_date=None):
             return_db_connection(conn)
 
 
+def get_lifecycle_message_stats():
+    """Get counts of users who received each lifecycle message type"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        stats = {}
+
+        # Boolean-flagged lifecycle messages
+        flag_columns = [
+            ('day_3_nudge_sent', 'Day 3 Welcome Nudge'),
+            ('mid_trial_reminder_sent', 'Mid-Trial Reminder (Day 7)'),
+            ('trial_warning_7d_sent', 'Trial Warning (7 days)'),
+            ('trial_warning_1d_sent', 'Trial Warning (1 day)'),
+            ('trial_warning_0d_sent', 'Trial Expiry Notice'),
+            ('post_trial_reengagement_sent', 'Post-Trial Re-engagement'),
+            ('post_trial_14d_sent', 'Post-Trial 14-Day Touchpoint'),
+            ('winback_30d_sent', '30-Day Win-back'),
+        ]
+
+        for column, label in flag_columns:
+            c.execute(f"SELECT COUNT(*) FROM users WHERE {column} = TRUE")
+            stats[column] = {'label': label, 'count': c.fetchone()[0]}
+
+        # Timestamp-based: inactivity nudge
+        c.execute("SELECT COUNT(*) FROM users WHERE inactivity_nudge_sent_at IS NOT NULL")
+        stats['inactivity_nudge'] = {
+            'label': 'Inactivity Re-engagement Nudge',
+            'count': c.fetchone()[0],
+        }
+
+        return stats
+
+    except Exception as e:
+        logger.error(f"Error getting lifecycle message stats: {e}")
+        return {}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_all_metrics(start_date=None, end_date=None):
     """Get all metrics for dashboard"""
     conn = None
@@ -693,7 +735,8 @@ def get_all_metrics(start_date=None, end_date=None):
             'reminder_stats': get_reminder_completion_rate(start_date=start_date, end_date=end_date),
             'engagement': get_engagement_stats(start_date=start_date, end_date=end_date),
             'referrals': referrals,
-            'daily_signups': daily_signups
+            'daily_signups': daily_signups,
+            'lifecycle_messages': get_lifecycle_message_stats()
         }
     except Exception as e:
         logger.error(f"Error getting all metrics: {e}")

@@ -3725,6 +3725,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
     reminder_stats = metrics.get('reminder_stats', {})
     engagement = metrics.get('engagement', {})
     new_users = metrics.get('new_users', {})
+    lifecycle = metrics.get('lifecycle_messages', {})
+
+    # Build lifecycle message rows
+    lifecycle_rows = ""
+    for key, data in lifecycle.items():
+        label = data.get('label', key)
+        count = data.get('count', 0)
+        lifecycle_rows += f"<tr><td>{label}</td><td>{count}</td></tr>"
 
     html = f"""
 <!DOCTYPE html>
@@ -4514,6 +4522,16 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <tr><th>Source</th><th>Users</th></tr>
                 <tbody id="referralTableBody">
                 {referral_rows if referral_rows else '<tr><td colspan="2" style="color: #95a5a6;">No referral data yet</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>Lifecycle Messages Sent</h2>
+            <table>
+                <tr><th>Message Type</th><th>Users Reached</th></tr>
+                <tbody id="lifecycleTableBody">
+                {lifecycle_rows if lifecycle_rows else '<tr><td colspan="2" style="color: #95a5a6;">No lifecycle data yet</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -5661,6 +5679,15 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     el('referralTableBody').innerHTML = '<tr><td colspan="2" style="color: #95a5a6;">No referral data</td></tr>';
                 }} else {{
                     el('referralTableBody').innerHTML = refs.map(r => `<tr><td>${{r[0]}}</td><td>${{r[1]}}</td></tr>`).join('');
+                }}
+
+                // Lifecycle messages table
+                const lc = m.lifecycle_messages || {{}};
+                const lcKeys = Object.keys(lc);
+                if (lcKeys.length === 0) {{
+                    el('lifecycleTableBody').innerHTML = '<tr><td colspan="2" style="color: #95a5a6;">No lifecycle data</td></tr>';
+                }} else {{
+                    el('lifecycleTableBody').innerHTML = lcKeys.map(k => `<tr><td>${{lc[k].label}}</td><td>${{lc[k].count}}</td></tr>`).join('');
                 }}
             }} catch (e) {{
                 console.error('Error loading overview stats:', e);
