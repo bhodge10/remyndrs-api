@@ -41,7 +41,8 @@ def generate_analytics_summary(period_days: int = 7) -> dict:
     )
 
     if not summary_text:
-        return {"error": "Failed to generate AI summary"}
+        error_detail = trends.get("_error", "Unknown error") if isinstance(trends, dict) else "Unknown error"
+        return {"error": f"Failed to generate AI summary: {error_detail}"}
 
     # Store in database
     summary_date = datetime.utcnow().date()
@@ -203,13 +204,13 @@ def _generate_claude_summary(
         from anthropic import Anthropic
     except ImportError:
         logger.warning("anthropic package not installed, cannot generate AI summary")
-        return None, None
+        return None, {"_error": "anthropic package not installed"}
 
     import os
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         logger.warning("ANTHROPIC_API_KEY not set, cannot generate AI summary")
-        return None, None
+        return None, {"_error": "ANTHROPIC_API_KEY not set in environment"}
 
     client = Anthropic()
 
@@ -297,7 +298,7 @@ Format your response as:
 
     except Exception as e:
         logger.error(f"Claude API error generating analytics summary: {e}")
-        return None, None
+        return None, {"_error": f"Claude API call failed: {e}"}
 
 
 def _parse_claude_response(response_text: str) -> tuple:
