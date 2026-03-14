@@ -615,6 +615,19 @@ def init_db():
             # Backfill NULLs to FALSE
             "UPDATE users SET day_4_email_sent = FALSE WHERE day_4_email_sent IS NULL",
             "UPDATE users SET awaiting_email_collection = FALSE WHERE awaiting_email_collection IS NULL",
+            # AI Analytics Summaries (Claude-generated daily analytics insights)
+            """CREATE TABLE IF NOT EXISTS analytics_summaries (
+                id SERIAL PRIMARY KEY,
+                summary_date DATE NOT NULL,
+                period_days INTEGER NOT NULL DEFAULT 7,
+                raw_data JSONB,
+                summary_text TEXT NOT NULL,
+                trends JSONB,
+                metrics_snapshot JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_analytics_summaries_date ON analytics_summaries(summary_date DESC)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_summaries_date_period ON analytics_summaries(summary_date, period_days)",
             # Nudge tracking for pending onboarding users
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_nudged_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS nudge_count_24h INTEGER DEFAULT 0",

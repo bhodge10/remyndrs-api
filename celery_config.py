@@ -133,6 +133,19 @@ beat_schedule = {
     },
 
     # ===========================================
+    # AI ANALYTICS SUMMARY
+    # ===========================================
+
+    # Generate daily AI analytics summary at 7:00 AM UTC
+    "generate-daily-analytics-summary": {
+        "task": "tasks.reminder_tasks.generate_daily_analytics_summary",
+        "schedule": crontab(hour=7, minute=0),
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
+
+    # ===========================================
     # MONITORING PIPELINE TASKS (Agent 1 + 2 + 3)
     # ===========================================
 

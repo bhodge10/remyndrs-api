@@ -3698,6 +3698,50 @@ async def clear_analytics_cache_endpoint(admin: str = Depends(verify_admin)):
 
 
 # =====================================================
+# AI ANALYTICS SUMMARY ENDPOINTS
+# =====================================================
+
+@router.get("/admin/analytics/ai-summary")
+async def get_ai_analytics_summary(admin: str = Depends(verify_admin)):
+    """Get the latest AI-generated analytics summary."""
+    try:
+        from services.analytics_summary_service import get_latest_summary
+        summary = get_latest_summary()
+        if not summary:
+            return JSONResponse(content={"status": "no_summary", "message": "No summaries generated yet. Click 'Generate Now' to create one."})
+        return JSONResponse(content=summary)
+    except Exception as e:
+        logger.error(f"Error fetching AI summary: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@router.get("/admin/analytics/ai-summaries")
+async def get_ai_analytics_history(limit: int = 30, admin: str = Depends(verify_admin)):
+    """Get historical AI-generated analytics summaries."""
+    try:
+        from services.analytics_summary_service import get_summary_history
+        summaries = get_summary_history(limit=limit)
+        return JSONResponse(content={"summaries": summaries, "count": len(summaries)})
+    except Exception as e:
+        logger.error(f"Error fetching AI summary history: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@router.post("/admin/analytics/ai-summary/generate")
+async def generate_ai_analytics_summary(admin: str = Depends(verify_admin)):
+    """Generate a new AI analytics summary on demand."""
+    try:
+        from services.analytics_summary_service import generate_analytics_summary
+        result = generate_analytics_summary(period_days=7)
+        if result.get("error"):
+            return JSONResponse(content={"status": "error", "error": result["error"]}, status_code=400)
+        return JSONResponse(content={"status": "success", **result})
+    except Exception as e:
+        logger.error(f"Error generating AI summary: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+# =====================================================
 # DASHBOARD UI
 # =====================================================
 
@@ -4400,6 +4444,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <a href="#recurring">Recurring</a>
         <a href="#customer-service">Customer Service</a>
         <a href="#website-analytics">Analytics</a>
+        <a href="#ai-analytics-summary">AI Summary</a>
         <a href="#settings">Settings</a>
     </div>
 
@@ -5314,6 +5359,90 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Analytics Summary Section -->
+    <div id="ai-analytics-summary" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('ai-analytics-summary')">
+            <h2>AI Analytics Summary</h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 20px;">
+                <button class="btn btn-primary" style="padding: 8px 16px;" onclick="generateAISummary()">Generate Now</button>
+                <button class="btn btn-secondary" style="padding: 8px 16px;" onclick="loadAISummaryHistory()">View History</button>
+                <span id="aiSummaryStatus" style="color: #7f8c8d; font-size: 0.9em;"></span>
+            </div>
+
+            <div id="aiSummaryLoading" style="display: none; text-align: center; padding: 30px; color: #95a5a6;">
+                Generating AI summary... this may take 15-30 seconds.
+            </div>
+
+            <div id="aiSummaryEmpty" style="display: none; background: #fdf9e8; border: 1px solid #f0e68c; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+                <h4 style="color: #8b7500; margin: 0 0 8px 0;">No Summaries Yet</h4>
+                <p style="color: #7f8c8d; margin: 0;">Click "Generate Now" to create your first AI-powered analytics summary.</p>
+            </div>
+
+            <div id="aiSummaryContent" style="display: none;">
+                <!-- Trend Direction Banner -->
+                <div id="aiTrendBanner" style="display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-radius: 8px; margin-bottom: 20px; font-weight: 600;">
+                    <span id="aiTrendIcon" style="font-size: 1.5em;"></span>
+                    <span id="aiTrendLabel"></span>
+                    <span id="aiTrendConfidence" style="margin-left: auto; font-size: 0.8em; font-weight: 400;"></span>
+                </div>
+
+                <!-- Metrics Cards -->
+                <div class="cards" style="margin-bottom: 20px;">
+                    <div class="card blue">
+                        <div class="card-title">Users</div>
+                        <div class="card-value" id="aiMetricUsers">-</div>
+                        <div id="aiMetricUsersChange" style="font-size: 0.85em; margin-top: 4px;"></div>
+                    </div>
+                    <div class="card green">
+                        <div class="card-title">Sessions</div>
+                        <div class="card-value" id="aiMetricSessions">-</div>
+                        <div id="aiMetricSessionsChange" style="font-size: 0.85em; margin-top: 4px;"></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Engagement Rate</div>
+                        <div class="card-value" id="aiMetricEngRate">-</div>
+                        <div id="aiMetricEngRateChange" style="font-size: 0.85em; margin-top: 4px;"></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Avg Engagement</div>
+                        <div class="card-value" id="aiMetricEngTime">-</div>
+                        <div id="aiMetricEngTimeChange" style="font-size: 0.85em; margin-top: 4px;"></div>
+                    </div>
+                </div>
+
+                <!-- AI Summary Text -->
+                <div style="background: white; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); line-height: 1.7;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <h3 style="color: #2c3e50; margin: 0;">AI Analysis</h3>
+                        <span id="aiSummaryDate" style="color: #95a5a6; font-size: 0.85em;"></span>
+                    </div>
+                    <div id="aiSummaryText" style="color: #34495e; white-space: pre-wrap;"></div>
+                </div>
+
+                <!-- Key Trends -->
+                <div id="aiKeyTrends" style="display: none; background: white; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <h3 style="color: #2c3e50; margin: 0 0 12px 0;">Key Trends</h3>
+                    <ul id="aiKeyTrendsList" style="list-style: none; padding: 0; margin: 0;"></ul>
+                </div>
+
+                <!-- Notable Changes -->
+                <div id="aiNotableChanges" style="display: none; background: white; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <h3 style="color: #2c3e50; margin: 0 0 12px 0;">Notable Changes</h3>
+                    <ul id="aiNotableChangesList" style="list-style: none; padding: 0; margin: 0;"></ul>
+                </div>
+            </div>
+
+            <!-- History View -->
+            <div id="aiSummaryHistory" style="display: none;">
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Summary History</h3>
+                <div id="aiHistoryList"></div>
             </div>
         </div>
     </div>
@@ -8587,6 +8716,236 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 alert('Error exporting: ' + e.message);
             }}
         }}
+
+        // =====================================================
+        // AI Analytics Summary
+        // =====================================================
+
+        async function loadAISummary() {{
+            const loading = document.getElementById('aiSummaryLoading');
+            const empty = document.getElementById('aiSummaryEmpty');
+            const content = document.getElementById('aiSummaryContent');
+            const history = document.getElementById('aiSummaryHistory');
+
+            try {{
+                const response = await fetch('/admin/analytics/ai-summary');
+                const data = await response.json();
+
+                if (data.status === 'no_summary') {{
+                    empty.style.display = 'block';
+                    content.style.display = 'none';
+                    history.style.display = 'none';
+                    return;
+                }}
+
+                if (data.error) {{
+                    document.getElementById('aiSummaryStatus').textContent = 'Error: ' + data.error;
+                    return;
+                }}
+
+                empty.style.display = 'none';
+                content.style.display = 'block';
+                history.style.display = 'none';
+                renderAISummary(data);
+            }} catch (e) {{
+                document.getElementById('aiSummaryStatus').textContent = 'Failed to load: ' + e.message;
+            }}
+        }}
+
+        function renderAISummary(data) {{
+            // Summary text and date
+            document.getElementById('aiSummaryText').textContent = data.summary_text || 'No summary available';
+            document.getElementById('aiSummaryDate').textContent = data.summary_date ? 'Generated: ' + data.summary_date : '';
+
+            // Metrics cards
+            const metrics = data.metrics_snapshot || {{}};
+            if (metrics.users) {{
+                document.getElementById('aiMetricUsers').textContent = (metrics.users.current || 0).toLocaleString();
+                renderChangeIndicator('aiMetricUsersChange', metrics.users.change_pct);
+            }}
+            if (metrics.sessions) {{
+                document.getElementById('aiMetricSessions').textContent = (metrics.sessions.current || 0).toLocaleString();
+                renderChangeIndicator('aiMetricSessionsChange', metrics.sessions.change_pct);
+            }}
+            if (metrics.engagement_rate) {{
+                document.getElementById('aiMetricEngRate').textContent = metrics.engagement_rate.current + '%';
+                renderChangeIndicator('aiMetricEngRateChange', metrics.engagement_rate.change_pct, 'pp');
+            }}
+            if (metrics.avg_engagement_time) {{
+                const engTime = metrics.avg_engagement_time.current || 0;
+                document.getElementById('aiMetricEngTime').textContent = engTime >= 60 ? Math.round(engTime / 60) + 'm ' + Math.round(engTime % 60) + 's' : Math.round(engTime) + 's';
+                renderChangeIndicator('aiMetricEngTimeChange', metrics.avg_engagement_time.change_pct);
+            }}
+
+            // Trend banner
+            const trends = data.trends || {{}};
+            const banner = document.getElementById('aiTrendBanner');
+            const direction = trends.direction || 'unknown';
+
+            if (direction === 'up') {{
+                banner.style.background = '#e8f8f0';
+                banner.style.color = '#27ae60';
+                document.getElementById('aiTrendIcon').textContent = '↑';
+                document.getElementById('aiTrendLabel').textContent = 'Trending Up';
+            }} else if (direction === 'down') {{
+                banner.style.background = '#fdf2f2';
+                banner.style.color = '#e74c3c';
+                document.getElementById('aiTrendIcon').textContent = '↓';
+                document.getElementById('aiTrendLabel').textContent = 'Trending Down';
+            }} else {{
+                banner.style.background = '#f0f4f8';
+                banner.style.color = '#7f8c8d';
+                document.getElementById('aiTrendIcon').textContent = '→';
+                document.getElementById('aiTrendLabel').textContent = direction === 'stable' ? 'Stable' : 'Trend Unknown';
+            }}
+
+            const confidence = trends.confidence || 'unknown';
+            document.getElementById('aiTrendConfidence').textContent = confidence !== 'unknown' ? 'Confidence: ' + confidence : '';
+
+            // Key trends list
+            const keyTrends = trends.key_trends || [];
+            const trendsSection = document.getElementById('aiKeyTrends');
+            const trendsList = document.getElementById('aiKeyTrendsList');
+            if (keyTrends.length > 0) {{
+                trendsSection.style.display = 'block';
+                trendsList.innerHTML = keyTrends.map(t =>
+                    '<li style="padding: 8px 0; border-bottom: 1px solid #f0f0f0; color: #34495e;">• ' + escapeHtml(t) + '</li>'
+                ).join('');
+            }} else {{
+                trendsSection.style.display = 'none';
+            }}
+
+            // Notable changes
+            const changes = trends.notable_changes || [];
+            const changesSection = document.getElementById('aiNotableChanges');
+            const changesList = document.getElementById('aiNotableChangesList');
+            if (changes.length > 0) {{
+                changesSection.style.display = 'block';
+                changesList.innerHTML = changes.map(c =>
+                    '<li style="padding: 8px 0; border-bottom: 1px solid #f0f0f0; color: #34495e;">• ' + escapeHtml(c) + '</li>'
+                ).join('');
+            }} else {{
+                changesSection.style.display = 'none';
+            }}
+        }}
+
+        function renderChangeIndicator(elementId, changePct, suffix) {{
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            suffix = suffix || '%';
+            const val = parseFloat(changePct) || 0;
+            if (val > 0) {{
+                el.textContent = '+' + val.toFixed(1) + suffix + ' vs prev';
+                el.style.color = '#27ae60';
+            }} else if (val < 0) {{
+                el.textContent = val.toFixed(1) + suffix + ' vs prev';
+                el.style.color = '#e74c3c';
+            }} else {{
+                el.textContent = 'No change';
+                el.style.color = '#95a5a6';
+            }}
+        }}
+
+        function escapeHtml(str) {{
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }}
+
+        async function generateAISummary() {{
+            const statusEl = document.getElementById('aiSummaryStatus');
+            const loading = document.getElementById('aiSummaryLoading');
+
+            statusEl.textContent = '';
+            loading.style.display = 'block';
+            document.getElementById('aiSummaryContent').style.display = 'none';
+            document.getElementById('aiSummaryEmpty').style.display = 'none';
+            document.getElementById('aiSummaryHistory').style.display = 'none';
+
+            try {{
+                const response = await fetch('/admin/analytics/ai-summary/generate', {{ method: 'POST' }});
+                const data = await response.json();
+
+                loading.style.display = 'none';
+
+                if (data.error) {{
+                    statusEl.textContent = 'Error: ' + data.error;
+                    return;
+                }}
+
+                statusEl.textContent = 'Summary generated successfully!';
+                setTimeout(() => {{ statusEl.textContent = ''; }}, 5000);
+
+                document.getElementById('aiSummaryContent').style.display = 'block';
+                renderAISummary(data);
+            }} catch (e) {{
+                loading.style.display = 'none';
+                statusEl.textContent = 'Failed: ' + e.message;
+            }}
+        }}
+
+        async function loadAISummaryHistory() {{
+            const history = document.getElementById('aiSummaryHistory');
+            const historyList = document.getElementById('aiHistoryList');
+            const content = document.getElementById('aiSummaryContent');
+
+            // Toggle: if history is visible, go back to latest
+            if (history.style.display === 'block') {{
+                history.style.display = 'none';
+                loadAISummary();
+                return;
+            }}
+
+            content.style.display = 'none';
+            document.getElementById('aiSummaryEmpty').style.display = 'none';
+            historyList.innerHTML = '<p style="color: #95a5a6; text-align: center;">Loading history...</p>';
+            history.style.display = 'block';
+
+            try {{
+                const response = await fetch('/admin/analytics/ai-summaries?limit=30');
+                const data = await response.json();
+                const summaries = data.summaries || [];
+
+                if (summaries.length === 0) {{
+                    historyList.innerHTML = '<p style="color: #95a5a6; text-align: center;">No summaries found.</p>';
+                    return;
+                }}
+
+                historyList.innerHTML = summaries.map((s, idx) => {{
+                    const trends = s.trends || {{}};
+                    const direction = trends.direction || 'unknown';
+                    const arrow = direction === 'up' ? '↑' : direction === 'down' ? '↓' : '→';
+                    const arrowColor = direction === 'up' ? '#27ae60' : direction === 'down' ? '#e74c3c' : '#95a5a6';
+                    const metrics = s.metrics_snapshot || {{}};
+                    const users = metrics.users ? metrics.users.current : '-';
+                    const sessions = metrics.sessions ? metrics.sessions.current : '-';
+
+                    return `<div style="background: white; border-radius: 8px; padding: 16px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); cursor: pointer;" onclick="expandHistoryItem(${{idx}})">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span style="font-weight: 600; color: #2c3e50;">${{s.summary_date}}</span>
+                                <span style="color: ${{arrowColor}}; font-weight: 600; margin-left: 8px;">${{arrow}}</span>
+                                <span style="color: #95a5a6; margin-left: 12px; font-size: 0.85em;">Users: ${{users}} | Sessions: ${{sessions}}</span>
+                            </div>
+                            <span style="color: #95a5a6; font-size: 0.8em;">${{s.period_days}}d period</span>
+                        </div>
+                        <div id="historyDetail${{idx}}" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0; color: #34495e; white-space: pre-wrap; font-size: 0.9em; line-height: 1.6;">${{escapeHtml(s.summary_text || '')}}</div>
+                    </div>`;
+                }}).join('');
+            }} catch (e) {{
+                historyList.innerHTML = '<p style="color: #e74c3c; text-align: center;">Failed to load history: ' + e.message + '</p>';
+            }}
+        }}
+
+        function expandHistoryItem(idx) {{
+            const detail = document.getElementById('historyDetail' + idx);
+            if (detail) {{
+                detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+            }}
+        }}
+
+        // Load AI summary on page load
+        loadAISummary();
 
     </script>
 </body>
