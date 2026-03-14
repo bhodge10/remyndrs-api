@@ -2022,3 +2022,36 @@ def keep_web_service_warm():
     except Exception as e:
         logger.warning(f"Keep-warm ping failed: {e}")
         return {"error": str(e)}
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+    time_limit=120,
+    soft_time_limit=100,
+)
+def generate_daily_analytics_summary(self):
+    """
+    Generate an AI-powered daily analytics summary using Claude API.
+    Pulls GA4 + Search Console data, compares to previous period,
+    and generates a natural language summary with trend analysis.
+
+    Runs daily at 7:00 AM UTC via Celery Beat.
+    """
+    try:
+        from services.analytics_summary_service import generate_analytics_summary
+
+        logger.info("Generating daily analytics summary...")
+        result = generate_analytics_summary(period_days=7)
+
+        if result.get("error"):
+            logger.warning(f"Analytics summary generation issue: {result['error']}")
+            return {"status": "error", "error": result["error"]}
+
+        logger.info(f"Analytics summary generated for {result.get('summary_date')}")
+        return {"status": "success", "summary_date": result.get("summary_date")}
+
+    except Exception as e:
+        logger.error(f"Error generating analytics summary: {e}")
+        raise self.retry(exc=e)
