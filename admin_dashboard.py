@@ -3856,6 +3856,33 @@ async def generate_ai_analytics_summary(admin: str = Depends(verify_admin)):
 
 
 # =====================================================
+# PRODUCT METRICS ENDPOINT
+# =====================================================
+
+# In-memory cache for product metrics (1 hour TTL)
+_product_metrics_cache = {'data': None, 'timestamp': 0}
+
+@router.get("/admin/product-metrics")
+async def get_product_metrics_endpoint(admin: str = Depends(verify_admin)):
+    """Get advanced product metrics (cached for 1 hour)."""
+    import time as _time
+    now = _time.time()
+    if _product_metrics_cache['data'] and now - _product_metrics_cache['timestamp'] < 3600:
+        return JSONResponse(content=_product_metrics_cache['data'])
+
+    try:
+        from services.metrics_service import get_product_metrics
+        data = get_product_metrics()
+        if 'error' not in data:
+            _product_metrics_cache['data'] = data
+            _product_metrics_cache['timestamp'] = now
+        return JSONResponse(content=data)
+    except Exception as e:
+        logger.error(f"Error fetching product metrics: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+# =====================================================
 # DASHBOARD UI
 # =====================================================
 
@@ -4557,6 +4584,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <a href="#conversations">Conversations</a>
         <a href="#recurring">Recurring</a>
         <a href="#customer-service">Customer Service</a>
+        <a href="#product-metrics" style="background: #4A90A4; color: white; border-color: #4A90A4;">Product Metrics</a>
         <a href="#website-analytics">Analytics</a>
         <a href="#ai-analytics-summary">AI Summary</a>
         <a href="#settings">Settings</a>
@@ -5310,6 +5338,107 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         </div>
     </div>
 
+    <!-- Product Metrics Section -->
+    <div id="product-metrics" class="collapsible-section section-anchor">
+        <div class="section-header" onclick="toggleSection('product-metrics')">
+            <h2>Product Metrics</h2>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <div id="pmLoading" style="text-align: center; padding: 40px; color: #95a5a6;">
+                Loading product metrics...
+            </div>
+            <div id="pmError" style="display: none; background: #fdf2f2; border: 1px solid #e74c3c; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+                <h4 style="color: #e74c3c; margin: 0 0 10px 0;">Error Loading Product Metrics</h4>
+                <p id="pmErrorMsg" style="color: #7f8c8d; margin: 0;"></p>
+            </div>
+            <div id="pmContent" style="display: none;">
+
+                <!-- 1. Trial Conversion Funnel -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Trial Conversion Funnel</h3>
+                <div id="pmFunnelBar" style="display: flex; height: 40px; border-radius: 8px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);"></div>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead><tr><th>State</th><th>Users</th><th>% of Total</th></tr></thead>
+                        <tbody id="pmFunnelBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- 2. Signups by Attribution Keyword -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Signups by Attribution Keyword</h3>
+                <div id="pmAttributionChart" style="background: white; border-radius: 8px; padding: 20px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);"></div>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead><tr><th>Keyword</th><th>Source / Channel</th><th>Total</th><th>Last 7 Days</th><th>Last 30 Days</th></tr></thead>
+                        <tbody id="pmAttributionBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- 3. Daily Active Users Trend -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Daily Active Users (Last 30 Days)</h3>
+                <div style="background: white; border-radius: 8px; padding: 20px; margin-bottom: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <div id="pmDAUChart" style="height: 200px; display: flex; align-items: flex-end; gap: 2px;"></div>
+                    <div id="pmDAULabels" style="display: flex; gap: 2px; margin-top: 4px;"></div>
+                </div>
+
+                <!-- 4. User Retention Metrics -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">User Retention</h3>
+                <div class="cards" style="margin-bottom: 15px;">
+                    <div class="card">
+                        <div class="card-title">Total Onboarded</div>
+                        <div class="card-value" id="pmRetTotal">0</div>
+                    </div>
+                    <div class="card green">
+                        <div class="card-title">Active (7 days)</div>
+                        <div class="card-value" id="pmRetActive">0</div>
+                    </div>
+                    <div class="card orange">
+                        <div class="card-title">Churned (14+ days inactive)</div>
+                        <div class="card-value" id="pmRetChurned">0</div>
+                    </div>
+                </div>
+                <div style="overflow-x: auto; margin-bottom: 15px;">
+                    <table>
+                        <thead><tr><th>Metric</th><th>Eligible</th><th>Retained</th><th>Rate</th></tr></thead>
+                        <tbody id="pmRetentionBody"></tbody>
+                    </table>
+                </div>
+                <h4 style="color: #34495e; margin-bottom: 10px;">Retention by Signup Cohort</h4>
+                <div style="overflow-x: auto; margin-bottom: 30px;">
+                    <table>
+                        <thead><tr><th>Cohort (Week)</th><th>Size</th><th>Day 1 %</th><th>Day 7 %</th><th>Day 14 %</th></tr></thead>
+                        <tbody id="pmCohortBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- 5. Time to First Action -->
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Time to First Action</h3>
+                <div class="cards" style="margin-bottom: 30px;">
+                    <div class="card blue">
+                        <div class="card-title">Median to First Reminder</div>
+                        <div class="card-value" id="pmTTAReminder" style="font-size: 1.5em;">-</div>
+                    </div>
+                    <div class="card blue">
+                        <div class="card-title">Median to First Memory</div>
+                        <div class="card-value" id="pmTTAMemory" style="font-size: 1.5em;">-</div>
+                    </div>
+                    <div class="card green">
+                        <div class="card-title">Reminder Within 1 Hour</div>
+                        <div class="card-value" id="pmTTA1h">0%</div>
+                    </div>
+                    <div class="card green">
+                        <div class="card-title">Reminder Within 24 Hours</div>
+                        <div class="card-value" id="pmTTA24h">0%</div>
+                    </div>
+                    <div class="card orange">
+                        <div class="card-title">Never Set Reminder</div>
+                        <div class="card-value" id="pmTTANever">0%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Website Analytics Section -->
     <div id="website-analytics" class="collapsible-section section-anchor">
         <div class="section-header" onclick="toggleSection('website-analytics')">
@@ -5841,6 +5970,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             loadContactMessages();
             loadRecurring();
             loadAnalyticsData();
+            loadProductMetrics();
         }}
 
         async function loadOverviewStats() {{
@@ -8544,6 +8674,134 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 alert('Error: ' + e.message);
             }}
         }}
+        // =====================================================
+        // Product Metrics
+        // =====================================================
+        async function loadProductMetrics() {{
+            const loading = document.getElementById('pmLoading');
+            const error = document.getElementById('pmError');
+            const content = document.getElementById('pmContent');
+
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            content.style.display = 'none';
+
+            try {{
+                const response = await fetch('/admin/product-metrics');
+                const data = await response.json();
+
+                if (data.error) {{
+                    loading.style.display = 'none';
+                    error.style.display = 'block';
+                    document.getElementById('pmErrorMsg').textContent = data.error;
+                    return;
+                }}
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+
+                // --- 1. Trial Conversion Funnel ---
+                const funnel = data.funnel || {{}};
+                const funnelItems = [
+                    {{ label: 'Active Trial', count: funnel.active_trial || 0, color: '#4A90A4' }},
+                    {{ label: 'Trial Expired (Active)', count: funnel.trial_expired_active || 0, color: '#50B688' }},
+                    {{ label: 'Converted to Paid', count: funnel.converted_paid || 0, color: '#27ae60' }},
+                    {{ label: 'Churned', count: funnel.churned || 0, color: '#e74c3c' }},
+                ];
+                const funnelTotal = funnel.total || 1;
+
+                // Stacked bar
+                const funnelBar = document.getElementById('pmFunnelBar');
+                funnelBar.innerHTML = funnelItems.map(f => {{
+                    const pct = (f.count / funnelTotal * 100);
+                    if (pct < 1) return '';
+                    return `<div style="width: ${{pct}}%; background: ${{f.color}}; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.8em; font-weight: 600; min-width: 40px;" title="${{f.label}}: ${{f.count}} (${{pct.toFixed(1)}}%)">${{f.count}}</div>`;
+                }}).join('');
+
+                // Table
+                document.getElementById('pmFunnelBody').innerHTML = funnelItems.map(f => {{
+                    const pct = (f.count / funnelTotal * 100).toFixed(1);
+                    return `<tr><td><span style="display: inline-block; width: 12px; height: 12px; border-radius: 2px; background: ${{f.color}}; margin-right: 8px; vertical-align: middle;"></span>${{f.label}}</td><td>${{f.count}}</td><td>${{pct}}%</td></tr>`;
+                }}).join('') + `<tr style="font-weight: 600;"><td>Total</td><td>${{funnelTotal}}</td><td>100%</td></tr>`;
+
+                // --- 2. Attribution ---
+                const attr = data.attribution || [];
+                const attrMax = Math.max(...attr.map(a => a.total), 1);
+                document.getElementById('pmAttributionChart').innerHTML = attr.map(a => {{
+                    const barW = (a.total / attrMax * 100);
+                    return `<div style="display: flex; align-items: center; margin-bottom: 8px;">
+                        <span style="width: 120px; font-size: 0.85em; color: #2c3e50; font-weight: 500;">${{a.keyword}}</span>
+                        <div style="flex: 1; background: #f0f0f0; border-radius: 4px; height: 24px; overflow: hidden;">
+                            <div style="width: ${{barW}}%; background: #4A90A4; height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; color: white; font-size: 0.8em; font-weight: 600; min-width: 30px;">${{a.total}}</div>
+                        </div>
+                        <span style="width: 100px; text-align: right; font-size: 0.8em; color: #7f8c8d; margin-left: 8px;">${{a.channel}}</span>
+                    </div>`;
+                }}).join('');
+                document.getElementById('pmAttributionBody').innerHTML = attr.map(a =>
+                    `<tr><td>${{a.keyword}}</td><td>${{a.channel}}</td><td>${{a.total}}</td><td>${{a.last_7d}}</td><td>${{a.last_30d}}</td></tr>`
+                ).join('');
+
+                // --- 3. DAU Trend ---
+                const dau = data.dau_trend || [];
+                const dauMax = Math.max(...dau.map(d => d.active_users), 1);
+                const dauChart = document.getElementById('pmDAUChart');
+                const dauLabels = document.getElementById('pmDAULabels');
+                const barWidth = `${{100 / Math.max(dau.length, 1)}}%`;
+                dauChart.innerHTML = dau.map((d, i) => {{
+                    const h = Math.max(d.active_users / dauMax * 180, 2);
+                    const isToday = i === dau.length - 1;
+                    return `<div style="flex: 1; background: ${{isToday ? '#4A90A4' : '#b0d4e8'}}; height: ${{h}}px; border-radius: 2px 2px 0 0; position: relative;" title="${{d.date}}: ${{d.active_users}} users">
+                        <span style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.7em; color: #2c3e50; font-weight: 600;">${{d.active_users > 0 ? d.active_users : ''}}</span>
+                    </div>`;
+                }}).join('');
+                dauLabels.innerHTML = dau.map((d, i) => {{
+                    const show = i === 0 || i === dau.length - 1 || i % 7 === 0;
+                    return `<div style="flex: 1; text-align: center; font-size: 0.65em; color: #95a5a6;">${{show ? d.date.slice(5) : ''}}</div>`;
+                }}).join('');
+
+                // --- 4. Retention ---
+                const ret = data.retention || {{}};
+                document.getElementById('pmRetTotal').textContent = ret.total_onboarded || 0;
+                document.getElementById('pmRetActive').textContent = ret.currently_active || 0;
+                document.getElementById('pmRetChurned').textContent = ret.churned || 0;
+
+                const retRows = [
+                    ['Day 1 Retention', ret.day1],
+                    ['Day 7 Retention', ret.day7],
+                    ['Day 14 Retention', ret.day14],
+                ];
+                document.getElementById('pmRetentionBody').innerHTML = retRows.map(([label, d]) => {{
+                    if (!d) return `<tr><td>${{label}}</td><td colspan="3" style="color: #95a5a6;">Not enough data</td></tr>`;
+                    const rateColor = d.rate >= 50 ? '#27ae60' : d.rate >= 25 ? '#e67e22' : '#e74c3c';
+                    return `<tr><td>${{label}}</td><td>${{d.eligible}}</td><td>${{d.retained}}</td><td style="color: ${{rateColor}}; font-weight: 600;">${{d.rate !== null ? d.rate + '%' : 'N/A'}}</td></tr>`;
+                }}).join('');
+
+                // Cohorts
+                const cohorts = data.cohorts || [];
+                if (cohorts.length === 0) {{
+                    document.getElementById('pmCohortBody').innerHTML = '<tr><td colspan="5" style="color: #95a5a6; text-align: center;">Not enough data for cohort analysis</td></tr>';
+                }} else {{
+                    document.getElementById('pmCohortBody').innerHTML = cohorts.map(c => {{
+                        const fmtPct = (v) => v !== null && v !== undefined ? `<span style="color: ${{v >= 50 ? '#27ae60' : v >= 25 ? '#e67e22' : '#e74c3c'}}; font-weight: 600;">${{v}}%</span>` : '<span style="color: #95a5a6;">-</span>';
+                        return `<tr><td>${{c.week}}</td><td>${{c.size}}</td><td>${{fmtPct(c.day1_pct)}}</td><td>${{fmtPct(c.day7_pct)}}</td><td>${{fmtPct(c.day14_pct)}}</td></tr>`;
+                    }}).join('');
+                }}
+
+                // --- 5. Time to First Action ---
+                const tta = data.time_to_action || {{}};
+                document.getElementById('pmTTAReminder').textContent = tta.median_to_reminder || 'N/A';
+                document.getElementById('pmTTAMemory').textContent = tta.median_to_memory || 'N/A';
+                document.getElementById('pmTTA1h').textContent = (tta.pct_within_1h || 0) + '%';
+                document.getElementById('pmTTA24h').textContent = (tta.pct_within_24h || 0) + '%';
+                document.getElementById('pmTTANever').textContent = (tta.pct_never_reminder || 0) + '%';
+
+            }} catch (e) {{
+                loading.style.display = 'none';
+                error.style.display = 'block';
+                document.getElementById('pmErrorMsg').textContent = e.message;
+            }}
+        }}
+
         // =====================================================
         // Website Analytics
         // =====================================================

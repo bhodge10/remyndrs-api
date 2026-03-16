@@ -688,6 +688,351 @@ def get_lifecycle_message_stats():
             return_db_connection(conn)
 
 
+def get_product_metrics():
+    """Get advanced product metrics: attribution, retention, funnel, time-to-action, DAU."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        result = {}
+
+        # =================================================================
+        # 1. SIGNUPS BY ATTRIBUTION KEYWORD
+        # =================================================================
+        keyword_map = {
+            'TRY': 'Reddit Paid',
+            'GO': 'Facebook/Instagram Organic',
+            'HI': 'Organic / Direct',
+            'FRIEND': 'Referral',
+        }
+        c.execute('''
+            SELECT
+                UPPER(COALESCE(referral_source, 'unknown')) as keyword,
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days') as last_7d,
+                COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') as last_30d
+            FROM users
+            WHERE onboarding_complete = TRUE
+            GROUP BY UPPER(COALESCE(referral_source, 'unknown'))
+            ORDER BY total DESC
+        ''')
+        attribution = []
+        for row in c.fetchall():
+            kw = row[0]
+            channel = keyword_map.get(kw, 'Other')
+            attribution.append({
+                'keyword': kw,
+                'channel': channel,
+                'total': row[1],
+                'last_7d': row[2],
+                'last_30d': row[3],
+            })
+        result['attribution'] = attribution
+
+        # =================================================================
+        # 2. USER RETENTION METRICS
+        # =================================================================
+        # Day 1 retention: signed up 2+ days ago, sent message day after signup
+        c.execute('''
+            SELECT
+                COUNT(*) as eligible,
+                COUNT(*) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1 FROM logs l
+                        WHERE l.phone_number = u.phone_number
+                        AND l.created_at::date = u.created_at::date + INTERVAL '1 day'
+                    )
+                ) as retained
+            FROM users u
+            WHERE u.onboarding_complete = TRUE
+            AND u.created_at < NOW() - INTERVAL '2 days'
+        ''')
+        r = c.fetchone()
+        day1_eligible, day1_retained = r[0], r[1]
+
+        # Day 7 retention: signed up 8+ days ago, sent message between day 2-7
+        c.execute('''
+            SELECT
+                COUNT(*) as eligible,
+                COUNT(*) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1 FROM logs l
+                        WHERE l.phone_number = u.phone_number
+                        AND l.created_at >= u.created_at + INTERVAL '2 days'
+                        AND l.created_at < u.created_at + INTERVAL '8 days'
+                    )
+                ) as retained
+            FROM users u
+            WHERE u.onboarding_complete = TRUE
+            AND u.created_at < NOW() - INTERVAL '8 days'
+        ''')
+        r = c.fetchone()
+        day7_eligible, day7_retained = r[0], r[1]
+
+        # Day 14 retention: signed up 15+ days ago, sent message between day 8-14
+        c.execute('''
+            SELECT
+                COUNT(*) as eligible,
+                COUNT(*) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1 FROM logs l
+                        WHERE l.phone_number = u.phone_number
+                        AND l.created_at >= u.created_at + INTERVAL '8 days'
+                        AND l.created_at < u.created_at + INTERVAL '15 days'
+                    )
+                ) as retained
+            FROM users u
+            WHERE u.onboarding_complete = TRUE
+            AND u.created_at < NOW() - INTERVAL '15 days'
+        ''')
+        r = c.fetchone()
+        day14_eligible, day14_retained = r[0], r[1]
+
+        # Currently active (message in last 7 days)
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+            AND last_active_at >= NOW() - INTERVAL '7 days'
+        ''')
+        currently_active = c.fetchone()[0]
+
+        # Churned (onboarded 14+ days ago, no message in 14 days)
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+            AND created_at < NOW() - INTERVAL '14 days'
+            AND (last_active_at IS NULL OR last_active_at < NOW() - INTERVAL '14 days')
+        ''')
+        churned = c.fetchone()[0]
+
+        # Total onboarded
+        c.execute('SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE')
+        total_onboarded = c.fetchone()[0]
+
+        result['retention'] = {
+            'day1': {'eligible': day1_eligible, 'retained': day1_retained,
+                     'rate': round(day1_retained / day1_eligible * 100, 1) if day1_eligible > 0 else None},
+            'day7': {'eligible': day7_eligible, 'retained': day7_retained,
+                     'rate': round(day7_retained / day7_eligible * 100, 1) if day7_eligible > 0 else None},
+            'day14': {'eligible': day14_eligible, 'retained': day14_retained,
+                      'rate': round(day14_retained / day14_eligible * 100, 1) if day14_eligible > 0 else None},
+            'currently_active': currently_active,
+            'churned': churned,
+            'total_onboarded': total_onboarded,
+        }
+
+        # =================================================================
+        # 3. TRIAL CONVERSION FUNNEL
+        # =================================================================
+        # Active trial: premium with trial_end_date in future
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+            AND trial_end_date > NOW()
+            AND premium_status IN ('premium', 'family')
+            AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
+        ''')
+        active_trial = c.fetchone()[0]
+
+        # Trial expired, free tier, still active (message in last 14 days)
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+            AND (trial_end_date IS NOT NULL AND trial_end_date <= NOW())
+            AND COALESCE(premium_status, 'free') = 'free'
+            AND last_active_at >= NOW() - INTERVAL '14 days'
+        ''')
+        trial_expired_active = c.fetchone()[0]
+
+        # Converted to paid: active stripe subscription
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+            AND subscription_status = 'active'
+            AND stripe_subscription_id IS NOT NULL
+        ''')
+        converted_paid = c.fetchone()[0]
+
+        # Churned: trial expired, no message in 14+ days
+        c.execute('''
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+            AND (trial_end_date IS NOT NULL AND trial_end_date <= NOW())
+            AND (last_active_at IS NULL OR last_active_at < NOW() - INTERVAL '14 days')
+        ''')
+        funnel_churned = c.fetchone()[0]
+
+        funnel_total = active_trial + trial_expired_active + converted_paid + funnel_churned
+        result['funnel'] = {
+            'active_trial': active_trial,
+            'trial_expired_active': trial_expired_active,
+            'converted_paid': converted_paid,
+            'churned': funnel_churned,
+            'total': funnel_total,
+        }
+
+        # =================================================================
+        # 4. TIME TO FIRST ACTION
+        # =================================================================
+        # Median time to first reminder
+        c.execute('''
+            SELECT EXTRACT(EPOCH FROM (MIN(r.created_at) - u.created_at)) as seconds_to_first
+            FROM users u
+            JOIN reminders r ON r.phone_number = u.phone_number
+            WHERE u.onboarding_complete = TRUE
+            GROUP BY u.phone_number, u.created_at
+            ORDER BY seconds_to_first
+        ''')
+        reminder_times = [row[0] for row in c.fetchall() if row[0] is not None and row[0] > 0]
+
+        # Median time to first memory
+        c.execute('''
+            SELECT EXTRACT(EPOCH FROM (MIN(m.created_at) - u.created_at)) as seconds_to_first
+            FROM users u
+            JOIN memories m ON m.phone_number = u.phone_number
+            WHERE u.onboarding_complete = TRUE
+            GROUP BY u.phone_number, u.created_at
+            ORDER BY seconds_to_first
+        ''')
+        memory_times = [row[0] for row in c.fetchall() if row[0] is not None and row[0] > 0]
+
+        def median(lst):
+            if not lst:
+                return None
+            s = sorted(lst)
+            n = len(s)
+            mid = n // 2
+            return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+        def format_duration(seconds):
+            if seconds is None:
+                return None
+            seconds = int(seconds)
+            if seconds < 60:
+                return f"{seconds}s"
+            elif seconds < 3600:
+                return f"{seconds // 60}m {seconds % 60}s"
+            elif seconds < 86400:
+                hours = seconds // 3600
+                mins = (seconds % 3600) // 60
+                return f"{hours}h {mins}m"
+            else:
+                days = seconds // 86400
+                hours = (seconds % 86400) // 3600
+                return f"{days}d {hours}h"
+
+        median_reminder = median(reminder_times)
+        median_memory = median(memory_times)
+
+        # % who set reminder within 1 hour / 24 hours
+        within_1h = len([t for t in reminder_times if t <= 3600])
+        within_24h = len([t for t in reminder_times if t <= 86400])
+
+        # % who never set a reminder
+        c.execute('''
+            SELECT COUNT(*) FROM users u
+            WHERE u.onboarding_complete = TRUE
+            AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.phone_number = u.phone_number)
+        ''')
+        never_set_reminder = c.fetchone()[0]
+
+        result['time_to_action'] = {
+            'median_to_reminder': format_duration(median_reminder),
+            'median_to_reminder_seconds': median_reminder,
+            'median_to_memory': format_duration(median_memory),
+            'median_to_memory_seconds': median_memory,
+            'pct_within_1h': round(within_1h / total_onboarded * 100, 1) if total_onboarded > 0 else 0,
+            'pct_within_24h': round(within_24h / total_onboarded * 100, 1) if total_onboarded > 0 else 0,
+            'pct_never_reminder': round(never_set_reminder / total_onboarded * 100, 1) if total_onboarded > 0 else 0,
+            'users_with_reminder': len(reminder_times),
+            'users_with_memory': len(memory_times),
+            'total_onboarded': total_onboarded,
+        }
+
+        # =================================================================
+        # 5. DAILY ACTIVE USERS TREND (last 30 days)
+        # =================================================================
+        c.execute('''
+            SELECT d::date as day,
+                   COUNT(DISTINCT l.phone_number) as active_users
+            FROM generate_series(
+                NOW() - INTERVAL '30 days',
+                NOW(),
+                '1 day'::interval
+            ) d
+            LEFT JOIN logs l ON l.created_at::date = d::date
+            LEFT JOIN users u ON u.phone_number = l.phone_number AND u.onboarding_complete = TRUE
+            GROUP BY d::date
+            ORDER BY d::date
+        ''')
+        dau_trend = [{'date': str(row[0]), 'active_users': row[1]} for row in c.fetchall()]
+        result['dau_trend'] = dau_trend
+
+        # =================================================================
+        # 6. RETENTION COHORTS (by signup week)
+        # =================================================================
+        c.execute('''
+            SELECT
+                DATE_TRUNC('week', u.created_at)::date as cohort_week,
+                COUNT(*) as cohort_size,
+                COUNT(*) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1 FROM logs l
+                        WHERE l.phone_number = u.phone_number
+                        AND l.created_at::date = u.created_at::date + INTERVAL '1 day'
+                    )
+                ) as day1_retained,
+                COUNT(*) FILTER (
+                    WHERE u.created_at < NOW() - INTERVAL '8 days'
+                    AND EXISTS (
+                        SELECT 1 FROM logs l
+                        WHERE l.phone_number = u.phone_number
+                        AND l.created_at >= u.created_at + INTERVAL '2 days'
+                        AND l.created_at < u.created_at + INTERVAL '8 days'
+                    )
+                ) as day7_retained,
+                COUNT(*) FILTER (
+                    WHERE u.created_at < NOW() - INTERVAL '15 days'
+                    AND EXISTS (
+                        SELECT 1 FROM logs l
+                        WHERE l.phone_number = u.phone_number
+                        AND l.created_at >= u.created_at + INTERVAL '8 days'
+                        AND l.created_at < u.created_at + INTERVAL '15 days'
+                    )
+                ) as day14_retained,
+                COUNT(*) FILTER (WHERE u.created_at < NOW() - INTERVAL '8 days') as day7_eligible,
+                COUNT(*) FILTER (WHERE u.created_at < NOW() - INTERVAL '15 days') as day14_eligible
+            FROM users u
+            WHERE u.onboarding_complete = TRUE
+            AND u.created_at >= NOW() - INTERVAL '90 days'
+            GROUP BY DATE_TRUNC('week', u.created_at)
+            ORDER BY cohort_week DESC
+            LIMIT 12
+        ''')
+        cohorts = []
+        for row in c.fetchall():
+            cohort = {
+                'week': str(row[0]),
+                'size': row[1],
+                'day1_pct': round(row[2] / row[1] * 100, 1) if row[1] > 0 else None,
+                'day7_pct': round(row[3] / row[5] * 100, 1) if row[5] > 0 else None,
+                'day14_pct': round(row[4] / row[6] * 100, 1) if row[6] > 0 else None,
+            }
+            cohorts.append(cohort)
+        result['cohorts'] = cohorts
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error getting product metrics: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {'error': str(e)}
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_all_metrics(start_date=None, end_date=None):
     """Get all metrics for dashboard"""
     conn = None
