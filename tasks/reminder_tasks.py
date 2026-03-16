@@ -1936,7 +1936,7 @@ def send_inactivity_nudge(self):
                 # Count active (non-sent) reminders
                 c.execute("""
                     SELECT COUNT(*) FROM reminders
-                    WHERE phone_number = %s AND status = 'pending'
+                    WHERE phone_number = %s AND sent = FALSE
                 """, (phone_number,))
                 reminder_count = c.fetchone()[0]
 
