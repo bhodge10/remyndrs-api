@@ -7,7 +7,7 @@ import secrets
 import asyncio
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape as html_escape
 import pytz
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
@@ -1081,6 +1081,120 @@ async def debug_users(admin: str = Depends(verify_admin)):
     except Exception as e:
         logger.error(f"Error in debug users: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/admin/debug/inactivity-nudge")
+async def debug_inactivity_nudge(admin: str = Depends(verify_admin)):
+    """Debug endpoint to diagnose why inactivity nudges aren't sending"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+        inactive_threshold = now_utc - timedelta(days=7)
+
+        # 1. Total onboarded users
+        c.execute("SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE")
+        total_onboarded = c.fetchone()[0]
+
+        # 2. Users with last_active_at set
+        c.execute("SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE AND last_active_at IS NOT NULL")
+        has_last_active = c.fetchone()[0]
+
+        # 3. Users with NULL last_active_at
+        c.execute("SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE AND last_active_at IS NULL")
+        null_last_active = c.fetchone()[0]
+
+        # 4. Users inactive 7+ days
+        c.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+              AND last_active_at IS NOT NULL
+              AND last_active_at < %s
+        """, (inactive_threshold,))
+        inactive_7d = c.fetchone()[0]
+
+        # 5. Of those, how many are opted out?
+        c.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+              AND last_active_at IS NOT NULL
+              AND last_active_at < %s
+              AND opted_out = TRUE
+        """, (inactive_threshold,))
+        inactive_opted_out = c.fetchone()[0]
+
+        # 6. Of those, how many already got a nudge (within cooldown)?
+        cooldown_threshold = now_utc - timedelta(days=7)
+        c.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE onboarding_complete = TRUE
+              AND last_active_at IS NOT NULL
+              AND last_active_at < %s
+              AND (opted_out IS NULL OR opted_out = FALSE)
+              AND inactivity_nudge_sent_at IS NOT NULL
+              AND inactivity_nudge_sent_at >= %s
+        """, (inactive_threshold, cooldown_threshold))
+        in_cooldown = c.fetchone()[0]
+
+        # 7. Users who SHOULD qualify right now (match the task query exactly)
+        c.execute("""
+            SELECT phone_number, first_name, last_active_at, timezone,
+                   inactivity_nudge_sent_at, opted_out
+            FROM users
+            WHERE last_active_at IS NOT NULL
+              AND last_active_at < %s
+              AND onboarding_complete = TRUE
+              AND (inactivity_nudge_sent_at IS NULL OR inactivity_nudge_sent_at < %s)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+        """, (inactive_threshold, cooldown_threshold))
+        qualifying_users = c.fetchall()
+
+        qualifying_details = []
+        for u in qualifying_users:
+            phone, first_name, last_active, tz, nudge_sent, opted = u
+            # Check timezone window
+            try:
+                user_tz = pytz.timezone(tz or 'America/New_York')
+            except Exception:
+                user_tz = pytz.timezone('America/New_York')
+            local_hour = datetime.now(pytz.utc).astimezone(user_tz).hour
+
+            qualifying_details.append({
+                "phone_last4": phone[-4:] if phone else "N/A",
+                "first_name": first_name,
+                "last_active_at": str(last_active) if last_active else None,
+                "days_inactive": (now_utc - last_active).days if last_active else None,
+                "timezone": tz,
+                "local_hour_now": local_hour,
+                "in_9am_window": 9 <= local_hour < 10,
+                "nudge_sent_at": str(nudge_sent) if nudge_sent else None,
+                "opted_out": opted,
+            })
+
+        in_window = sum(1 for d in qualifying_details if d["in_9am_window"])
+
+        return JSONResponse(content={
+            "timestamp_utc": str(now_utc),
+            "summary": {
+                "total_onboarded": total_onboarded,
+                "has_last_active_at": has_last_active,
+                "null_last_active_at": null_last_active,
+                "inactive_7_plus_days": inactive_7d,
+                "inactive_and_opted_out": inactive_opted_out,
+                "inactive_in_nudge_cooldown": in_cooldown,
+                "qualifying_for_nudge": len(qualifying_details),
+                "in_9am_window_right_now": in_window,
+            },
+            "qualifying_users": qualifying_details,
+        })
+    except Exception as e:
+        logger.error(f"Error in debug inactivity nudge: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 
 @router.get("/admin/debug/unknown-referrals")
