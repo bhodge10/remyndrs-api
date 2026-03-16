@@ -883,7 +883,7 @@ def get_product_metrics():
             GROUP BY u.phone_number, u.created_at
             ORDER BY seconds_to_first
         ''')
-        reminder_times = [row[0] for row in c.fetchall() if row[0] is not None and row[0] > 0]
+        reminder_times = [float(row[0]) for row in c.fetchall() if row[0] is not None and row[0] > 0]
 
         # Median time to first memory
         c.execute('''
@@ -894,7 +894,7 @@ def get_product_metrics():
             GROUP BY u.phone_number, u.created_at
             ORDER BY seconds_to_first
         ''')
-        memory_times = [row[0] for row in c.fetchall() if row[0] is not None and row[0] > 0]
+        memory_times = [float(row[0]) for row in c.fetchall() if row[0] is not None and row[0] > 0]
 
         def median(lst):
             if not lst:
@@ -938,9 +938,9 @@ def get_product_metrics():
 
         result['time_to_action'] = {
             'median_to_reminder': format_duration(median_reminder),
-            'median_to_reminder_seconds': median_reminder,
+            'median_to_reminder_seconds': float(median_reminder) if median_reminder is not None else None,
             'median_to_memory': format_duration(median_memory),
-            'median_to_memory_seconds': median_memory,
+            'median_to_memory_seconds': float(median_memory) if median_memory is not None else None,
             'pct_within_1h': round(within_1h / total_onboarded * 100, 1) if total_onboarded > 0 else 0,
             'pct_within_24h': round(within_24h / total_onboarded * 100, 1) if total_onboarded > 0 else 0,
             'pct_never_reminder': round(never_set_reminder / total_onboarded * 100, 1) if total_onboarded > 0 else 0,
