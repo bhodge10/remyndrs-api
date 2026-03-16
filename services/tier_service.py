@@ -193,21 +193,11 @@ def get_recurring_reminder_count(phone_number: str) -> int:
         conn = get_db_connection()
         c = conn.cursor()
 
-        if ENCRYPTION_ENABLED:
-            from utils.encryption import hash_phone
-            phone_hash = hash_phone(phone_number)
-            c.execute(
-                '''SELECT COUNT(*) FROM recurring_reminders
-                   WHERE (phone_hash = %s OR phone_number = %s)
-                   AND is_active = TRUE''',
-                (phone_hash, phone_number)
-            )
-        else:
-            c.execute(
-                '''SELECT COUNT(*) FROM recurring_reminders
-                   WHERE phone_number = %s AND is_active = TRUE''',
-                (phone_number,)
-            )
+        c.execute(
+            '''SELECT COUNT(*) FROM recurring_reminders
+               WHERE phone_number = %s AND active = TRUE''',
+            (phone_number,)
+        )
 
         result = c.fetchone()
         return result[0] if result else 0
