@@ -1,5 +1,34 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## Day 1 & Day 2 Lifecycle Messages (Mar 2026)
+Added two new lifecycle messages to fill the 48-hour gap between onboarding (Day 0) and the Day 3 feature discovery nudge, targeting the 62% of users who don't return after Day 1.
+
+**Day 1 — Morning Nudge:**
+- Sends the morning after signup (9-10 AM local time, hourly at :02).
+- Condition: Only if user has sent 0 messages since completing onboarding.
+- Message: "Good morning {name}! Quick idea — text me something you need to remember today..."
+- Flag: `day_1_nudge_sent`
+
+**Day 2 — Feature Prompt:**
+- Sends two mornings after signup (9-10 AM local time, hourly at :07).
+- Condition: Only if user has sent fewer than 3 messages since onboarding.
+- Version A (0 reminders): Suggests trying a reminder with a copy-pasteable example.
+- Version B (1+ reminders, 0 memories): Suggests saving a memory.
+- Skips users who have both reminders and memories (already engaged).
+- Flag: `day_2_nudge_sent`
+
+**Updated lifecycle timeline:**
+- Day 0: Onboarding (immediate) → +5min engagement nudge → +1hr VCF contact card
+- Day 1: Morning nudge (hourly at :02)
+- Day 2: Feature prompt (hourly at :07)
+- Day 3: Feature discovery nudge (hourly at :10)
+- Day 4: Email collection (hourly at :12)
+- Day 7+: Trial warnings, post-trial re-engagement, win-back
+
+**New columns:** `day_1_nudge_sent BOOLEAN DEFAULT FALSE`, `day_2_nudge_sent BOOLEAN DEFAULT FALSE` on `users` table.
+
+**Files modified:** `database.py`, `tasks/reminder_tasks.py`, `celery_config.py`, `services/metrics_service.py`, `docs/changelog.md`.
+
 ## Shortened Onboarding + Day 4 Email Collection (Mar 2026)
 Reduced onboarding from 4-5 steps to 3 (Welcome → First Name → ZIP Code) to reduce drop-off. Email is now collected on Day 4 via a Celery task instead of during onboarding.
 
@@ -222,6 +251,8 @@ New `send_14d_post_trial_touchpoint` Celery task. Fills the gap between Day 3 re
 
 ## Trial Lifecycle Timeline
 The complete post-onboarding trial lifecycle message schedule (all timezone-aware, sends at 9-10 AM user's local time):
+- **Day 1:** Morning nudge (`send_day_1_morning_nudge`, hourly at :02)
+- **Day 2:** Feature prompt (`send_day_2_feature_prompt`, hourly at :07)
 - **Day 3:** Engagement nudge (`send_day_3_engagement_nudges`, hourly at :10)
 - **Day 7:** Combined trial warning + value reminder (`check_trial_expirations`, hourly at :00)
 - **Day 13 (1d left):** Urgent trial warning (`check_trial_expirations`, hourly at :00)

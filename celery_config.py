@@ -83,6 +83,22 @@ beat_schedule = {
             "expires": 3500,
         },
     },
+    # Send Day 1 morning nudge hourly — timezone-aware (9-10 AM local)
+    "send-day-1-morning-nudge": {
+        "task": "tasks.reminder_tasks.send_day_1_morning_nudge",
+        "schedule": crontab(minute=2),  # Every hour, at :02
+        "options": {
+            "expires": 3500,
+        },
+    },
+    # Send Day 2 feature prompt hourly — timezone-aware (9-10 AM local)
+    "send-day-2-feature-prompt": {
+        "task": "tasks.reminder_tasks.send_day_2_feature_prompt",
+        "schedule": crontab(minute=7),  # Every hour, at :07
+        "options": {
+            "expires": 3500,
+        },
+    },
     # Send Day 3 engagement nudges hourly — timezone-aware (9-10 AM local)
     "send-day-3-engagement-nudges": {
         "task": "tasks.reminder_tasks.send_day_3_engagement_nudges",
