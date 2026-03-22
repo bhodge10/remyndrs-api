@@ -546,6 +546,9 @@ def init_db():
             # Broadcast system improvements
             "ALTER TABLE scheduled_broadcasts ADD COLUMN IF NOT EXISTS target_phone TEXT",
             "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'immediate'",
+            # Day 1 & Day 2 lifecycle nudges
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS day_1_nudge_sent BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS day_2_nudge_sent BOOLEAN DEFAULT FALSE",
             # Lifecycle nudges (roundtable Phase 4)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS day_3_nudge_sent BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS post_trial_reengagement_sent BOOLEAN DEFAULT FALSE",
@@ -558,6 +561,8 @@ def init_db():
             "UPDATE users SET trial_warning_1d_sent = FALSE WHERE trial_warning_1d_sent IS NULL",
             "UPDATE users SET trial_warning_0d_sent = FALSE WHERE trial_warning_0d_sent IS NULL",
             "UPDATE users SET mid_trial_reminder_sent = FALSE WHERE mid_trial_reminder_sent IS NULL",
+            "UPDATE users SET day_1_nudge_sent = FALSE WHERE day_1_nudge_sent IS NULL",
+            "UPDATE users SET day_2_nudge_sent = FALSE WHERE day_2_nudge_sent IS NULL",
             "UPDATE users SET day_3_nudge_sent = FALSE WHERE day_3_nudge_sent IS NULL",
             "UPDATE users SET post_trial_reengagement_sent = FALSE WHERE post_trial_reengagement_sent IS NULL",
             "UPDATE users SET post_trial_14d_sent = FALSE WHERE post_trial_14d_sent IS NULL",

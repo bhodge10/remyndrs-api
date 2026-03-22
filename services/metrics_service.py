@@ -657,6 +657,8 @@ def get_lifecycle_message_stats():
 
         # Boolean-flagged lifecycle messages
         flag_columns = [
+            ('day_1_nudge_sent', 'Day 1 Morning Nudge'),
+            ('day_2_nudge_sent', 'Day 2 Feature Prompt'),
             ('day_3_nudge_sent', 'Day 3 Welcome Nudge'),
             ('mid_trial_reminder_sent', 'Mid-Trial Reminder (Day 7)'),
             ('trial_warning_7d_sent', 'Trial Warning (7 days)'),

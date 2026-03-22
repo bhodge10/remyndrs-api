@@ -1292,6 +1292,244 @@ def send_smart_nudges(self):
 
 
 # =====================================================
+# DAY 1 MORNING NUDGE
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def send_day_1_morning_nudge(self):
+    """
+    Send a gentle morning nudge on Day 1 (the morning after signup).
+    Only sends to users who haven't sent any messages since completing onboarding.
+
+    Runs hourly via Celery Beat. Timezone-aware: only sends at 9-10 AM local.
+    Only sends once per user (tracks with day_1_nudge_sent flag).
+    """
+    import pytz
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+
+    logger.info("Starting Day 1 morning nudge check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        # Find users on Day 1 of trial who haven't engaged since onboarding
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date, timezone,
+                   COALESCE(post_onboarding_interactions, 0) as interactions
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date > %s
+              AND onboarding_complete = TRUE
+              AND (day_1_nudge_sent IS NULL OR day_1_nudge_sent = FALSE)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for Day 1 nudge")
+            return {"nudges_sent": 0}
+
+        nudges_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date, timezone_str, interactions = user
+
+            # Only send if user has NOT sent any messages since onboarding
+            if interactions > 0:
+                continue
+
+            # Only send when it's 9-10 AM in user's local timezone
+            try:
+                user_tz = pytz.timezone(timezone_str or 'America/New_York')
+            except pytz.exceptions.UnknownTimeZoneError:
+                user_tz = pytz.timezone('America/New_York')
+            user_local_hour = datetime.now(pytz.utc).astimezone(user_tz).hour
+            if not (9 <= user_local_hour < 10):
+                continue
+
+            # Calculate days since signup
+            from config import FREE_TRIAL_DAYS
+            time_remaining = trial_end_date - now_utc
+            days_remaining = time_remaining.days
+            days_in_trial = FREE_TRIAL_DAYS - days_remaining
+
+            # Only send on Day 1 (range check to handle signup time-of-day)
+            if not (0 <= days_in_trial <= 1):
+                continue
+
+            try:
+                greeting = f"Good morning {first_name}!" if first_name else "Good morning!"
+
+                message = f"""{greeting} 👋 Quick idea — text me something you need to remember today. A grocery item, a reminder, anything at all. I'll keep it safe for you."""
+
+                send_sms(phone_number, message, message_type="trial_lifecycle")
+                c.execute("UPDATE users SET day_1_nudge_sent = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
+
+                nudges_sent += 1
+                logger.info(f"Sent Day 1 nudge to ...{phone_number[-4:]}")
+
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.error(f"Failed to send Day 1 nudge to ...{phone_number[-4:]}: {e}")
+                continue
+
+        logger.info(f"Day 1 morning nudges complete: {nudges_sent} sent")
+        return {"nudges_sent": nudges_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_day_1_morning_nudge")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
+# DAY 2 FEATURE PROMPT
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def send_day_2_feature_prompt(self):
+    """
+    Send a contextual feature prompt on Day 2 (two mornings after signup).
+    Version A: If user has 0 reminders — suggests trying a reminder.
+    Version B: If user has 1+ reminders but no memories — suggests saving a memory.
+    Only sends to users with fewer than 3 messages since onboarding.
+
+    Runs hourly via Celery Beat. Timezone-aware: only sends at 9-10 AM local.
+    Only sends once per user (tracks with day_2_nudge_sent flag).
+    """
+    import pytz
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+
+    logger.info("Starting Day 2 feature prompt check")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        # Find users on Day 2 of trial with low engagement
+        c.execute("""
+            SELECT phone_number, first_name, trial_end_date, timezone,
+                   COALESCE(post_onboarding_interactions, 0) as interactions
+            FROM users
+            WHERE trial_end_date IS NOT NULL
+              AND trial_end_date > %s
+              AND onboarding_complete = TRUE
+              AND (day_2_nudge_sent IS NULL OR day_2_nudge_sent = FALSE)
+              AND (opted_out IS NULL OR opted_out = FALSE)
+        """, (now_utc,))
+
+        users = c.fetchall()
+
+        if not users:
+            logger.info("No users due for Day 2 nudge")
+            return {"nudges_sent": 0}
+
+        nudges_sent = 0
+
+        for user in users:
+            phone_number, first_name, trial_end_date, timezone_str, interactions = user
+
+            # Only send if user has sent fewer than 3 messages since onboarding
+            if interactions >= 3:
+                continue
+
+            # Only send when it's 9-10 AM in user's local timezone
+            try:
+                user_tz = pytz.timezone(timezone_str or 'America/New_York')
+            except pytz.exceptions.UnknownTimeZoneError:
+                user_tz = pytz.timezone('America/New_York')
+            user_local_hour = datetime.now(pytz.utc).astimezone(user_tz).hour
+            if not (9 <= user_local_hour < 10):
+                continue
+
+            # Calculate days since signup
+            from config import FREE_TRIAL_DAYS
+            time_remaining = trial_end_date - now_utc
+            days_remaining = time_remaining.days
+            days_in_trial = FREE_TRIAL_DAYS - days_remaining
+
+            # Only send on Day 2 (range check to handle signup time-of-day)
+            if not (1 <= days_in_trial <= 2):
+                continue
+
+            try:
+                greeting = f"Hey {first_name}" if first_name else "Hey there"
+
+                # Check reminder count and memory count to determine version A vs B
+                c.execute("SELECT COUNT(*) FROM reminders WHERE phone_number = %s", (phone_number,))
+                reminder_count = (c.fetchone() or (0,))[0]
+
+                if reminder_count == 0:
+                    # Version A: No reminders yet — suggest trying a reminder
+                    message = f"""{greeting} — try this: text me "Remind me at 5pm to take the chicken out of the freezer" (or whatever you actually need to remember today). I'll text you right at 5. 🍗"""
+                else:
+                    # Version B: Has reminders but check memories
+                    from services.tier_service import get_memory_count
+                    memory_count = get_memory_count(phone_number)
+
+                    if memory_count == 0:
+                        message = f"""{greeting} — did you know I can save things too? Try texting me something like "My Netflix password is StarLight99" or "Mom's birthday is April 12." I'll remember it so you don't have to. 🧠"""
+                    else:
+                        # User has both reminders and memories — skip, they're already engaged
+                        continue
+
+                send_sms(phone_number, message, message_type="trial_lifecycle")
+                c.execute("UPDATE users SET day_2_nudge_sent = TRUE WHERE phone_number = %s", (phone_number,))
+                conn.commit()
+
+                nudges_sent += 1
+                logger.info(f"Sent Day 2 nudge ({'A' if reminder_count == 0 else 'B'}) to ...{phone_number[-4:]}")
+
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.error(f"Failed to send Day 2 nudge to ...{phone_number[-4:]}: {e}")
+                continue
+
+        logger.info(f"Day 2 feature prompts complete: {nudges_sent} sent")
+        return {"nudges_sent": nudges_sent}
+
+    except Exception as exc:
+        logger.exception("Error in send_day_2_feature_prompt")
+        raise self.retry(exc=exc)
+
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+# =====================================================
 # DAY 3 ENGAGEMENT NUDGE
 # =====================================================
 
