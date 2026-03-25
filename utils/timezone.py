@@ -12,13 +12,53 @@ from config import logger
 
 
 def get_timezone_from_zip(zip_code: str) -> str:
-    """Convert zip code to timezone using first digit mapping"""
+    """Convert zip code to timezone using 3-digit prefix mapping for accuracy.
+
+    Uses the first 3 digits of the ZIP code to handle regions where a single
+    first digit is too coarse (e.g., Arizona 850-865 = America/Phoenix, not Denver).
+    Falls back to first-digit mapping for prefixes not explicitly listed.
+    """
     try:
+        prefix3 = int(zip_code[:3])
+
+        # 3-digit prefix ranges for zones that differ from the first-digit default
+        # Arizona (America/Phoenix - MST year-round, no DST)
+        if 850 <= prefix3 <= 865:
+            return 'America/Phoenix'
+
+        # Nevada (Pacific, not Mountain)
+        if 889 <= prefix3 <= 898:
+            return 'America/Los_Angeles'
+
+        # Idaho panhandle (Pacific)
+        if 835 <= prefix3 <= 838:
+            return 'America/Boise'
+
+        # Alaska
+        if 995 <= prefix3 <= 999:
+            return 'America/Anchorage'
+
+        # Hawaii
+        if 967 <= prefix3 <= 968:
+            return 'Pacific/Honolulu'
+
+        # El Paso, TX (Mountain, not Central)
+        if prefix3 == 799:
+            return 'America/Denver'
+
+        # Florida Panhandle (Central, not Eastern)
+        if 324 <= prefix3 <= 325:
+            return 'America/Chicago'
+
+        # Michigan Upper Peninsula (Central, not Eastern)
+        if 498 <= prefix3 <= 499:
+            return 'America/Chicago'
+
+        # Fall back to first-digit mapping for everything else
         first_digit = zip_code[0]
 
-        # ZIP code first digit to timezone mapping
-        # 0-3 = Eastern, 5-6-7 = Central, 8 = Mountain, 9 = Pacific
-        if first_digit in ['0', '1', '2', '3']:
+        # 0-3 = Eastern, 4 = Eastern, 5-6-7 = Central, 8 = Mountain, 9 = Pacific
+        if first_digit in ['0', '1', '2', '3', '4']:
             return 'America/New_York'  # Eastern
         elif first_digit in ['5', '6', '7']:
             return 'America/Chicago'  # Central
