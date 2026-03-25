@@ -1294,7 +1294,7 @@ async def backfill_unknown_referrals(admin: str = Depends(verify_admin)):
             return_db_connection(conn)
 
 
-@router.post("/admin/debug/fix-timezone")
+@router.get("/admin/debug/fix-timezone")
 async def fix_user_timezone(admin: str = Depends(verify_admin)):
     """
     One-time fix: Look up user by last 4 digits (4321), verify uniqueness,
