@@ -341,3 +341,57 @@ class TestConcurrentState:
 
         result = await simulator.send_message(phone, "CANCEL")
         # Should clear pending state
+
+
+class TestTimezoneFromZip:
+    """Tests for ZIP code to timezone mapping accuracy."""
+
+    def test_arizona_zip_returns_phoenix_timezone(self):
+        """Arizona ZIPs (850-865) should map to America/Phoenix (no DST)."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("85003") == "America/Phoenix"
+        assert get_timezone_from_zip("85281") == "America/Phoenix"
+        assert get_timezone_from_zip("86001") == "America/Phoenix"
+
+    def test_colorado_zip_returns_denver_timezone(self):
+        """Colorado ZIPs should still map to America/Denver."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("80202") == "America/Denver"
+        assert get_timezone_from_zip("81001") == "America/Denver"
+
+    def test_nevada_zip_returns_pacific_timezone(self):
+        """Nevada ZIPs (889-898) should map to America/Los_Angeles."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("89101") == "America/Los_Angeles"
+
+    def test_standard_first_digit_mapping(self):
+        """Standard first-digit mapping still works for non-special prefixes."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("10001") == "America/New_York"
+        assert get_timezone_from_zip("48201") == "America/New_York"
+        assert get_timezone_from_zip("60601") == "America/Chicago"
+        assert get_timezone_from_zip("90210") == "America/Los_Angeles"
+
+    def test_el_paso_zip_returns_mountain_timezone(self):
+        """El Paso, TX (799xx) should map to America/Denver, not Central."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("79901") == "America/Denver"
+        assert get_timezone_from_zip("79936") == "America/Denver"
+
+    def test_florida_panhandle_zip_returns_central_timezone(self):
+        """FL Panhandle (324-325) should map to America/Chicago, not Eastern."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("32401") == "America/Chicago"  # Panama City
+        assert get_timezone_from_zip("32501") == "America/Chicago"  # Pensacola
+
+    def test_michigan_upper_peninsula_returns_central_timezone(self):
+        """MI Upper Peninsula (498-499) should map to America/Chicago, not Eastern."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("49801") == "America/Chicago"  # Iron Mountain
+        assert get_timezone_from_zip("49901") == "America/Chicago"  # Ironwood
+
+    def test_alaska_hawaii_zips(self):
+        """Alaska and Hawaii ZIPs should map correctly."""
+        from utils.timezone import get_timezone_from_zip
+        assert get_timezone_from_zip("99501") == "America/Anchorage"
+        assert get_timezone_from_zip("96813") == "Pacific/Honolulu"
