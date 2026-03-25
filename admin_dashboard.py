@@ -1294,6 +1294,85 @@ async def backfill_unknown_referrals(admin: str = Depends(verify_admin)):
             return_db_connection(conn)
 
 
+@router.post("/admin/debug/fix-timezone")
+async def fix_user_timezone(admin: str = Depends(verify_admin)):
+    """
+    One-time fix: Look up user by last 4 digits (4321), verify uniqueness,
+    and correct timezone from America/Denver to America/Phoenix.
+    Returns the user's full phone number for use in broadcast messaging.
+    """
+    from models.user import update_user_timezone, get_user_timezone
+    from models.reminder import recalculate_pending_reminders_for_timezone, update_recurring_reminders_timezone
+
+    last4 = "4321"
+    new_timezone = "America/Phoenix"
+    conn = None
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            "SELECT phone_number, first_name, timezone FROM users WHERE phone_number LIKE %s",
+            (f"%{last4}",)
+        )
+        results = c.fetchall()
+
+        if len(results) == 0:
+            return JSONResponse(content={"error": f"No users found ending in {last4}"}, status_code=404)
+
+        if len(results) > 1:
+            matches = [{"phone_last4": f"...{r[0][-4:]}", "name": r[1], "timezone": r[2]} for r in results]
+            return JSONResponse(content={
+                "error": f"Multiple users found ending in {last4}",
+                "matches": matches
+            }, status_code=409)
+
+        phone, name, current_tz = results[0]
+
+        if current_tz == new_timezone:
+            return JSONResponse(content={
+                "status": "already_fixed",
+                "phone": phone,
+                "name": name,
+                "timezone": current_tz,
+                "message": f"Timezone is already {new_timezone}. Use phone number in broadcast to send notification."
+            })
+
+        # Fix timezone
+        success, old_tz = update_user_timezone(phone, new_timezone)
+        if not success:
+            return JSONResponse(content={"error": "Failed to update timezone"}, status_code=500)
+
+        # Recalculate reminders
+        updated_reminders = recalculate_pending_reminders_for_timezone(phone, new_timezone)
+        updated_recurring = update_recurring_reminders_timezone(phone, new_timezone)
+
+        logger.info(f"Admin timezone fix: {phone[-4:]} {old_tz} -> {new_timezone}")
+
+        return JSONResponse(content={
+            "status": "fixed",
+            "phone": phone,
+            "name": name,
+            "old_timezone": old_tz,
+            "new_timezone": new_timezone,
+            "reminders_recalculated": updated_reminders,
+            "recurring_updated": updated_recurring,
+            "suggested_broadcast_message": (
+                "Our system detected an error with the timezone assigned to your "
+                "zip code (85003). Your timezone has been corrected to Phoenix (MST), "
+                "and any reminders you set will now be sent at the expected time. "
+                "This issue has been resolved for all future users."
+            )
+        })
+
+    except Exception as e:
+        logger.error(f"Error in fix-timezone: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 @router.get("/admin/users/pending-onboarding")
 async def get_pending_onboarding_users(admin: str = Depends(verify_admin)):
     """Get users who are stuck in the onboarding flow"""
