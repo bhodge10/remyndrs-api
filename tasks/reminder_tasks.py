@@ -1361,9 +1361,8 @@ def send_day_1_morning_nudge(self):
 
             # Calculate days since signup
             from config import FREE_TRIAL_DAYS
-            time_remaining = trial_end_date - now_utc
-            days_remaining = time_remaining.days
-            days_in_trial = FREE_TRIAL_DAYS - days_remaining
+            signup_date_utc = trial_end_date - timedelta(days=FREE_TRIAL_DAYS)
+            days_in_trial = (now_utc - signup_date_utc).days
 
             # Only send on Day 1 (range check to handle signup time-of-day)
             if not (0 <= days_in_trial <= 1):
@@ -1473,9 +1472,8 @@ def send_day_2_feature_prompt(self):
 
             # Calculate days since signup
             from config import FREE_TRIAL_DAYS
-            time_remaining = trial_end_date - now_utc
-            days_remaining = time_remaining.days
-            days_in_trial = FREE_TRIAL_DAYS - days_remaining
+            signup_date_utc = trial_end_date - timedelta(days=FREE_TRIAL_DAYS)
+            days_in_trial = (now_utc - signup_date_utc).days
 
             # Only send on Day 2 (range check to handle signup time-of-day)
             if not (1 <= days_in_trial <= 2):
@@ -1593,11 +1591,10 @@ def send_day_3_engagement_nudges(self):
             if not (9 <= user_local_hour < 10):
                 continue
 
-            # Calculate days since signup (trial is FREE_TRIAL_DAYS, so days_in = total - remaining)
+            # Calculate days since signup
             from config import FREE_TRIAL_DAYS
-            time_remaining = trial_end_date - now_utc
-            days_remaining = time_remaining.days
-            days_in_trial = FREE_TRIAL_DAYS - days_remaining
+            signup_date_utc = trial_end_date - timedelta(days=FREE_TRIAL_DAYS)
+            days_in_trial = (now_utc - signup_date_utc).days
 
             # Only send on Day 3 (range check to handle signup time-of-day)
             if not (2 <= days_in_trial <= 3):
@@ -1708,9 +1705,8 @@ def send_day_4_email_collection(self):
 
             # Calculate days since signup
             from config import FREE_TRIAL_DAYS
-            time_remaining = trial_end_date - now_utc
-            days_remaining = time_remaining.days
-            days_in_trial = FREE_TRIAL_DAYS - days_remaining
+            signup_date_utc = trial_end_date - timedelta(days=FREE_TRIAL_DAYS)
+            days_in_trial = (now_utc - signup_date_utc).days
 
             # Only send on Day 3-4 (range check to handle signup time-of-day)
             if not (3 <= days_in_trial <= 4):
