@@ -213,7 +213,7 @@ app = FastAPI()
 # CORS middleware - allow requests from remyndrs.com
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://remyndrs.com", "https://www.remyndrs.com"],
+    allow_origins=["https://remyndrs.com", "https://www.remyndrs.com", "http://localhost"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -6349,6 +6349,128 @@ async def cleanup_duplicate_reminders(admin: str = Depends(verify_admin)):
     finally:
         if conn:
             return_db_connection(conn)
+
+
+# =====================================================
+# DEMO ENDPOINT
+# =====================================================
+
+# Demo-specific rate limiting: 10 requests per hour per IP
+_demo_rate_store = defaultdict(list)
+_DEMO_RATE_LIMIT = 10
+_DEMO_RATE_WINDOW = 3600  # 1 hour
+
+def check_demo_rate_limit(ip: str) -> bool:
+    """Check if IP has exceeded demo endpoint rate limit. Returns True if allowed."""
+    current_time = time.time()
+    window_start = current_time - _DEMO_RATE_WINDOW
+    _demo_rate_store[ip] = [ts for ts in _demo_rate_store[ip] if ts > window_start]
+    if len(_demo_rate_store[ip]) >= _DEMO_RATE_LIMIT:
+        log_security_event("DEMO_RATE_LIMIT", {"ip": ip, "count": len(_demo_rate_store[ip])})
+        return False
+    _demo_rate_store[ip].append(current_time)
+    return True
+
+DEMO_FALLBACK_RESPONSE = {
+    "replies": [
+        {"text": "Got it! I'll remember that for you. \u2713", "delay": 0},
+        {"type": "time-skip", "text": "\u23e9 Later, when you need it...", "delay": 1500},
+        {"text": "Just like that \u2014 I've got your back!", "delay": 3000}
+    ]
+}
+
+DEMO_SYSTEM_PROMPT = """You are Remyndrs, an SMS-based AI assistant that helps people with reminders, to-do lists, and saved memories. You respond via text message — keep replies short, warm, and conversational.
+
+Given a user message, return a JSON object with a "replies" array of 2-4 messages that simulate a realistic conversation. The sequence should show:
+1. An immediate acknowledgment/confirmation
+2. A "time-skip" moment showing the value being delivered later (e.g., the reminder firing, recalling a saved memory, showing a list at the store)
+
+Each reply object has:
+- "text": the message text (use emoji naturally)
+- "delay": milliseconds after the first message (0 for first, ~1500 for time-skip, ~3000 for final)
+- "type": "time-skip" (only for the fast-forward moment)
+
+Examples of time-skip texts: "⏩ Fast forward to 8:00 PM...", "⏩ Later, at the grocery store...", "⏩ Next week, when you need it..."
+
+Respond ONLY with valid JSON. No markdown, no explanation."""
+
+@app.post("/api/demo")
+async def interactive_demo(request: Request):
+    """
+    Powers the website interactive demo. Uses AI to generate realistic
+    Remyndrs conversation simulations. No data is stored, no SMS sent.
+    """
+    try:
+        client_ip = request.client.host if request.client else "unknown"
+        if not check_demo_rate_limit(client_ip):
+            return JSONResponse(
+                status_code=429,
+                content={"success": False, "error": "Too many demo requests. Please try again later."}
+            )
+
+        data = await request.json()
+        message = data.get("message", "").strip()
+
+        if not message:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Message is required"}
+            )
+
+        # Cap message length to prevent abuse
+        if len(message) > 200:
+            message = message[:200]
+
+        try:
+            from openai import OpenAI
+            from config import OPENAI_API_KEY
+
+            client = OpenAI(api_key=OPENAI_API_KEY, timeout=10)
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.7,
+                max_tokens=300,
+                messages=[
+                    {"role": "system", "content": DEMO_SYSTEM_PROMPT},
+                    {"role": "user", "content": message}
+                ]
+            )
+
+            raw = response.choices[0].message.content.strip()
+            # Strip markdown code fences if present
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                raw = raw.strip()
+
+            result = json.loads(raw)
+
+            # Validate structure
+            if "replies" not in result or not isinstance(result["replies"], list):
+                logger.warning(f"Demo AI returned invalid structure: {raw[:200]}")
+                return JSONResponse(content=DEMO_FALLBACK_RESPONSE)
+
+            # Sanitize — only allow expected fields
+            clean_replies = []
+            for reply in result["replies"][:4]:
+                clean = {"text": str(reply.get("text", ""))[:500], "delay": int(reply.get("delay", 0))}
+                if reply.get("type") == "time-skip":
+                    clean["type"] = "time-skip"
+                clean_replies.append(clean)
+
+            if not clean_replies:
+                return JSONResponse(content=DEMO_FALLBACK_RESPONSE)
+
+            return JSONResponse(content={"replies": clean_replies})
+
+        except Exception as e:
+            logger.warning(f"Demo AI call failed, using fallback: {e}")
+            return JSONResponse(content=DEMO_FALLBACK_RESPONSE)
+
+    except Exception as e:
+        logger.exception(f"Demo endpoint error: {e}")
+        return JSONResponse(content=DEMO_FALLBACK_RESPONSE)
 
 
 # =====================================================
