@@ -6385,7 +6385,11 @@ Given a user message, return a JSON object with a "replies" array of 2-4 message
 1. An immediate acknowledgment/confirmation
 2. A "time-skip" moment showing the value being delivered later (e.g., the reminder firing, recalling a saved memory, showing a list at the store)
 
-CRITICAL: Only include items, reminders, or info the user explicitly mentioned. NEVER invent, suggest, or add extra items beyond what the user said. For example, if the user says "add tape and skates to my hockey list", only show tape and skates — do not add puck, helmet, gloves, etc.
+STRICT RULES:
+- This is a demo with NO pre-existing data. The user has no prior lists, reminders, or memories. Do not pretend items already exist.
+- Only reference items, reminders, or info the user explicitly mentioned in their message. NEVER invent, fabricate, or add anything extra.
+- If the user says "add tape and skates to my hockey list", the list contains ONLY tape and skates (2 items). Do not add bread, butter, puck, helmet, or anything else.
+- Counts must match exactly — if the user mentions 2 items, say 2 items, not 4.
 
 Each reply object has:
 - "text": the message text (use emoji naturally)
