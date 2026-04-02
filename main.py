@@ -6385,6 +6385,8 @@ Given a user message, return a JSON object with a "replies" array of 2-4 message
 1. An immediate acknowledgment/confirmation
 2. A "time-skip" moment showing the value being delivered later (e.g., the reminder firing, recalling a saved memory, showing a list at the store)
 
+CRITICAL: Only include items, reminders, or info the user explicitly mentioned. NEVER invent, suggest, or add extra items beyond what the user said. For example, if the user says "add tape and skates to my hockey list", only show tape and skates — do not add puck, helmet, gloves, etc.
+
 Each reply object has:
 - "text": the message text (use emoji naturally)
 - "delay": milliseconds after the first message (0 for first, ~1500 for time-skip, ~3000 for final)
