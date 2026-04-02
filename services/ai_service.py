@@ -221,6 +221,14 @@ For reminder requests with RELATIVE TIMES (use action "reminder_relative"):
 IMPORTANT: For ANY relative time format ("in X minutes/hours/days/weeks/months" or "X time from now"), you MUST use action "reminder_relative". The server will calculate the exact date.
 IMPORTANT: If the user specifies BOTH a relative date AND a specific time (e.g., "in 2 weeks at 8pm"), include "target_time" in HH:MM 24-hour format. Without target_time, the reminder fires at the current time of day.
 
+For "BEFORE [date]" reminders (use action "reminder"):
+When the user says "X days/weeks/months before [specific date]", calculate the reminder date by subtracting from the target date, NOT by adding to today.
+- "a week before October 13" → October 13 minus 7 days = October 6th (use action "reminder" with date 2026-10-06)
+- "2 days before Christmas" → December 25 minus 2 days = December 23rd
+- "a month before July 4th" → July 4 minus 1 month = June 4th
+- "3 weeks before my birthday on March 10" → March 10 minus 21 days = February 17th
+IMPORTANT: "before [date]" means SUBTRACT from that date. Do NOT interpret "a week before October 13" as "a week from now". The anchor date is the one mentioned by the user (October 13), not today.
+
 For SPECIFIC TIME reminders (use action "reminder"):
 - "tomorrow at 9am" = tomorrow's date at 09:00:00
 - "Saturday at 8am" = next Saturday at 08:00:00
@@ -250,6 +258,10 @@ Examples:
 - "Remind me every day at 7pm to take medicine" → action: "reminder_recurring" with recurrence_type: "daily", time: "19:00"
 - "Every Sunday at 6pm remind me to take out garbage" → action: "reminder_recurring" with recurrence_type: "weekly", recurrence_day: 6, time: "18:00"
 - "Remind me every weekday at 8am to check email" → action: "reminder_recurring" with recurrence_type: "weekdays", time: "08:00"
+- "Remind me a week before October 13 about dentist" → action: "reminder" with date October 6th (October 13 minus 7 days)
+- "Remind me 3 days before March 20 to buy a gift" → action: "reminder" with date March 17th (March 20 minus 3 days)
+- "Remind me I have a dentist appointment at 2:30 PM on Oct 13" → action: "clarify_date_time" (2:30 PM is the event time, ask when to send reminder)
+- "Remind me at 9am on Oct 13 about dentist at 2:30 PM" → action: "reminder" at 9am (9am is the reminder time)
 
 RESPONSE FORMAT (must be valid JSON):
 
@@ -448,6 +460,15 @@ DO NOT USE clarify_date_time when time IS specified:
 - "Remind me January 15th at 9am to renew license" → Use action "reminder" (9am IS specified!)
 - "Remind me next Tuesday at 2pm about meeting" → Use action "reminder" (2pm IS specified!)
 CRITICAL: If the message contains "at [time]am" or "at [time]pm" ANYWHERE, extract that time and use action "reminder" - do NOT ask for time again!
+EXCEPTION - EVENT TIME vs REMINDER TIME: If the time clearly describes WHEN AN EVENT HAPPENS rather than when to send the reminder, use "clarify_date_time" to ask what time to send the reminder. Include the event details (with the event time) in reminder_text.
+- "Remind me I have a dentist appointment at 2:30 PM" → The 2:30 PM is the appointment time, NOT the reminder time. Use clarify_date_time.
+- "Remind me my flight leaves at 6am on Friday" → The 6am is the flight time, NOT the reminder time. Use clarify_date_time.
+- "Remind me the meeting is at 3pm tomorrow" → The 3pm is the meeting time, NOT the reminder time. Use clarify_date_time.
+HOW TO TELL THE DIFFERENCE: If the time is attached to an event/noun (appointment at X, flight at X, meeting at X, game at X) rather than being the desired reminder time, treat it as an event time and ask when to send the reminder.
+CONTRAST with direct reminder times where the time IS the reminder time:
+- "Remind me at 2:30 PM about my dentist appointment" → 2:30 PM is the reminder time. Use action "reminder".
+- "Remind me tomorrow at 6am to pack for my flight" → 6am is the reminder time. Use action "reminder".
+- "At 3pm remind me about the meeting" → 3pm is the reminder time. Use action "reminder".
 
 For VAGUE TIME (when time expression is unclear like "in a bit", "later", "soon"):
 {{
