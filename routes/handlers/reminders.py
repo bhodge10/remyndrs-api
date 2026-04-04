@@ -200,8 +200,8 @@ def handle_reminder(
             log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
             return reply_text
 
-    # Check tier limit
-    allowed, limit_msg = can_create_reminder(phone_number)
+    # Check tier limit (pass reminder_date for v2 weekly counting)
+    allowed, limit_msg = can_create_reminder(phone_number, reminder_date)
     if not allowed:
         log_interaction(phone_number, incoming_msg, limit_msg, "reminder_limit_reached", False)
         return limit_msg
@@ -298,12 +298,6 @@ def handle_reminder_relative(
             log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
             return reply_text
 
-    # Check tier limit
-    allowed, limit_msg = can_create_reminder(phone_number)
-    if not allowed:
-        log_interaction(phone_number, incoming_msg, limit_msg, "reminder_limit_reached", False)
-        return limit_msg
-
     try:
         def parse_offset(raw_value, default=0):
             if raw_value is None:
@@ -335,6 +329,12 @@ def handle_reminder_relative(
             months=offset_months, weeks=offset_weeks, days=offset_days, minutes=offset_minutes
         )
         reminder_date_utc = reminder_dt_utc.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Check tier limit (after calculating date so v2 weekly check uses scheduled week)
+        allowed, limit_msg = can_create_reminder(phone_number, reminder_date_utc)
+        if not allowed:
+            log_interaction(phone_number, incoming_msg, limit_msg, "reminder_limit_reached", False)
+            return limit_msg
 
         # LOW CONFIDENCE: Ask for confirmation
         CONFIDENCE_THRESHOLD = int(get_setting('confidence_threshold', 70))

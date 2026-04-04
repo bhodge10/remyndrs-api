@@ -185,17 +185,33 @@ PRICING = {
 }
 
 # Tier Limits
-TIER_LIMITS = {
-    TIER_FREE: {
+# Free tier has versioned limits: v1 = grandfathered existing users, v2 = new users
+FREE_TIER_LIMITS = {
+    1: {  # Grandfathered existing users
         'reminders_per_day': 2,
-        'max_lists': 5,
-        'max_items_per_list': 10,
+        'reminders_per_week': None,   # Not used for v1
+        'max_lists': 2,
+        'max_items_per_list': 5,
         'max_memories': 5,
         'recurring_reminders': False,
         'support_tickets': False,
     },
+    2: {  # New users
+        'reminders_per_day': None,    # Not used for v2
+        'reminders_per_week': 3,
+        'max_lists': 1,
+        'max_items_per_list': 3,
+        'max_memories': 3,
+        'recurring_reminders': False,
+        'support_tickets': False,
+    },
+}
+
+TIER_LIMITS = {
+    TIER_FREE: FREE_TIER_LIMITS[1],   # Default to v1 for backwards compatibility
     TIER_PREMIUM: {
         'reminders_per_day': None,  # Unlimited
+        'reminders_per_week': None, # Unlimited
         'max_lists': 20,
         'max_items_per_list': 30,
         'max_memories': None,       # Unlimited
@@ -204,6 +220,7 @@ TIER_LIMITS = {
     },
     TIER_FAMILY: {
         'reminders_per_day': None,  # Unlimited
+        'reminders_per_week': None, # Unlimited
         'max_lists': 20,
         'max_items_per_list': 30,
         'max_memories': None,       # Unlimited
@@ -230,6 +247,13 @@ GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID")
 GA_CREDENTIALS_PATH = os.environ.get("GA_CREDENTIALS_PATH")
 SEARCH_CONSOLE_SITE_URL = os.environ.get("SEARCH_CONSOLE_SITE_URL")
 
-def get_tier_limits(tier: str) -> dict:
-    """Get limits for a given tier. Defaults to free tier if unknown."""
-    return TIER_LIMITS.get(tier, TIER_LIMITS[TIER_FREE])
+def get_tier_limits(tier: str, free_tier_version: int = 1) -> dict:
+    """Get limits for a given tier. For free tier, returns version-specific limits.
+
+    Args:
+        tier: Subscription tier ('free', 'premium', 'family')
+        free_tier_version: Free tier version (1=grandfathered, 2=new users). Ignored for paid tiers.
+    """
+    if tier == TIER_FREE:
+        return FREE_TIER_LIMITS.get(free_tier_version, FREE_TIER_LIMITS[2])
+    return TIER_LIMITS.get(tier, FREE_TIER_LIMITS[1])

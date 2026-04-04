@@ -8,7 +8,7 @@ from database import get_db_connection, return_db_connection
 from config import (
     logger, ENCRYPTION_ENABLED, BETA_MODE,
     TIER_FREE, TIER_PREMIUM, TIER_FAMILY,
-    TIER_LIMITS, get_tier_limits
+    TIER_LIMITS, FREE_TIER_LIMITS, get_tier_limits
 )
 
 
@@ -118,6 +118,93 @@ def get_trial_info(phone_number: str) -> dict:
             return_db_connection(conn)
 
 
+def get_user_free_tier_version(phone_number: str) -> int:
+    """Get user's free tier version. Returns 2 (new user default) if not found."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone
+            phone_hash = hash_phone(phone_number)
+            c.execute(
+                'SELECT free_tier_version FROM users WHERE phone_hash = %s',
+                (phone_hash,)
+            )
+            result = c.fetchone()
+            if not result:
+                c.execute(
+                    'SELECT free_tier_version FROM users WHERE phone_number = %s',
+                    (phone_number,)
+                )
+                result = c.fetchone()
+        else:
+            c.execute(
+                'SELECT free_tier_version FROM users WHERE phone_number = %s',
+                (phone_number,)
+            )
+            result = c.fetchone()
+
+        if result and result[0] is not None:
+            return result[0]
+        return 2
+    except Exception as e:
+        logger.error(f"Error getting free tier version: {e}")
+        return 2
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_reminders_scheduled_for_week(phone_number: str, target_date: datetime) -> int:
+    """Get count of reminders scheduled for the same week as target_date.
+
+    Week is defined as Monday 00:00:00 through Sunday 23:59:59 (ISO week).
+    Counts against the week the reminder is SCHEDULED FOR (reminder_date),
+    not the week it was created.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Calculate Monday of the target week and Monday of next week
+        days_since_monday = target_date.weekday()  # Monday=0
+        week_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_since_monday)
+        week_end = week_start + timedelta(days=7)
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone
+            phone_hash = hash_phone(phone_number)
+            c.execute(
+                '''SELECT COUNT(*) FROM reminders
+                   WHERE (phone_hash = %s OR phone_number = %s)
+                   AND reminder_date >= %s
+                   AND reminder_date < %s
+                   AND (snoozed IS NOT TRUE)''',
+                (phone_hash, phone_number, week_start, week_end)
+            )
+        else:
+            c.execute(
+                '''SELECT COUNT(*) FROM reminders
+                   WHERE phone_number = %s
+                   AND reminder_date >= %s
+                   AND reminder_date < %s
+                   AND (snoozed IS NOT TRUE)''',
+                (phone_number, week_start, week_end)
+            )
+
+        result = c.fetchone()
+        return result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Error getting weekly reminder count: {e}")
+        return 0
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_memory_count(phone_number: str) -> int:
     """Get count of user's memories."""
     conn = None
@@ -214,23 +301,57 @@ def get_recurring_reminder_count(phone_number: str) -> int:
 # Each returns (allowed: bool, message: str or None)
 # =====================================================
 
-def can_create_reminder(phone_number: str) -> tuple[bool, str | None]:
-    """Check if user can create another reminder today."""
+def can_create_reminder(phone_number: str, reminder_date: datetime = None) -> tuple[bool, str | None]:
+    """Check if user can create another reminder.
+
+    For v1 free tier: checks daily limit (reminders created today).
+    For v2 free tier: checks weekly limit (reminders scheduled for the target week).
+
+    Args:
+        phone_number: User's phone number
+        reminder_date: The scheduled date of the reminder (used for v2 weekly counting).
+                       If None, defaults to current time for week calculation.
+    """
     # Beta mode bypasses limits
     if BETA_MODE:
         return (True, None)
 
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
 
-    # None means unlimited
+    from config import PREMIUM_MONTHLY_PRICE
+
+    # V2 free tier: weekly limit counted by scheduled date
+    if tier == TIER_FREE and free_tier_version == 2:
+        weekly_limit = limits['reminders_per_week']
+        if weekly_limit is None:
+            return (True, None)
+
+        target = reminder_date if reminder_date else datetime.utcnow()
+        if isinstance(target, str):
+            try:
+                target = datetime.strptime(target, '%Y-%m-%d %H:%M:%S')
+            except (ValueError, TypeError):
+                target = datetime.utcnow()
+
+        current_count = get_reminders_scheduled_for_week(phone_number, target)
+
+        if current_count >= weekly_limit:
+            return (
+                False,
+                f"You've used all {weekly_limit} reminders for this week. "
+                f"Need more? Text UPGRADE for unlimited reminders ({PREMIUM_MONTHLY_PRICE}/mo)."
+            )
+        return (True, None)
+
+    # V1 free tier (and paid tiers): daily limit
     if limits['reminders_per_day'] is None:
         return (True, None)
 
     current_count = get_reminders_created_today(phone_number)
 
     if current_count >= limits['reminders_per_day']:
-        from config import PREMIUM_MONTHLY_PRICE
         return (
             False,
             f"You've used all {limits['reminders_per_day']} reminders for today — they reset at midnight. "
@@ -246,7 +367,8 @@ def can_create_list(phone_number: str) -> tuple[bool, str | None]:
         return (True, None)
 
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
 
     from models.list_model import get_list_count
     current_count = get_list_count(phone_number)
@@ -255,7 +377,7 @@ def can_create_list(phone_number: str) -> tuple[bool, str | None]:
         from config import PREMIUM_MONTHLY_PRICE
         return (
             False,
-            f"You've reached your limit of {limits['max_lists']} lists. "
+            f"You've reached your limit of {limits['max_lists']} {'list' if limits['max_lists'] == 1 else 'lists'}. "
             f"Delete a list or text UPGRADE for 20 lists ({PREMIUM_MONTHLY_PRICE}/mo)."
         )
 
@@ -268,7 +390,8 @@ def can_add_list_item(phone_number: str, list_id: int) -> tuple[bool, str | None
         return (True, None)
 
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
 
     from models.list_model import get_item_count
     current_count = get_item_count(list_id)
@@ -290,7 +413,8 @@ def can_save_memory(phone_number: str) -> tuple[bool, str | None]:
         return (True, None)
 
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
 
     # None means unlimited
     if limits['max_memories'] is None:
@@ -349,14 +473,14 @@ def can_access_support(phone_number: str) -> tuple[bool, str | None]:
 def get_usage_summary(phone_number: str) -> dict:
     """Get a summary of user's current usage vs limits."""
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
 
     from models.list_model import get_list_count
 
-    return {
+    summary = {
         'tier': tier,
-        'reminders_today': get_reminders_created_today(phone_number),
-        'reminders_limit': limits['reminders_per_day'],
+        'free_tier_version': free_tier_version,
         'lists': get_list_count(phone_number),
         'lists_limit': limits['max_lists'],
         'memories': get_memory_count(phone_number),
@@ -365,11 +489,22 @@ def get_usage_summary(phone_number: str) -> dict:
         'support_allowed': limits['support_tickets'],
     }
 
+    # V2 free tier uses weekly limit, v1 uses daily
+    if tier == TIER_FREE and free_tier_version == 2:
+        summary['reminders_this_week'] = get_reminders_scheduled_for_week(phone_number, datetime.utcnow())
+        summary['reminders_weekly_limit'] = limits['reminders_per_week']
+    else:
+        summary['reminders_today'] = get_reminders_created_today(phone_number)
+        summary['reminders_limit'] = limits['reminders_per_day']
 
-def add_usage_counter_to_message(phone_number: str, base_message: str) -> str:
+    return summary
+
+
+def add_usage_counter_to_message(phone_number: str, base_message: str, reminder_date: datetime = None) -> str:
     """Add usage counter to confirmation message for free tier users.
 
-    Example: "✓ Reminder saved! (1 of 2 today)"
+    V1 example: "✓ Reminder saved! (1 of 2 today)"
+    V2 example: "✓ Reminder saved! (1 of 3 this week)"
     """
     tier = get_user_tier(phone_number)
 
@@ -377,19 +512,37 @@ def add_usage_counter_to_message(phone_number: str, base_message: str) -> str:
     if tier != TIER_FREE:
         return base_message
 
-    limits = get_tier_limits(tier)
-    daily_limit = limits['reminders_per_day']
+    free_tier_version = get_user_free_tier_version(phone_number)
+    limits = get_tier_limits(tier, free_tier_version)
 
-    # No counter if unlimited
+    if free_tier_version == 2:
+        weekly_limit = limits['reminders_per_week']
+        if weekly_limit is None:
+            return base_message
+
+        target = reminder_date if reminder_date else datetime.utcnow()
+        if isinstance(target, str):
+            try:
+                target = datetime.strptime(target, '%Y-%m-%d %H:%M:%S')
+            except (ValueError, TypeError):
+                target = datetime.utcnow()
+
+        current_count = get_reminders_scheduled_for_week(phone_number, target)
+        counter_text = f" ({current_count} of {weekly_limit} this week)"
+
+        if current_count >= weekly_limit:
+            counter_text += "\n\n⏰ Weekly limit reached! Text UPGRADE for unlimited."
+
+        return base_message + counter_text
+
+    # V1: daily counting
+    daily_limit = limits['reminders_per_day']
     if daily_limit is None:
         return base_message
 
     current_count = get_reminders_created_today(phone_number)
-
-    # Add counter to message
     counter_text = f" ({current_count} of {daily_limit} today)"
 
-    # If at limit, add upgrade prompt
     if current_count >= daily_limit:
         counter_text += "\n\n⏰ Daily limit reached! Resets at midnight, or text UPGRADE for unlimited."
 
@@ -422,7 +575,8 @@ def add_list_item_counter_to_message(phone_number: str, list_id: int, base_messa
     if tier != TIER_FREE:
         return base_message
 
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number)
+    limits = get_tier_limits(tier, free_tier_version)
     item_limit = limits['max_items_per_list']
 
     from models.list_model import get_item_count
@@ -466,7 +620,8 @@ def add_memory_counter_to_message(phone_number: str, base_message: str) -> str:
     if tier != TIER_FREE:
         return base_message
 
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number)
+    limits = get_tier_limits(tier, free_tier_version)
     memory_limit = limits['max_memories']
 
     # No counter if unlimited
@@ -513,7 +668,8 @@ def add_list_counter_to_message(phone_number: str, base_message: str) -> str:
     if tier != TIER_FREE:
         return base_message
 
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number)
+    limits = get_tier_limits(tier, free_tier_version)
     list_limit = limits['max_lists']
 
     from models.list_model import get_list_count
@@ -527,7 +683,7 @@ def add_list_counter_to_message(phone_number: str, base_message: str) -> str:
         return base_message
 
     # Level 2 (70-89%): Gentle nudge
-    counter_text = f" ({current_count} of {list_limit} lists)"
+    counter_text = f" ({current_count} of {list_limit} {'list' if list_limit == 1 else 'lists'})"
 
     # Level 3 (90-100%): Clear warning
     if percentage >= 90:
@@ -563,7 +719,8 @@ def format_list_item_limit_message(
         Formatted message with clear explanation and options
     """
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
     item_limit = limits['max_items_per_list']
 
     # Calculate what was skipped
@@ -624,7 +781,8 @@ def format_memory_limit_message(phone_number: str) -> str:
         Formatted message with clear explanation and options
     """
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
     memory_limit = limits['max_memories']
 
     # WHAT + WHY
@@ -657,11 +815,12 @@ def format_list_limit_message(phone_number: str) -> str:
         Formatted message with clear explanation and options
     """
     tier = get_user_tier(phone_number)
-    limits = get_tier_limits(tier)
+    free_tier_version = get_user_free_tier_version(phone_number) if tier == TIER_FREE else 1
+    limits = get_tier_limits(tier, free_tier_version)
     list_limit = limits['max_lists']
 
     # WHY
-    message = f"You've reached your limit ({list_limit} lists on Free plan).\n\n"
+    message = f"You've reached your limit ({list_limit} {'list' if list_limit == 1 else 'lists'} on Free plan).\n\n"
 
     # HOW - provide two clear options
     message += "To create more:\n"

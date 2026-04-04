@@ -640,6 +640,10 @@ def init_db():
             "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%4793' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
             "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%2936' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
             "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%6167' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
+            # Free tier versioning: v1 = grandfathered existing users, v2 = new users (default)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_tier_version INTEGER DEFAULT 2",
+            # Backfill all existing users to v1 (grandfathered)
+            "UPDATE users SET free_tier_version = 1 WHERE free_tier_version = 2 OR free_tier_version IS NULL",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

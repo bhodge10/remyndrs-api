@@ -138,9 +138,12 @@ All timestamps stored in UTC, converted to user timezone on display. Timezone de
 Uses `SELECT FOR UPDATE SKIP LOCKED` for distributed reminder claiming. Stale tasks released every 15 minutes.
 
 ### Subscription Tiers
-- **Free:** 2 reminders/day, 5 lists, 10 items/list, 5 memories
+- **Free (v1 - grandfathered existing users):** 2 reminders/day, 2 lists, 5 items/list, 5 memories
+- **Free (v2 - new users):** 3 reminders/week (counted by scheduled date), 1 list, 3 items/list, 3 memories
 - **Premium ($8.99/mo, $89.99/yr):** Unlimited reminders, 20 lists, 30 items/list, recurring reminders
 - **Family:** Premium features for 4-10 members
+
+Free tier version is stored in `users.free_tier_version` (1=grandfathered, 2=new). Existing users were backfilled to v1 via migration. New users default to v2. Version is invisible to users — both versions use the same upgrade path. Limits defined in `config.py` `FREE_TIER_LIMITS` dict.
 
 ### Progressive Education for Tier Limits
 Education Pyramid (Levels 1-4) for free tier users. Implementation in `services/tier_service.py`. See `docs/changelog.md` for details.
