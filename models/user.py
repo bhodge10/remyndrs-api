@@ -45,6 +45,8 @@ ALLOWED_USER_FIELDS = {
     'day_4_email_sent', 'awaiting_email_collection',
     # Inactivity re-engagement
     'inactivity_nudge_sent_at',
+    # Free tier versioning
+    'free_tier_version',
 }
 
 

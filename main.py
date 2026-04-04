@@ -2893,13 +2893,19 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             # Usage stats
             status_lines.append(f"\nThis Month:")
 
-            # Reminders today (free tier) or total reminders
-            if tier == 'free':
+            # Reminders usage (free tier version-aware) or total reminders
+            if tier == 'free' and usage.get('reminders_weekly_limit'):
+                # V2 free tier: weekly limit
+                reminders_week = usage['reminders_this_week']
+                weekly_limit = usage['reminders_weekly_limit']
+                status_lines.append(f"• {reminders_week} of {weekly_limit} reminders this week")
+            elif tier == 'free':
+                # V1 free tier: daily limit
                 reminders_today = usage['reminders_today']
                 reminders_limit = usage['reminders_limit']
                 status_lines.append(f"• {reminders_today} of {reminders_limit} reminders today")
             else:
-                reminders_today = usage['reminders_today']
+                reminders_today = usage.get('reminders_today', 0)
                 status_lines.append(f"• {reminders_today} reminders created today")
 
             # Lists
@@ -4508,9 +4514,9 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
                     return reply_text
 
-            # Check tier limit for reminders
+            # Check tier limit for reminders (pass reminder_date for v2 weekly counting)
             from services.tier_service import can_create_reminder
-            allowed, limit_msg = can_create_reminder(phone_number)
+            allowed, limit_msg = can_create_reminder(phone_number, reminder_date)
             if not allowed:
                 reply_text = limit_msg
                 log_interaction(phone_number, incoming_msg, reply_text, "reminder_limit_reached", False)
@@ -4578,7 +4584,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
             # Add usage counter for free tier users
             from services.tier_service import add_usage_counter_to_message
-            reply_text = add_usage_counter_to_message(phone_number, reply_text)
+            reply_text = add_usage_counter_to_message(phone_number, reply_text, reminder_date)
 
             # Check if this is user's first action and prompt for daily summary
             if should_prompt_daily_summary(phone_number):
@@ -4607,14 +4613,6 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     reply_text = get_sensitive_data_warning()
                     log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
                     return reply_text
-
-            # Check tier limit for reminders
-            from services.tier_service import can_create_reminder
-            allowed, limit_msg = can_create_reminder(phone_number)
-            if not allowed:
-                reply_text = limit_msg
-                log_interaction(phone_number, incoming_msg, reply_text, "reminder_limit_reached", False)
-                return reply_text
 
             try:
                 # Helper to parse numeric value from AI response
@@ -4688,6 +4686,14 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     )
                 reminder_date_utc = reminder_dt_utc.strftime('%Y-%m-%d %H:%M:%S')
 
+                # Check tier limit (after calculating date so v2 weekly check uses scheduled week)
+                from services.tier_service import can_create_reminder
+                allowed, limit_msg = can_create_reminder(phone_number, reminder_date_utc)
+                if not allowed:
+                    reply_text = limit_msg
+                    log_interaction(phone_number, incoming_msg, reply_text, "reminder_limit_reached", False)
+                    return reply_text
+
                 # LOW CONFIDENCE: Ask for confirmation before creating reminder
                 CONFIDENCE_THRESHOLD = int(get_setting('confidence_threshold', 70))
                 if confidence < CONFIDENCE_THRESHOLD:
@@ -4736,7 +4742,7 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
                 # Add usage counter for free tier users
                 from services.tier_service import add_usage_counter_to_message
-                reply_text = add_usage_counter_to_message(phone_number, reply_text)
+                reply_text = add_usage_counter_to_message(phone_number, reply_text, reminder_date_utc)
 
                 # Check if this is user's first action and prompt for daily summary
                 if should_prompt_daily_summary(phone_number):
