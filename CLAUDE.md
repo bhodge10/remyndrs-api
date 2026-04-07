@@ -8,6 +8,7 @@ For detailed docs, see:
 - `docs/monitoring.md` - Multi-agent monitoring system
 - `docs/ux-roadmap.md` - SMS app UX improvement plan
 - `docs/website-roadmap.md` - Website (remyndrs.com) improvement plan
+- `docs/family-plan.md` - Family plan feature analysis and implementation plan (not yet implemented)
 
 ## Project Overview
 
