@@ -238,6 +238,23 @@ def init_db():
             )
         ''')
 
+        # List shares table (shared lists between users)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS list_shares (
+                id SERIAL PRIMARY KEY,
+                list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+                owner_phone TEXT NOT NULL,
+                shared_with_phone TEXT NOT NULL,
+                permission TEXT NOT NULL DEFAULT 'edit',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                accepted_at TIMESTAMP,
+                owner_phone_hash TEXT,
+                shared_with_phone_hash TEXT,
+                UNIQUE(list_id, shared_with_phone)
+            )
+        ''')
+
         # Broadcast logs table
         c.execute('''
             CREATE TABLE IF NOT EXISTS broadcast_logs (
@@ -672,6 +689,10 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_smart_nudges_phone ON smart_nudges(phone_number, sent_at)",
             # Twilio costs: index for date-range queries
             "CREATE INDEX IF NOT EXISTS idx_twilio_costs_date ON twilio_costs(cost_date)",
+            # Shared lists: indexes for efficient lookups
+            "CREATE INDEX IF NOT EXISTS idx_list_shares_shared_with ON list_shares(shared_with_phone)",
+            "CREATE INDEX IF NOT EXISTS idx_list_shares_list_id ON list_shares(list_id)",
+            "CREATE INDEX IF NOT EXISTS idx_list_shares_owner ON list_shares(owner_phone)",
         ]
 
         for migration in migrations:

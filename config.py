@@ -230,6 +230,19 @@ TIER_LIMITS = {
 }
 
 # =====================================================
+# SHARED LISTS CONFIGURATION
+# =====================================================
+SHARED_LIST_MAX_MEMBERS = 4       # Max users a list can be shared with
+SHARED_LIST_MAX_PER_USER = 3      # Max shared lists a Premium user can create
+SHARED_LIST_MAX_RECEIVED = 5      # Max shared lists a non-premium user can be on
+
+# Beta whitelist: comma-separated phone numbers (E.164 format) that can initiate shared lists.
+# Empty string = feature available to all Premium users. Set in env to restrict during testing.
+SHARED_LISTS_BETA_PHONES = [
+    p.strip() for p in os.environ.get("SHARED_LISTS_BETA_PHONES", "").split(",") if p.strip()
+]
+
+# =====================================================
 # SMART NUDGES CONFIGURATION
 # =====================================================
 NUDGE_DEFAULT_TIME = "09:00"       # Default nudge time (9:00 AM local)

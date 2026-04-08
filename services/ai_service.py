@@ -646,6 +646,49 @@ For RENAMING A LIST:
     "confirmation": "Renamed [old name] to [new name]"
 }}
 
+For SHARING A LIST (Premium users only):
+{{
+    "action": "share_list",
+    "list_name": "the name of the list to share",
+    "phone_number": "the phone number to share with (digits only, with country code)",
+    "confirmation": "Sharing [list name] with [phone number]"
+}}
+Examples:
+- "Share grocery list with 555-123-4567" → {{"action": "share_list", "list_name": "grocery list", "phone_number": "+15551234567"}}
+- "Share my todo list with 8015551234" → {{"action": "share_list", "list_name": "todo list", "phone_number": "+18015551234"}}
+Note: Normalize the phone number to E.164 format with +1 country code if not provided.
+
+For REMOVING A USER FROM A SHARED LIST:
+{{
+    "action": "unshare_list",
+    "list_name": "the name of the shared list",
+    "phone_number": "the phone number to remove (optional — omit to stop sharing with everyone)",
+    "confirmation": "Removed access for [phone number]"
+}}
+Examples:
+- "Stop sharing grocery list with 555-123-4567" → {{"action": "unshare_list", "list_name": "grocery list", "phone_number": "+15551234567"}}
+- "Stop sharing grocery list" → {{"action": "unshare_list", "list_name": "grocery list"}}
+
+For SHOWING WHO HAS ACCESS TO A SHARED LIST:
+{{
+    "action": "show_list_members",
+    "list_name": "the name of the shared list",
+    "confirmation": "Showing members of [list name]"
+}}
+Examples:
+- "Who's on my grocery list?" → {{"action": "show_list_members", "list_name": "grocery list"}}
+- "Who can see my todo list?" → {{"action": "show_list_members", "list_name": "todo list"}}
+
+For LEAVING A SHARED LIST (non-owner):
+{{
+    "action": "leave_shared_list",
+    "list_name": "the name of the shared list to leave",
+    "confirmation": "Leaving [list name]"
+}}
+Examples:
+- "Leave grocery list" → {{"action": "leave_shared_list", "list_name": "grocery list"}}
+- "Remove me from the grocery list" → {{"action": "leave_shared_list", "list_name": "grocery list"}}
+
 MULTI-COMMAND SUPPORT:
 If the user's message contains MULTIPLE distinct commands, return an array of actions instead of a single action.
 

@@ -384,6 +384,32 @@ def can_create_list(phone_number: str) -> tuple[bool, str | None]:
     return (True, None)
 
 
+def can_share_list(phone_number: str) -> tuple[bool, str | None]:
+    """Check if user can share a list (must be Premium, and in beta whitelist if set)."""
+    from config import SHARED_LISTS_BETA_PHONES
+    if SHARED_LISTS_BETA_PHONES and phone_number not in SHARED_LISTS_BETA_PHONES:
+        return (False, "Shared lists aren't available for your account yet. Stay tuned!")
+
+    tier = get_user_tier(phone_number)
+    if tier not in (TIER_PREMIUM, TIER_FAMILY):
+        from config import PREMIUM_MONTHLY_PRICE
+        return (
+            False,
+            f"Shared lists are a Premium feature. Text UPGRADE to unlock shared lists ({PREMIUM_MONTHLY_PRICE}/mo)."
+        )
+
+    from models.list_model import get_owner_shared_list_count
+    from config import SHARED_LIST_MAX_PER_USER
+    shared_count = get_owner_shared_list_count(phone_number)
+    if shared_count >= SHARED_LIST_MAX_PER_USER:
+        return (
+            False,
+            f"You've reached your limit of {SHARED_LIST_MAX_PER_USER} shared lists."
+        )
+
+    return (True, None)
+
+
 def can_add_list_item(phone_number: str, list_id: int) -> tuple[bool, str | None]:
     """Check if user can add another item to a list."""
     if BETA_MODE:
