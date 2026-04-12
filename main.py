@@ -916,6 +916,25 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             logger.info(f"Referral source detected for ...{phone_number[-4:]}: {referral_source}")
 
         # ==========================================
+        # NON-USER DECLINING A SHARED LIST INVITATION
+        # ==========================================
+        if not is_user_onboarded(phone_number):
+            decline_words = {"no", "no thanks", "no thank you", "nah", "nope", "decline", "stop"}
+            if incoming_msg.strip().lower() in decline_words:
+                pending = get_pending_shares(phone_number)
+                if pending:
+                    from models.list_model import decline_share, get_share_name
+                    from routes.handlers.lists import _format_phone
+                    for share_id, list_id, owner_phone, list_name in pending:
+                        decline_share(phone_number, list_id)
+                        display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+                        send_sms(owner_phone, f"{display_name} declined your shared list '{list_name}'.", message_type="reply")
+                    resp = MessagingResponse()
+                    resp.message("No problem! The invitation has been declined.")
+                    log_interaction(phone_number, incoming_msg, "Non-user declined shared list invitation", "decline_share_non_user", True)
+                    return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # ONBOARDING CHECK
         # ==========================================
         if not is_user_onboarded(phone_number):

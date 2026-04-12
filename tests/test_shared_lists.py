@@ -751,3 +751,31 @@ class TestNonUserInvitationFlow:
         assert "welcome" in result["output"].lower() or "remyndrs" in result["output"].lower()
         # Should NOT mention any shared list
         assert "shared" not in result["output"].lower()
+
+    @pytest.mark.asyncio
+    async def test_non_user_declines_invitation_with_no(self, premium_owner, owner_list, simulator, sms_capture):
+        """Non-user replying NO declines the share and does NOT start onboarding."""
+        from models.list_model import share_list, get_pending_shares
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_NEW)
+        sms_capture.messages.clear()
+
+        result = await simulator.send_message(PHONE_NEW, "No")
+
+        # Should get a polite decline message, NOT onboarding
+        assert "declined" in result["output"].lower() or "no problem" in result["output"].lower()
+        assert "name" not in result["output"].lower()
+
+        # Pending share should be gone
+        pending = get_pending_shares(PHONE_NEW)
+        assert len(pending) == 0
+
+        # Owner should be notified
+        owner_msgs = [m for m in sms_capture.messages if m["to"] == PHONE_OWNER]
+        assert any("declined" in m["message"].lower() for m in owner_msgs)
+
+    @pytest.mark.asyncio
+    async def test_non_user_no_without_pending_share_goes_to_onboarding(self, simulator, sms_capture):
+        """Non-user saying NO without a pending share just enters normal onboarding."""
+        result = await simulator.send_message(PHONE_NEW, "No")
+        # Should enter onboarding, not get a decline message
+        assert "welcome" in result["output"].lower() or "name" in result["output"].lower()
