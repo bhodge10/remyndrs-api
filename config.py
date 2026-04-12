@@ -242,6 +242,12 @@ SHARED_LISTS_BETA_PHONES = [
     p.strip() for p in os.environ.get("SHARED_LISTS_BETA_PHONES", "").split(",") if p.strip()
 ]
 
+# Beta whitelist for Smart Suggestions: comma-separated phone numbers (E.164 format).
+# Empty string = feature available to all Premium users. Set in env to restrict during testing.
+SMART_SUGGESTIONS_BETA_PHONES = [
+    p.strip() for p in os.environ.get("SMART_SUGGESTIONS_BETA_PHONES", "").split(",") if p.strip()
+]
+
 # =====================================================
 # SMART NUDGES CONFIGURATION
 # =====================================================

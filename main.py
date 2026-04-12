@@ -4699,7 +4699,8 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             # Smart suggestion: offer a prep reminder for high-importance events
             from services.smart_suggestion_service import get_reminder_suggestion
             from services.tier_service import get_user_tier
-            if get_user_tier(phone_number) in ('premium', 'family') and reminder_date_utc:
+            from config import SMART_SUGGESTIONS_BETA_PHONES
+            if get_user_tier(phone_number) in ('premium', 'family') and reminder_date_utc and (not SMART_SUGGESTIONS_BETA_PHONES or phone_number in SMART_SUGGESTIONS_BETA_PHONES):
                 suggestion = get_reminder_suggestion(reminder_text, reminder_date_utc, user_tz_str)
                 if suggestion and not get_pending_reminder_confirmation(phone_number):
                     reply_text += f"\n\n{suggestion['suggestion_text']}"
@@ -4874,7 +4875,8 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 # Smart suggestion: offer a prep reminder for high-importance events
                 from services.smart_suggestion_service import get_reminder_suggestion
                 from services.tier_service import get_user_tier
-                if get_user_tier(phone_number) in ('premium', 'family'):
+                from config import SMART_SUGGESTIONS_BETA_PHONES
+                if get_user_tier(phone_number) in ('premium', 'family') and (not SMART_SUGGESTIONS_BETA_PHONES or phone_number in SMART_SUGGESTIONS_BETA_PHONES):
                     suggestion = get_reminder_suggestion(reminder_text, reminder_date_utc, user_tz_str)
                     if suggestion and not get_pending_reminder_confirmation(phone_number):
                         reply_text += f"\n\n{suggestion['suggestion_text']}"
