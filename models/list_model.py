@@ -818,6 +818,28 @@ def get_share_name(list_id: int, shared_with_phone: str) -> str | None:
             return_db_connection(conn)
 
 
+def get_known_recipients(owner_phone: str, name: str) -> list[tuple[str, str]]:
+    """Look up previous share recipients by name for this owner.
+    Returns [(phone, name), ...] matching the given name (case-insensitive)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            """SELECT DISTINCT shared_with_phone, shared_with_name
+               FROM list_shares
+               WHERE owner_phone = %s AND LOWER(shared_with_name) = LOWER(%s)""",
+            (owner_phone, name)
+        )
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Error looking up known recipients: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def accept_share(phone_number: str, list_id: int) -> tuple[bool, str]:
     """Accept a pending shared list invitation. Returns (success, message)."""
     conn = None

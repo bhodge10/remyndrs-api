@@ -650,13 +650,17 @@ For SHARING A LIST (Premium users only):
 {{
     "action": "share_list",
     "list_name": "the name of the list to share",
-    "phone_number": "the phone number to share with (digits only, with country code)",
-    "confirmation": "Sharing [list name] with [phone number]"
+    "phone_number": "the phone number to share with (optional, E.164 format with +1 country code)",
+    "shared_with_name": "the name of the person to share with (optional, when no phone number given)",
+    "confirmation": "Sharing [list name] with [phone number or name]"
 }}
+Include phone_number when the user provides digits. Include shared_with_name when the user provides a name instead.
 Examples:
 - "Share grocery list with 555-123-4567" → {{"action": "share_list", "list_name": "grocery list", "phone_number": "+15551234567"}}
 - "Share my todo list with 8015551234" → {{"action": "share_list", "list_name": "todo list", "phone_number": "+18015551234"}}
-Note: Normalize the phone number to E.164 format with +1 country code if not provided.
+- "Share vacation list with Sarah" → {{"action": "share_list", "list_name": "vacation list", "shared_with_name": "Sarah"}}
+- "Share grocery list with Mom" → {{"action": "share_list", "list_name": "grocery list", "shared_with_name": "Mom"}}
+Note: Normalize phone numbers to E.164 format with +1 country code if not provided.
 
 For REMOVING A USER FROM A SHARED LIST:
 {{

@@ -478,6 +478,112 @@ class TestShareNamePromptFlow:
 
 
 # =====================================================
+# SHARE BY NAME TESTS
+# =====================================================
+
+
+class TestShareByName:
+    """Tests for sharing a list using a previously-known recipient name."""
+
+    def test_get_known_recipients_finds_match(self, premium_owner, free_user, owner_list):
+        """Known recipient lookup finds a previous share by name."""
+        from models.list_model import share_list, set_share_name, get_known_recipients
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        set_share_name(owner_list["list_id"], PHONE_SHARED, "Jane")
+
+        matches = get_known_recipients(PHONE_OWNER, "Jane")
+        assert len(matches) == 1
+        assert matches[0][0] == PHONE_SHARED
+        assert matches[0][1] == "Jane"
+
+    def test_get_known_recipients_case_insensitive(self, premium_owner, free_user, owner_list):
+        """Name lookup is case-insensitive."""
+        from models.list_model import share_list, set_share_name, get_known_recipients
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        set_share_name(owner_list["list_id"], PHONE_SHARED, "Jane")
+
+        matches = get_known_recipients(PHONE_OWNER, "jane")
+        assert len(matches) == 1
+
+    def test_get_known_recipients_no_match(self, premium_owner, owner_list):
+        """Unknown name returns empty list."""
+        from models.list_model import get_known_recipients
+        matches = get_known_recipients(PHONE_OWNER, "Nobody")
+        assert len(matches) == 0
+
+    def test_share_by_known_name_skips_name_prompt(self, premium_owner, free_user, owner_list, sms_capture):
+        """Sharing with a known name resolves to phone and sends invitation immediately."""
+        from models.list_model import share_list, set_share_name, create_list, get_list_members
+        from routes.handlers.lists import handle_share_list
+
+        # First share establishes the name
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        set_share_name(owner_list["list_id"], PHONE_SHARED, "Jane")
+
+        # Create a second list to share by name
+        second_list_id = create_list(PHONE_OWNER, "Vacation List")
+        sms_capture.messages.clear()
+
+        ai_response = {
+            "action": "share_list",
+            "list_name": "Vacation List",
+            "shared_with_name": "Jane",
+        }
+        result = handle_share_list(PHONE_OWNER, "Share vacation list with Jane", ai_response)
+
+        # Should send invitation immediately (no name prompt)
+        assert "Invitation sent" in result
+        assert "Jane" in result
+
+        # Invitation SMS should have been sent to the shared user
+        invite_msgs = [m for m in sms_capture.messages if m["to"] == PHONE_SHARED]
+        assert len(invite_msgs) >= 1
+        assert "Jane" in invite_msgs[0]["message"]
+
+    def test_share_by_unknown_name_asks_for_phone(self, premium_owner, owner_list):
+        """Sharing with an unknown name asks for the phone number."""
+        from routes.handlers.lists import handle_share_list
+
+        ai_response = {
+            "action": "share_list",
+            "list_name": "Grocery List",
+            "shared_with_name": "Mom",
+        }
+        result = handle_share_list(PHONE_OWNER, "Share grocery list with Mom", ai_response)
+
+        assert "phone number" in result.lower()
+        assert "Mom" in result
+
+    def test_share_by_unknown_name_then_provide_phone(self, premium_owner, free_user, owner_list, sms_capture):
+        """After asking for phone, owner provides it → share created + invitation sent."""
+        from routes.handlers.lists import handle_share_list, handle_pending_share_name
+        from models.list_model import get_share_name
+
+        ai_response = {
+            "action": "share_list",
+            "list_name": "Grocery List",
+            "shared_with_name": "Mom",
+        }
+        handle_share_list(PHONE_OWNER, "Share grocery list with Mom", ai_response)
+        sms_capture.messages.clear()
+
+        # Owner provides phone number
+        result = handle_pending_share_name(PHONE_OWNER, PHONE_SHARED)
+
+        assert "Invitation sent" in result
+        assert "Mom" in result
+
+        # Name should be saved
+        name = get_share_name(owner_list["list_id"], PHONE_SHARED)
+        assert name == "Mom"
+
+        # Invitation SMS should have been sent
+        invite_msgs = [m for m in sms_capture.messages if m["to"] == PHONE_SHARED]
+        assert len(invite_msgs) >= 1
+        assert "Mom" in invite_msgs[0]["message"]
+
+
+# =====================================================
 # CASCADE DELETE TESTS
 # =====================================================
 
