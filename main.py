@@ -1323,6 +1323,23 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         else:
                             reply_text = "Sorry, I couldn't save that recurring reminder. Please try again."
                             log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", False)
+                    elif pending_confirmation.get('type') == 'smart_suggestion':
+                        # Smart suggestion: user accepted a prep reminder
+                        reminder_text = pending_confirmation.get('reminder_text')
+                        reminder_date_utc = pending_confirmation.get('reminder_date_utc')
+                        local_time = pending_confirmation.get('local_time')
+                        prep_display = pending_confirmation.get('prep_date_display')
+
+                        user_tz_str = get_user_timezone(phone_number)
+                        reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date_utc, local_time, user_tz_str)
+
+                        if reminder_id:
+                            reply_text = f"Done! I'll remind you on {prep_display} {format_reminder_confirmation(reminder_text)}."
+                            log_interaction(phone_number, incoming_msg, reply_text, "smart_suggestion_accepted", True)
+                        else:
+                            reply_text = "Sorry, I couldn't save that reminder. Please try again."
+                            log_interaction(phone_number, incoming_msg, reply_text, "smart_suggestion_accepted", False)
+
                     else:
                         logger.error(f"Unrecognized pending confirmation action: '{action}'. Keys: {list(pending_confirmation.keys())}")
                         reply_text = "Sorry, something went wrong. Please try again."
@@ -1342,21 +1359,37 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     return Response(content=str(resp), media_type="application/xml")
 
             # User says it's wrong - ask for clarification
-            elif msg_lower in ['no', 'n', 'wrong', 'nope', "that's wrong", 'thats wrong', 'incorrect', 'not right']:
-                # Log rejection for calibration tracking
-                stored_confidence = pending_confirmation.get('confidence')
-                if stored_confidence is not None:
-                    CONFIDENCE_THRESHOLD = int(get_setting('confidence_threshold', 70))
-                    log_confidence(phone_number, pending_confirmation.get('action', 'reminder'), stored_confidence, CONFIDENCE_THRESHOLD, confirmed=False, user_message=None)
+            elif msg_lower in ['no', 'n', 'wrong', 'nope', "that's wrong", 'thats wrong', 'incorrect', 'not right', "no thanks", "no thank you", "nah", "i'm good", "im good"]:
+                # Smart suggestion decline — just clear and move on
+                if pending_confirmation.get('type') == 'smart_suggestion':
+                    create_or_update_user(phone_number, pending_reminder_confirmation=None)
+                    log_interaction(phone_number, incoming_msg, "Smart suggestion declined", "smart_suggestion_declined", True)
+                    # Don't send a response — let the message fall through in case
+                    # it's also a new command (e.g., "no, remind me to...")
+                    # But if it's just "no", we need to respond
+                    if msg_lower in ['no', 'n', 'nope', 'nah', "no thanks", "no thank you", "i'm good", "im good"]:
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix("No problem!"))
+                        return Response(content=str(resp), media_type="application/xml")
+                    # Otherwise fall through to process the rest of the message
+                else:
+                    # Log rejection for calibration tracking
+                    stored_confidence = pending_confirmation.get('confidence')
+                    if stored_confidence is not None:
+                        CONFIDENCE_THRESHOLD = int(get_setting('confidence_threshold', 70))
+                        log_confidence(phone_number, pending_confirmation.get('action', 'reminder'), stored_confidence, CONFIDENCE_THRESHOLD, confirmed=False, user_message=None)
 
-                create_or_update_user(phone_number, pending_reminder_confirmation=None)
-                resp = MessagingResponse()
-                resp.message(staging_prefix("No problem! Please tell me again what you'd like to be reminded about, and when.\n\nTip: Try something like \"remind me Tuesday at 3pm to call the dentist\""))
-                log_interaction(phone_number, incoming_msg, "Reminder confirmation rejected", "reminder_rejected", True)
-                return Response(content=str(resp), media_type="application/xml")
+                    create_or_update_user(phone_number, pending_reminder_confirmation=None)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix("No problem! Please tell me again what you'd like to be reminded about, and when.\n\nTip: Try something like \"remind me Tuesday at 3pm to call the dentist\""))
+                    log_interaction(phone_number, incoming_msg, "Reminder confirmation rejected", "reminder_rejected", True)
+                    return Response(content=str(resp), media_type="application/xml")
 
             # User provides a correction directly - treat as new request
             # (If they say something other than yes/no, assume it's a new/corrected request and let it fall through)
+            # For smart suggestions, silently clear the pending state so it doesn't block the next action
+            if pending_confirmation and pending_confirmation.get('type') == 'smart_suggestion':
+                create_or_update_user(phone_number, pending_reminder_confirmation=None)
 
         # ==========================================
         # UNDO / THAT'S WRONG FALLBACK COMMANDS
@@ -4627,6 +4660,8 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     logger.error(f"Error preparing confirmation: {e}")
                     # Fall through to create reminder anyway
 
+            reminder_date_utc = None
+            user_tz_str = None
             try:
                 user_tz_str = get_user_timezone(phone_number)
                 tz = pytz.timezone(user_tz_str)
@@ -4660,6 +4695,23 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             # Add usage counter for free tier users
             from services.tier_service import add_usage_counter_to_message
             reply_text = add_usage_counter_to_message(phone_number, reply_text, reminder_date)
+
+            # Smart suggestion: offer a prep reminder for high-importance events
+            from services.smart_suggestion_service import get_reminder_suggestion
+            from services.tier_service import get_user_tier
+            if get_user_tier(phone_number) in ('premium', 'family') and reminder_date_utc:
+                suggestion = get_reminder_suggestion(reminder_text, reminder_date_utc, user_tz_str)
+                if suggestion and not get_pending_reminder_confirmation(phone_number):
+                    reply_text += f"\n\n{suggestion['suggestion_text']}"
+                    pending_data = json.dumps({
+                        'type': 'smart_suggestion',
+                        'category': 'prep_reminder',
+                        'reminder_text': suggestion['prep_reminder_text'],
+                        'reminder_date_utc': suggestion['prep_date_utc'],
+                        'local_time': suggestion['prep_local_time'],
+                        'prep_date_display': suggestion['prep_date_display'],
+                    })
+                    create_or_update_user(phone_number, pending_reminder_confirmation=pending_data)
 
             # Check if this is user's first action and prompt for daily summary
             if should_prompt_daily_summary(phone_number):
@@ -4818,6 +4870,23 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 # Add usage counter for free tier users
                 from services.tier_service import add_usage_counter_to_message
                 reply_text = add_usage_counter_to_message(phone_number, reply_text, reminder_date_utc)
+
+                # Smart suggestion: offer a prep reminder for high-importance events
+                from services.smart_suggestion_service import get_reminder_suggestion
+                from services.tier_service import get_user_tier
+                if get_user_tier(phone_number) in ('premium', 'family'):
+                    suggestion = get_reminder_suggestion(reminder_text, reminder_date_utc, user_tz_str)
+                    if suggestion and not get_pending_reminder_confirmation(phone_number):
+                        reply_text += f"\n\n{suggestion['suggestion_text']}"
+                        pending_data = json.dumps({
+                            'type': 'smart_suggestion',
+                            'category': 'prep_reminder',
+                            'reminder_text': suggestion['prep_reminder_text'],
+                            'reminder_date_utc': suggestion['prep_date_utc'],
+                            'local_time': suggestion['prep_local_time'],
+                            'prep_date_display': suggestion['prep_date_display'],
+                        })
+                        create_or_update_user(phone_number, pending_reminder_confirmation=pending_data)
 
                 # Check if this is user's first action and prompt for daily summary
                 if should_prompt_daily_summary(phone_number):
