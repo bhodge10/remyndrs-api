@@ -47,6 +47,8 @@ ALLOWED_USER_FIELDS = {
     'inactivity_nudge_sent_at',
     # Free tier versioning
     'free_tier_version',
+    # Shared lists
+    'pending_share_name',
 }
 
 

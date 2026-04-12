@@ -39,12 +39,13 @@ from models.list_model import (
     find_item_in_any_list, get_list_count, get_item_count,
     get_next_available_list_name,
     get_accessible_list_by_name, can_user_access_list,
-    get_shared_lists_for_user, get_pending_shares
+    get_shared_lists_for_user, get_pending_shares,
+    is_shared_list_read_only
 )
 from routes.handlers.lists import (
     handle_share_list, handle_unshare_list, handle_show_list_members,
     handle_leave_shared_list, handle_accept_share, handle_decline_share,
-    format_all_lists_display
+    handle_pending_share_name, format_all_lists_display
 )
 from services.sms_service import send_sms
 from services.ai_service import process_with_ai, parse_list_items
@@ -900,6 +901,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         if condition is None or condition(msg_lower):
                             referral_source = source
                             break
+
+            # Check if this user was invited via a shared list
+            if not referral_source:
+                pending = get_pending_shares(phone_number)
+                if pending:
+                    referral_source = "shared-list"
 
             # Default: tag unmatched new users so they don't show as "Unknown"
             if not referral_source:
@@ -3896,6 +3903,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SHARED LIST: PENDING NAME AFTER SHARE
+        # ==========================================
+        share_name_result = handle_pending_share_name(phone_number, incoming_msg)
+        if share_name_result:
+            resp = MessagingResponse()
+            resp.message(staging_prefix(share_name_result))
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # SHARED LIST ACCEPT/DECLINE
         # ==========================================
         if incoming_msg.upper() == "ACCEPT":
@@ -5091,6 +5107,16 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     if shared_list_match and shared_list_match[2]:  # is_shared=True
                         list_id = shared_list_match[0]
                         list_name = shared_list_match[1]
+
+                        # Check if shared list is read-only (owner no longer Premium)
+                        read_only, owner_name = is_shared_list_read_only(list_id)
+                        if read_only:
+                            reply_text = f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired."
+                            log_interaction(phone_number, incoming_msg, reply_text, "add_to_shared_list_readonly", False)
+                            resp = MessagingResponse()
+                            resp.message(staging_prefix(reply_text))
+                            return Response(content=str(resp), media_type="application/xml")
+
                         # Add items to shared list (use owner's item limit, not shared user's)
                         from services.tier_service import get_tier_limits, get_user_tier, add_list_item_counter_to_message
                         tier_limits = get_tier_limits(get_user_tier(shared_list_match[3]))  # owner's tier
@@ -5421,7 +5447,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 from models.list_model import mark_item_complete_by_list_id
                 accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
                 if accessible and accessible[2]:  # is_shared
-                    if mark_item_complete_by_list_id(accessible[0], item_text):
+                    read_only, owner_name = is_shared_list_read_only(accessible[0])
+                    if read_only:
+                        reply_text = f"The shared list '{accessible[1]}' is currently read-only because the owner's Premium plan has expired."
+                    elif mark_item_complete_by_list_id(accessible[0], item_text):
                         reply_text = f"Checked off {item_text} from shared list '{accessible[1]}'"
                     else:
                         reply_text = f"Couldn't find '{item_text}' in '{accessible[1]}'."
@@ -5450,7 +5479,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 from models.list_model import mark_item_incomplete_by_list_id
                 accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
                 if accessible and accessible[2]:  # is_shared
-                    if mark_item_incomplete_by_list_id(accessible[0], item_text):
+                    read_only, owner_name = is_shared_list_read_only(accessible[0])
+                    if read_only:
+                        reply_text = f"The shared list '{accessible[1]}' is currently read-only because the owner's Premium plan has expired."
+                    elif mark_item_incomplete_by_list_id(accessible[0], item_text):
                         reply_text = f"Unmarked {item_text} from shared list '{accessible[1]}'"
                     else:
                         reply_text = f"Couldn't find '{item_text}' to unmark."
@@ -5465,6 +5497,16 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             # Check if this is a shared list the user has access to
             accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
             is_shared_list = accessible and accessible[2]
+
+            # Check if shared list is read-only (owner no longer Premium)
+            if is_shared_list:
+                read_only, owner_name = is_shared_list_read_only(accessible[0])
+                if read_only:
+                    reply_text = f"The shared list '{accessible[1]}' is currently read-only because the owner's Premium plan has expired."
+                    log_interaction(phone_number, incoming_msg, reply_text, "delete_item_readonly", False)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(reply_text))
+                    return Response(content=str(resp), media_type="application/xml")
 
             # Ask for confirmation before deleting
             confirm_data = json.dumps({

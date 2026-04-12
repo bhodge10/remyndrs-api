@@ -5,9 +5,11 @@ Covers: sharing flow, permissions, limits, accept/decline, and list operations o
 
 import pytest
 import json
+from unittest.mock import patch
 
 PHONE_OWNER = "+15559876543"   # Premium owner (same as test_phone)
 PHONE_SHARED = "+15559876544"  # Shared user (free tier)
+PHONE_NEW = "+15559876545"     # Non-Remyndrs user (for invitation flow tests)
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +22,7 @@ def clean_shared_list_data():
         try:
             conn = get_db_connection()
             c = conn.cursor()
-            for phone in [PHONE_OWNER, PHONE_SHARED]:
+            for phone in [PHONE_OWNER, PHONE_SHARED, PHONE_NEW]:
                 c.execute("DELETE FROM list_shares WHERE owner_phone = %s OR shared_with_phone = %s", (phone, phone))
                 c.execute("DELETE FROM list_items WHERE phone_number = %s", (phone,))
                 c.execute("DELETE FROM lists WHERE phone_number = %s", (phone,))
@@ -398,6 +400,84 @@ class TestSharedListHandlers:
 
 
 # =====================================================
+# NAME PROMPT FLOW TESTS
+# =====================================================
+
+
+class TestShareNamePromptFlow:
+    """Tests for the name prompt flow when sharing a list."""
+
+    def test_set_and_get_share_name(self, premium_owner, free_user, owner_list):
+        """Test that a name can be set and retrieved for a share."""
+        from models.list_model import share_list, set_share_name, get_share_name
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+
+        set_share_name(owner_list["list_id"], PHONE_SHARED, "Jane")
+        name = get_share_name(owner_list["list_id"], PHONE_SHARED)
+        assert name == "Jane"
+
+    def test_get_list_members_includes_name(self, premium_owner, free_user, owner_list):
+        """Test that get_list_members returns the shared_with_name."""
+        from models.list_model import share_list, set_share_name, get_list_members
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        set_share_name(owner_list["list_id"], PHONE_SHARED, "Jane")
+
+        members = get_list_members(owner_list["list_id"])
+        assert len(members) == 1
+        assert members[0][3] == "Jane"
+
+    def test_pending_share_name_handler(self, premium_owner, free_user, owner_list):
+        """Test that handle_pending_share_name saves name and sends invitation."""
+        import json
+        from models.list_model import share_list, get_share_name
+        from models.user import create_or_update_user
+        from routes.handlers.lists import handle_pending_share_name
+
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+
+        # Set up pending state (as handle_share_list would)
+        pending_data = json.dumps({
+            'list_id': owner_list["list_id"],
+            'shared_with_phone': PHONE_SHARED,
+            'list_name': "Grocery List",
+        })
+        create_or_update_user(PHONE_OWNER, pending_share_name=pending_data)
+
+        # Simulate owner replying with a name
+        result = handle_pending_share_name(PHONE_OWNER, "Jane")
+        assert result is not None
+        assert "Jane" in result
+        assert "Grocery List" in result
+
+        # Name should be saved on the share
+        name = get_share_name(owner_list["list_id"], PHONE_SHARED)
+        assert name == "Jane"
+
+    def test_no_pending_share_name_returns_none(self, premium_owner):
+        """Test that handle_pending_share_name returns None when no pending state."""
+        from routes.handlers.lists import handle_pending_share_name
+        result = handle_pending_share_name(PHONE_OWNER, "Jane")
+        assert result is None
+
+    def test_accept_notification_uses_share_name(self, premium_owner, free_user, owner_list, sms_capture):
+        """Test that accept notification uses the owner-assigned name."""
+        from models.list_model import share_list, accept_share, set_share_name
+        from routes.handlers.lists import handle_accept_share
+
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        set_share_name(owner_list["list_id"], PHONE_SHARED, "Jane")
+        sms_capture.messages.clear()
+
+        handle_accept_share(PHONE_SHARED, "ACCEPT")
+
+        # Owner notification should use "Jane" not the phone number
+        owner_msgs = [m for m in sms_capture.messages if m["to"] == PHONE_OWNER]
+        assert len(owner_msgs) >= 1
+        assert "Jane" in owner_msgs[0]["message"]
+        assert "accepted" in owner_msgs[0]["message"].lower()
+
+
+# =====================================================
 # CASCADE DELETE TESTS
 # =====================================================
 
@@ -421,3 +501,147 @@ class TestCascadeDelete:
         # Share should be gone (cascade delete)
         shared = get_shared_lists_for_user(PHONE_SHARED)
         assert len(shared) == 0
+
+
+# =====================================================
+# OWNER DOWNGRADE (READ-ONLY) TESTS
+# =====================================================
+
+
+class TestOwnerDowngradeReadOnly:
+    """Tests for shared lists becoming read-only when owner loses Premium."""
+
+    def test_is_shared_list_read_only_premium_owner(self, premium_owner, owner_list):
+        """Shared list with Premium owner is NOT read-only."""
+        from models.list_model import is_shared_list_read_only
+        read_only, owner_name = is_shared_list_read_only(owner_list["list_id"])
+        assert read_only is False
+
+    def test_is_shared_list_read_only_free_owner(self, premium_owner, free_user, owner_list):
+        """Shared list becomes read-only when owner downgrades to free."""
+        from models.list_model import is_shared_list_read_only, share_list, accept_share
+        from models.user import create_or_update_user
+
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        accept_share(PHONE_SHARED, owner_list["list_id"])
+
+        # Downgrade owner
+        create_or_update_user(PHONE_OWNER, premium_status="free", trial_end_date=None)
+
+        read_only, owner_name = is_shared_list_read_only(owner_list["list_id"])
+        assert read_only is True
+        assert owner_name == "Brad"
+
+    def test_shared_user_can_still_view_after_downgrade(self, premium_owner, free_user, owner_list):
+        """Shared user can still view a shared list after owner downgrades."""
+        from models.list_model import share_list, accept_share, get_accessible_list_by_name, get_list_items
+        from models.user import create_or_update_user
+
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        accept_share(PHONE_SHARED, owner_list["list_id"])
+
+        # Downgrade owner
+        create_or_update_user(PHONE_OWNER, premium_status="free", trial_end_date=None)
+
+        # Shared user can still find and view the list
+        accessible = get_accessible_list_by_name(PHONE_SHARED, "Grocery List")
+        assert accessible is not None
+        items = get_list_items(accessible[0])
+        assert len(items) == 2  # Milk and Eggs from owner_list fixture
+
+    def test_owner_can_still_delete_after_downgrade(self, premium_owner, free_user, owner_list):
+        """Owner can still delete their shared list even after downgrading."""
+        from models.list_model import share_list, accept_share, delete_list, get_shared_lists_for_user
+        from models.user import create_or_update_user
+
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+        accept_share(PHONE_SHARED, owner_list["list_id"])
+
+        # Downgrade owner
+        create_or_update_user(PHONE_OWNER, premium_status="free", trial_end_date=None)
+
+        # Owner can still delete
+        delete_list(PHONE_OWNER, "Grocery List")
+        shared = get_shared_lists_for_user(PHONE_SHARED)
+        assert len(shared) == 0
+
+
+# =====================================================
+# NON-USER INVITATION FLOW TESTS
+# =====================================================
+
+
+class TestNonUserInvitationFlow:
+    """Tests for sharing a list with someone who isn't on Remyndrs yet."""
+
+    @pytest.mark.asyncio
+    async def test_non_user_onboarding_shows_shared_list_welcome(self, premium_owner, owner_list, simulator, sms_capture):
+        """Non-user replying YES gets a customized welcome mentioning the shared list."""
+        from models.list_model import share_list
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_NEW)
+
+        # Non-user texts YES — enters onboarding step 0
+        result = await simulator.send_message(PHONE_NEW, "YES")
+        assert "Brad" in result["output"] or "shared" in result["output"].lower()
+        assert "Grocery List" in result["output"]
+        assert "name" in result["output"].lower()
+
+    @pytest.mark.asyncio
+    async def test_non_user_full_onboarding_auto_accepts_share(self, premium_owner, owner_list, simulator, sms_capture):
+        """Non-user completes onboarding → pending share is auto-accepted → owner notified."""
+        from models.list_model import share_list, get_shared_lists_for_user
+
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_NEW)
+        sms_capture.messages.clear()
+
+        # Step 0: initial message
+        await simulator.send_message(PHONE_NEW, "YES")
+
+        # Step 1: provide name
+        await simulator.send_message(PHONE_NEW, "Sarah")
+
+        # Step 2: provide ZIP → completes onboarding
+        result = await simulator.send_message(PHONE_NEW, "90210")
+
+        # Completion message should mention the shared list
+        assert "Grocery List" in result["output"]
+        assert "all set" in result["output"].lower() or "set" in result["output"].lower()
+
+        # Share should now be accepted
+        shared = get_shared_lists_for_user(PHONE_NEW)
+        assert len(shared) == 1
+        assert shared[0][1] == "Grocery List"
+
+        # Owner should have been notified
+        owner_msgs = [m for m in sms_capture.messages if m["to"] == PHONE_OWNER]
+        assert any("joined" in m["message"].lower() or "accepted" in m["message"].lower() for m in owner_msgs)
+
+    @pytest.mark.asyncio
+    async def test_non_user_referral_source_tagged(self, premium_owner, owner_list, simulator, sms_capture):
+        """Non-user invited via shared list gets tagged with 'shared-list' referral source."""
+        from models.list_model import share_list
+        from database import get_db_connection, return_db_connection
+
+        share_list(PHONE_OWNER, owner_list["list_id"], PHONE_NEW)
+
+        # Complete onboarding (referral set after user record exists)
+        await simulator.send_message(PHONE_NEW, "YES")
+        await simulator.send_message(PHONE_NEW, "Sarah")
+
+        # Check referral source (set during step 1 when user record exists)
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT referral_source FROM users WHERE phone_number = %s", (PHONE_NEW,))
+        row = c.fetchone()
+        return_db_connection(conn)
+
+        assert row is not None
+        assert row[0] == "shared-list"
+
+    @pytest.mark.asyncio
+    async def test_non_user_without_pending_share_gets_normal_welcome(self, simulator, sms_capture):
+        """A non-user without pending shares gets the normal welcome message."""
+        result = await simulator.send_message(PHONE_NEW, "Hi")
+        assert "welcome" in result["output"].lower() or "remyndrs" in result["output"].lower()
+        # Should NOT mention any shared list
+        assert "shared" not in result["output"].lower()

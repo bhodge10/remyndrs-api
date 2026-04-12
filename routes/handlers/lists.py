@@ -565,29 +565,81 @@ def handle_share_list(
         log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
         return reply_text
 
-    # Get owner's name for the invitation message
-    owner_user = get_user(phone_number)
-    owner_name = owner_user.get('first_name', 'Someone') if owner_user else 'Someone'
+    # Store pending state — ask for the recipient's name before sending invitation
+    import json
+    pending_data = json.dumps({
+        'list_id': list_id,
+        'shared_with_phone': target_phone,
+        'list_name': actual_name,
+    })
+    create_or_update_user(phone_number, pending_share_name=pending_data)
 
-    # Check if recipient is on Remyndrs
+    reply_text = f"What's the name of the person at {_format_phone(target_phone)}?"
+    log_interaction(phone_number, incoming_msg, reply_text, "share_list_ask_name", True)
+    return reply_text
+
+
+def handle_pending_share_name(phone_number: str, incoming_msg: str) -> str | None:
+    """Handle the name response after a share_list action.
+    Returns reply text if handled, None if no pending share name."""
+    import json
+    from services.sms_service import send_sms
+    from models.user import get_user
+    from models.list_model import set_share_name
+
+    user = get_user(phone_number)
+    if not user:
+        return None
+
+    # pending_share_name is stored in the user record
+    from database import get_db_connection, return_db_connection
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('SELECT pending_share_name FROM users WHERE phone_number = %s', (phone_number,))
+    row = c.fetchone()
+    return_db_connection(conn)
+
+    if not row or not row[0]:
+        return None
+
+    try:
+        pending = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        create_or_update_user(phone_number, pending_share_name=None)
+        return None
+
+    list_id = pending['list_id']
+    target_phone = pending['shared_with_phone']
+    list_name = pending['list_name']
+
+    # The incoming message is the name
+    recipient_name = incoming_msg.strip().title()
+
+    # Save the name on the share
+    set_share_name(list_id, target_phone, recipient_name)
+
+    # Clear the pending state
+    create_or_update_user(phone_number, pending_share_name=None)
+
+    # Get owner's name for the invitation message
+    owner_name = user[1] if user[1] else "Someone"
+
+    # Send the invitation SMS
     recipient = get_user(target_phone)
     if recipient:
-        # Existing user — send invitation SMS
         invite_msg = (
-            f"[Shared List] {owner_name} shared '{actual_name}' with you!\n\n"
+            f"[Shared List] Hi {recipient_name}! {owner_name} shared '{list_name}' with you.\n\n"
             f"Reply ACCEPT to join or DECLINE to skip."
         )
-        send_sms(target_phone, invite_msg, message_type="reply")
     else:
-        # Not on Remyndrs — send signup invitation
         invite_msg = (
-            f"{owner_name} shared a list with you on Remyndrs! "
-            f"Reply YES to join and see '{actual_name}'."
+            f"Hi {recipient_name}! {owner_name} shared a list with you on Remyndrs. "
+            f"Reply YES to join and see '{list_name}'."
         )
-        send_sms(target_phone, invite_msg, message_type="reply")
+    send_sms(target_phone, invite_msg, message_type="reply")
 
-    reply_text = f"Invitation sent to {_format_phone(target_phone)} for '{actual_name}'."
-    log_interaction(phone_number, incoming_msg, reply_text, "share_list", True)
+    reply_text = f"Invitation sent to {recipient_name} ({_format_phone(target_phone)}) for '{list_name}'."
+    log_interaction(phone_number, incoming_msg, reply_text, "share_list_named", True)
     return reply_text
 
 
@@ -651,12 +703,8 @@ def handle_show_list_members(
         reply_text = f"'{actual_name}' isn't shared with anyone."
     else:
         lines = [f"'{actual_name}' is shared with:\n"]
-        for i, (member_phone, status, permission) in enumerate(members, 1):
-            # Try to get member's name
-            member_user = get_user(member_phone)
-            member_name = member_user.get('first_name', '') if member_user else ''
-            display = member_name if member_name else _format_phone(member_phone)
-
+        for i, (member_phone, status, permission, name) in enumerate(members, 1):
+            display = name if name else _format_phone(member_phone)
             status_label = " (pending)" if status == 'pending' else ""
             lines.append(f"{i}. {display}{status_label}")
 
@@ -701,6 +749,9 @@ def handle_leave_shared_list(
 
 def handle_accept_share(phone_number: str, incoming_msg: str) -> str:
     """Handle ACCEPT keyword for pending shared list invitations."""
+    from services.sms_service import send_sms
+    from models.list_model import get_share_name
+
     pending = get_pending_shares(phone_number)
 
     if not pending:
@@ -711,6 +762,8 @@ def handle_accept_share(phone_number: str, incoming_msg: str) -> str:
         success, message = accept_share(phone_number, list_id)
         if success:
             reply_text = f"You now have access to '{list_name}'! Text 'Show {list_name}' to see it."
+            display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+            send_sms(owner_phone, f"{display_name} accepted your shared list '{list_name}'.", message_type="reply")
         else:
             reply_text = message
     else:
@@ -724,6 +777,8 @@ def handle_accept_share(phone_number: str, incoming_msg: str) -> str:
                 f"You have {remaining} more pending invitation{'s' if remaining > 1 else ''}. "
                 f"Reply ACCEPT again to accept the next one."
             )
+            display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+            send_sms(owner_phone, f"{display_name} accepted your shared list '{list_name}'.", message_type="reply")
         else:
             reply_text = message
 
@@ -734,6 +789,7 @@ def handle_accept_share(phone_number: str, incoming_msg: str) -> str:
 def handle_decline_share(phone_number: str, incoming_msg: str) -> str:
     """Handle DECLINE keyword for pending shared list invitations."""
     from services.sms_service import send_sms
+    from models.list_model import get_share_name
 
     pending = get_pending_shares(phone_number)
 
@@ -746,7 +802,8 @@ def handle_decline_share(phone_number: str, incoming_msg: str) -> str:
     if success:
         reply_text = f"Declined the invitation for '{list_name}'."
         # Notify the owner
-        send_sms(owner_phone, f"{_format_phone(phone_number)} declined your shared list '{list_name}'.", message_type="reply")
+        display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+        send_sms(owner_phone, f"{display_name} declined your shared list '{list_name}'.", message_type="reply")
     else:
         reply_text = message
 

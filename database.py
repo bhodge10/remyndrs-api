@@ -245,6 +245,7 @@ def init_db():
                 list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
                 owner_phone TEXT NOT NULL,
                 shared_with_phone TEXT NOT NULL,
+                shared_with_name TEXT,
                 permission TEXT NOT NULL DEFAULT 'edit',
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -661,6 +662,10 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_tier_version INTEGER DEFAULT 2",
             # Backfill all existing users to v1 (grandfathered)
             "UPDATE users SET free_tier_version = 1 WHERE free_tier_version = 2 OR free_tier_version IS NULL",
+            # Shared lists: pending name prompt state (JSON with list_id, shared_with_phone, list_name)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_share_name TEXT",
+            # Shared lists: owner-assigned name for the person they shared with
+            "ALTER TABLE list_shares ADD COLUMN IF NOT EXISTS shared_with_name TEXT",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
