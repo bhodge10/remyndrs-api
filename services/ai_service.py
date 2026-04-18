@@ -232,6 +232,13 @@ IMPORTANT: "before [date]" means SUBTRACT from that date. Do NOT interpret "a we
 For SPECIFIC TIME reminders (use action "reminder"):
 - "tomorrow at 9am" = tomorrow's date at 09:00:00
 - "Saturday at 8am" = next Saturday at 08:00:00
+- "at 8am on May 8" = May 8 of the current year at 08:00:00 (or next year if May 8 is already past)
+- "on October 3rd at 2pm" = October 3 at 14:00:00
+
+CRITICAL DATE RULE for MONTH-NAME dates ("on May 8", "October 3rd", "Dec 15"):
+Use the EXACT month and day the user named. Do NOT substitute tomorrow's date or any nearby date.
+If the named date is already in the past for the current year, roll forward to next year.
+Example: today is April 18, 2026. "Remind me on May 8 at 8am" → reminder_date: "2026-05-08 08:00:00" (NOT "2026-04-19 08:00:00").
 
 For reminder requests with DAYS OF THE WEEK:
 - Use "Today is: {current_day_of_week}" to calculate
