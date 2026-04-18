@@ -5160,14 +5160,18 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             if not list_name:
                 item_valid_check, item_result_check = validate_item_text(item_text)
                 if item_valid_check:
-                    lists = get_lists(phone_number)
-                    if len(lists) == 1:
+                    from routes.handlers.lists import get_all_lists_with_shared
+                    all_lists = get_all_lists_with_shared(phone_number)
+                    if len(all_lists) == 1:
                         # Only one list, use it directly
-                        list_name = lists[0][1]
-                    elif len(lists) > 1:
-                        # Multiple lists, ask which one
+                        list_name = all_lists[0]['list_name']
+                    elif len(all_lists) > 1:
+                        # Multiple lists, ask which one — include shared in the menu
                         create_or_update_user(phone_number, pending_list_item=item_result_check, pending_delete=False)
-                        list_options = "\n".join([f"{i+1}. {l[1]}" for i, l in enumerate(lists)])
+                        list_options = "\n".join(
+                            f"{i+1}. {'[Shared] ' if l['is_shared'] else ''}{l['list_name']}"
+                            for i, l in enumerate(all_lists)
+                        )
                         reply_text = f"Which list would you like to add these to?\n\n{list_options}\n\nReply with a number:"
                         log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
                         list_selection_handled = True
@@ -5234,8 +5238,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
                         log_interaction(phone_number, incoming_msg, reply_text, "add_to_shared_list", True)
 
-                # Auto-create list if it doesn't exist (and not a shared list)
-                if not list_info and not shared_list_match:
+                # Three paths: shared list already handled, auto-create, or owned add
+                if shared_list_match:
+                    # Already handled in the shared-list branch above; skip the owned/auto-create logic
+                    pass
+                elif not list_info:
                     from services.tier_service import (
                         can_create_list, get_tier_limits, get_user_tier,
                         format_list_limit_message, format_list_item_limit_message,
@@ -5324,63 +5331,72 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
         elif ai_response["action"] == "add_item_ask_list":
             item_text = ai_response.get("item_text")
-            lists = get_lists(phone_number)
-            if len(lists) == 1:
-                # Only one list, add directly with multi-item parsing
-                list_id = lists[0][0]
-                list_name = lists[0][1]
+            from routes.handlers.lists import get_all_lists_with_shared
+            all_lists = get_all_lists_with_shared(phone_number)
+            if len(all_lists) == 1:
+                # Only one list total (owned or shared) — add directly
+                only = all_lists[0]
+                list_id = only['list_id']
+                list_name = only['list_name']
+                is_shared = only['is_shared']
+                owner_phone = only['owner_phone']
 
                 # Parse multiple items
                 items_to_add = parse_list_items(item_text, phone_number)
 
-                # Check tier limit for items per list
                 from services.tier_service import (
                     can_add_list_item, get_tier_limits, get_user_tier,
                     format_list_item_limit_message, add_list_item_counter_to_message
                 )
-                allowed, limit_msg = can_add_list_item(phone_number, list_id)
+                if is_shared:
+                    read_only, _ = is_shared_list_read_only(list_id)
+                    if read_only:
+                        reply_text = f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired."
+                        log_interaction(phone_number, incoming_msg, reply_text, "add_item_ask_list", False)
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix(reply_text))
+                        return Response(content=str(resp), media_type="application/xml")
+
+                # Tier limits follow the list owner for shared lists
+                limit_phone = owner_phone if is_shared else phone_number
+                allowed, _ = can_add_list_item(limit_phone, list_id)
                 if not allowed:
-                    # List is full - use Level 4 formatter
                     reply_text = format_list_item_limit_message(
-                        phone_number, list_name, items_to_add, 0
+                        limit_phone, list_name, items_to_add, 0
                     )
                 else:
-                    tier_limits = get_tier_limits(get_user_tier(phone_number))
+                    tier_limits = get_tier_limits(get_user_tier(limit_phone))
                     max_items = tier_limits['max_items_per_list']
                     item_count = get_item_count(list_id)
                     available_slots = max_items - item_count
 
-                    # Add items up to the limit
                     added_items = []
                     for item in items_to_add:
                         if len(added_items) < available_slots:
                             add_list_item(list_id, phone_number, item)
                             added_items.append(item)
 
-                    # Track last active list
                     create_or_update_user(phone_number, last_active_list=list_name)
 
-                    # Handle partial or full adds with progressive education
                     if len(added_items) < len(items_to_add):
-                        # Some items skipped - use Level 4 formatter
                         reply_text = format_list_item_limit_message(
-                            phone_number, list_name, items_to_add, len(added_items)
+                            limit_phone, list_name, items_to_add, len(added_items)
                         )
                     else:
-                        # All items added successfully
+                        display = f"shared list '{list_name}'" if is_shared else f"your {list_name}"
                         if len(added_items) == 1:
-                            base_reply = f"Added {added_items[0]} to your {list_name}"
+                            base_reply = f"Added {added_items[0]} to {display}"
                         else:
-                            base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                            base_reply = f"Added {len(added_items)} items to {display}: {', '.join(added_items)}"
+                        reply_text = base_reply if is_shared else add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
-                        # Add progressive counter
-                        reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
-
-            elif len(lists) > 1:
-                # Multiple lists, ask which one (store original text for parsing later)
-                # Clear pending_delete flag to avoid blocking the list selection handler
+            elif len(all_lists) > 1:
+                # Multiple lists, ask which one — include shared lists in the menu
                 create_or_update_user(phone_number, pending_list_item=item_text, pending_delete=False)
-                list_options = "\n".join([f"{i+1}. {l[1]}" for i, l in enumerate(lists)])
+                list_options = "\n".join(
+                    f"{i+1}. {'[Shared] ' if l['is_shared'] else ''}{l['list_name']}"
+                    for i, l in enumerate(all_lists)
+                )
                 reply_text = f"Which list would you like to add these to?\n\n{list_options}\n\nReply with a number:"
             else:
                 reply_text = "You don't have any lists yet. Try 'Create a grocery list' first!"

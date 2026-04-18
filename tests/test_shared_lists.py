@@ -919,6 +919,24 @@ class TestSharedListEditPaths:
         # Items still there
         assert len(get_list_items(accepted_share["list_id"])) == 2
 
+    @pytest.mark.asyncio
+    async def test_end_to_end_add_to_shared_list_via_sms(self, accepted_share, simulator, ai_mock):
+        """End-to-end via the SMS webhook — catches inline-dispatch bugs in main.py.
+
+        Regression guard for a crash where main.py's add_to_list inline logic fell into
+        an else branch that indexed list_info[0] while list_info was None (shared-list
+        match had been stored in a separate variable).
+        """
+        ai_mock.set_response("add cheese to grocery list", {
+            "action": "add_to_list",
+            "list_name": "Grocery List",
+            "item_text": "cheese",
+        })
+        result = await simulator.send_message(PHONE_SHARED, "Add cheese to Grocery List")
+        out = result["output"].lower()
+        assert "something went wrong" not in out, f"Handler crashed: {result['output']}"
+        assert "cheese" in out, f"Item not added: {result['output']}"
+
     def test_ai_context_includes_shared_lists(self, accepted_share):
         """AI prompt must include shared lists so the model can route messages to them."""
         from services.ai_service import process_with_ai
