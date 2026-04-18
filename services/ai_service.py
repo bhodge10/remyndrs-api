@@ -14,7 +14,7 @@ from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TEMPERATURE, OPENAI_MAX_
 from models.memory import get_memories
 from models.reminder import get_user_reminders
 from models.user import get_user_timezone, get_user_first_name
-from models.list_model import get_lists, get_list_items
+from models.list_model import get_lists, get_list_items, get_shared_lists_for_user
 from utils.timezone import get_user_current_time
 from database import log_api_usage
 
@@ -124,11 +124,14 @@ def process_with_ai(message: str, phone_number: str, context: dict[str, Any]) ->
         else:
             reminders_context = "No reminders set."
 
-        # Get and format lists
-        lists = get_lists(phone_number)
-        if lists:
+        # Get and format lists (owned + accepted shared)
+        owned = [(lid, name, count, False) for (lid, name, count, _done) in get_lists(phone_number)]
+        shared = [(lid, name, count, True) for (lid, name, count, _done, _owner) in get_shared_lists_for_user(phone_number)]
+        all_lists = owned + shared
+        if all_lists:
             formatted_lists = []
-            for list_id, list_name, item_count, completed_count in lists:
+            for list_id, list_name, item_count, is_shared in all_lists:
+                prefix = "[Shared] " if is_shared else ""
                 items = get_list_items(list_id)
                 if items:
                     item_texts = []
@@ -137,9 +140,9 @@ def process_with_ai(message: str, phone_number: str, context: dict[str, Any]) ->
                             item_texts.append(f"  [x] {item_text}")
                         else:
                             item_texts.append(f"  [ ] {item_text}")
-                    formatted_lists.append(f"- {list_name} ({item_count} items):\n" + "\n".join(item_texts))
+                    formatted_lists.append(f"- {prefix}{list_name} ({item_count} items):\n" + "\n".join(item_texts))
                 else:
-                    formatted_lists.append(f"- {list_name} (empty)")
+                    formatted_lists.append(f"- {prefix}{list_name} (empty)")
             lists_context = "\n".join(formatted_lists)
         else:
             lists_context = "No lists created yet."
@@ -175,6 +178,8 @@ USER'S REMINDERS:
 
 USER'S LISTS:
 {lists_context}
+
+Lists prefixed with [Shared] are shared lists the user has accepted from someone else. The user CAN: view, add items, remove items, check/uncheck items. The user CANNOT: delete the list, rename the list, or re-share it — only the list's owner can. When the user names a list in a message, match against all lists above (owned and shared).
 
 IMPORTANT: Each memory shows when it was recorded. Use these dates when answering questions about "when did I..."
 

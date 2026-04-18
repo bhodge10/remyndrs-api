@@ -88,7 +88,16 @@ def handle_pending_delete(
                     reply_msg = "Couldn't delete that recurring reminder."
 
             elif delete_type == 'list_item':
-                if delete_list_item(phone_number, delete_data['list_name'], delete_data['text']):
+                list_id = delete_data.get('list_id')
+                is_shared = delete_data.get('is_shared', False)
+                if list_id is not None:
+                    from models.list_model import delete_list_item_by_list_id
+                    if delete_list_item_by_list_id(list_id, delete_data['text']):
+                        display = f"shared list '{delete_data['list_name']}'" if is_shared else delete_data['list_name']
+                        reply_msg = f"Removed '{delete_data['text']}' from {display}"
+                    else:
+                        reply_msg = "Couldn't delete that item."
+                elif delete_list_item(phone_number, delete_data['list_name'], delete_data['text']):
                     reply_msg = f"Removed '{delete_data['text']}' from {delete_data['list_name']}"
                 else:
                     reply_msg = "Couldn't delete that item."
@@ -306,31 +315,39 @@ def handle_pending_list_item(
         return (False, None)
 
     list_num = int(incoming_msg.strip())
-    lists = get_lists(phone_number)
+    from routes.handlers.lists import get_all_lists_with_shared
+    from models.list_model import is_shared_list_read_only
+    all_lists = get_all_lists_with_shared(phone_number)
 
-    if 1 <= list_num <= len(lists):
-        selected_list = lists[list_num - 1]
-        list_id = selected_list[0]
-        list_name = selected_list[1]
+    if 1 <= list_num <= len(all_lists):
+        selected = all_lists[list_num - 1]
+        list_id = selected['list_id']
+        list_name = selected['list_name']
+        is_shared = selected['is_shared']
+        owner_phone = selected['owner_phone']
 
-        # Parse multiple items
+        if is_shared:
+            read_only, _ = is_shared_list_read_only(list_id)
+            if read_only:
+                create_or_update_user(phone_number, pending_list_item=None)
+                return (True, f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired.")
+
+        limit_phone = owner_phone if is_shared else phone_number
         items_to_add = parse_list_items(pending_item, phone_number)
 
-        # Check item limit using tier-aware limits
-        tier_limits = get_tier_limits(get_user_tier(phone_number))
+        # Tier limits follow the list owner for shared lists
+        tier_limits = get_tier_limits(get_user_tier(limit_phone))
         max_items = tier_limits['max_items_per_list']
         item_count = get_item_count(list_id)
         available_slots = max_items - item_count
 
         if available_slots <= 0:
             create_or_update_user(phone_number, pending_list_item=None)
-            # Use Level 4 formatter for clear WHY-WHAT-HOW message
             reply_msg = format_list_item_limit_message(
-                phone_number, list_name, items_to_add, 0
+                limit_phone, list_name, items_to_add, 0
             )
             return (True, reply_msg)
 
-        # Add items
         added_items = []
         for item in items_to_add:
             if len(added_items) < available_slots:
@@ -339,26 +356,22 @@ def handle_pending_list_item(
 
         create_or_update_user(phone_number, pending_list_item=None, last_active_list=list_name)
 
-        # Handle partial or full adds with progressive education
         if len(added_items) < len(items_to_add):
-            # Some items skipped - use Level 4 formatter
             reply_msg = format_list_item_limit_message(
-                phone_number, list_name, items_to_add, len(added_items)
+                limit_phone, list_name, items_to_add, len(added_items)
             )
         else:
-            # All items added successfully
+            display = f"shared list '{list_name}'" if is_shared else f"your {list_name}"
             if len(added_items) == 1:
-                base_reply = f"Added {added_items[0]} to your {list_name}"
+                base_reply = f"Added {added_items[0]} to {display}"
             else:
-                base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
-
-            # Add progressive counter
-            reply_msg = add_list_item_counter_to_message(phone_number, list_id, base_reply)
+                base_reply = f"Added {len(added_items)} items to {display}: {', '.join(added_items)}"
+            reply_msg = base_reply if is_shared else add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
         log_interaction(phone_number, incoming_msg, f"Added {len(added_items)} items to {list_name}", "add_to_list", True)
         return (True, reply_msg)
     else:
-        return (True, f"Please reply with a number between 1 and {len(lists)}")
+        return (True, f"Please reply with a number between 1 and {len(all_lists)}")
 
 
 def handle_pending_reminder_confirmation(
