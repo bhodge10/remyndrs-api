@@ -87,7 +87,7 @@ SMS -> Twilio webhook (/sms) -> main.py validates -> ai_service.py processes wit
 | `utils/db_helpers.py` | Encryption-aware database query helpers |
 
 ### Database Tables
-`users`, `reminders`, `recurring_reminders`, `memories`, `lists`, `list_items`, `interactions`, `support_tickets`, `contact_messages`, `broadcast_messages`, `conversation_flags`, `smart_nudges`, `monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
+`users`, `reminders`, `recurring_reminders`, `memories`, `lists`, `list_items`, `list_shares`, `interactions`, `support_tickets`, `contact_messages`, `broadcast_messages`, `conversation_flags`, `smart_nudges`, `monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
 
 ## Deployment
 
@@ -181,6 +181,9 @@ When users view a numbered list (memories, lists, reminders, recurring reminders
 
 ### Field Encryption
 Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION_KEY` and `HASH_KEY` env vars.
+
+### Shared Lists
+Premium-only feature allowing users to share lists with up to 4 non-premium users. Sharing is tracked in `list_shares` table with pending/accepted/declined status. Non-owners can add/remove/complete items but cannot delete, rename, or share the list. Key functions in `models/list_model.py`: `share_list()`, `accept_share()`, `get_accessible_list_by_name()`, `can_user_access_list()`. Handlers in `routes/handlers/lists.py`. Config: `SHARED_LIST_MAX_MEMBERS=4`, `SHARED_LIST_MAX_PER_USER=3`, `SHARED_LIST_MAX_RECEIVED=5`. ACCEPT/DECLINE keywords handled before AI processing. See `docs/shared-lists.md` for full scope.
 
 ### Smart Nudges
 Proactive AI intelligence layer — sends ONE contextual insight per day. 8 nudge types, tier-gated. OFF by default. See `docs/changelog.md` for full implementation details.

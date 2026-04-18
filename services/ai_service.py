@@ -653,6 +653,53 @@ For RENAMING A LIST:
     "confirmation": "Renamed [old name] to [new name]"
 }}
 
+For SHARING A LIST (Premium users only):
+{{
+    "action": "share_list",
+    "list_name": "the name of the list to share",
+    "phone_number": "the phone number to share with (optional, E.164 format with +1 country code)",
+    "shared_with_name": "the name of the person to share with (optional, when no phone number given)",
+    "confirmation": "Sharing [list name] with [phone number or name]"
+}}
+Include phone_number when the user provides digits. Include shared_with_name when the user provides a name instead.
+Examples:
+- "Share grocery list with 555-123-4567" → {{"action": "share_list", "list_name": "grocery list", "phone_number": "+15551234567"}}
+- "Share my todo list with 8015551234" → {{"action": "share_list", "list_name": "todo list", "phone_number": "+18015551234"}}
+- "Share vacation list with Sarah" → {{"action": "share_list", "list_name": "vacation list", "shared_with_name": "Sarah"}}
+- "Share grocery list with Mom" → {{"action": "share_list", "list_name": "grocery list", "shared_with_name": "Mom"}}
+Note: Normalize phone numbers to E.164 format with +1 country code if not provided.
+
+For REMOVING A USER FROM A SHARED LIST:
+{{
+    "action": "unshare_list",
+    "list_name": "the name of the shared list",
+    "phone_number": "the phone number to remove (optional — omit to stop sharing with everyone)",
+    "confirmation": "Removed access for [phone number]"
+}}
+Examples:
+- "Stop sharing grocery list with 555-123-4567" → {{"action": "unshare_list", "list_name": "grocery list", "phone_number": "+15551234567"}}
+- "Stop sharing grocery list" → {{"action": "unshare_list", "list_name": "grocery list"}}
+
+For SHOWING WHO HAS ACCESS TO A SHARED LIST:
+{{
+    "action": "show_list_members",
+    "list_name": "the name of the shared list",
+    "confirmation": "Showing members of [list name]"
+}}
+Examples:
+- "Who's on my grocery list?" → {{"action": "show_list_members", "list_name": "grocery list"}}
+- "Who can see my todo list?" → {{"action": "show_list_members", "list_name": "todo list"}}
+
+For LEAVING A SHARED LIST (non-owner):
+{{
+    "action": "leave_shared_list",
+    "list_name": "the name of the shared list to leave",
+    "confirmation": "Leaving [list name]"
+}}
+Examples:
+- "Leave grocery list" → {{"action": "leave_shared_list", "list_name": "grocery list"}}
+- "Remove me from the grocery list" → {{"action": "leave_shared_list", "list_name": "grocery list"}}
+
 MULTI-COMMAND SUPPORT:
 If the user's message contains MULTIPLE distinct commands, return an array of actions instead of a single action.
 

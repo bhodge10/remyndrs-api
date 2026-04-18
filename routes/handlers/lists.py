@@ -12,7 +12,14 @@ from models.list_model import (
     create_list, get_list_by_name, get_lists, get_list_items,
     add_list_item, get_item_count, mark_item_complete, mark_item_incomplete,
     delete_list_item, delete_list as db_delete_list, clear_list as db_clear_list,
-    rename_list as db_rename_list, find_item_in_any_list
+    rename_list as db_rename_list, find_item_in_any_list,
+    share_list, unshare_list, unshare_list_all, get_list_members,
+    get_accessible_list_by_name, can_user_access_list,
+    get_shared_lists_for_user, get_pending_shares,
+    accept_share, decline_share, leave_shared_list,
+    add_list_item as db_add_list_item,
+    mark_item_complete_by_list_id, mark_item_incomplete_by_list_id,
+    delete_list_item_by_list_id
 )
 from services.ai_service import parse_list_items
 from utils.validation import (
@@ -501,3 +508,498 @@ def handle_rename_list(
 
     log_interaction(phone_number, incoming_msg, reply_text, "rename_list", True)
     return reply_text
+
+
+# =====================================================
+# SHARED LIST HANDLERS
+# =====================================================
+
+
+def handle_share_list(
+    phone_number: str,
+    incoming_msg: str,
+    ai_response: dict[str, Any]
+) -> str:
+    """Handle share_list action — share a list with another user."""
+    import json
+    from services.tier_service import can_share_list
+    from services.sms_service import send_sms
+    from models.user import get_user
+    from models.list_model import get_known_recipients, set_share_name
+
+    list_name = ai_response.get("list_name")
+    target_phone = ai_response.get("phone_number")
+    target_name = ai_response.get("shared_with_name")
+
+    # Check premium status early
+    allowed, limit_msg = can_share_list(phone_number)
+    if not allowed:
+        reply_text = limit_msg
+        log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+        return reply_text
+
+    # Find the list early (needed for all paths)
+    list_info = get_list_by_name(phone_number, list_name)
+    if not list_info:
+        reply_text = f"I couldn't find a list called '{list_name}'."
+        log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+        return reply_text
+
+    list_id, actual_name = list_info
+
+    # --- Path A: Name given instead of phone number ---
+    if not target_phone and target_name:
+        matches = get_known_recipients(phone_number, target_name)
+
+        if len(matches) == 1:
+            # Exact match — use the known phone, skip name prompt
+            target_phone = matches[0][0]
+            recipient_name = matches[0][1]
+
+            if target_phone == phone_number:
+                reply_text = "You can't share a list with yourself!"
+                log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+                return reply_text
+
+            success, message = share_list(phone_number, list_id, target_phone)
+            if not success:
+                reply_text = message
+                log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+                return reply_text
+
+            # We already know the name — save it and send invitation immediately
+            set_share_name(list_id, target_phone, recipient_name)
+            owner_user = get_user(phone_number)
+            owner_name = owner_user[1] if owner_user else "Someone"
+
+            recipient = get_user(target_phone)
+            if recipient:
+                invite_msg = (
+                    f"[Shared List] Hi {recipient_name}! {owner_name} shared '{actual_name}' with you.\n\n"
+                    f"Reply ACCEPT to join or DECLINE to skip."
+                )
+            else:
+                invite_msg = (
+                    f"Hi {recipient_name}! {owner_name} shared a list with you on Remyndrs. "
+                    f"Reply YES to join and see '{actual_name}'."
+                )
+            send_sms(target_phone, invite_msg, message_type="reply")
+
+            reply_text = f"Invitation sent to {recipient_name} for '{actual_name}'."
+            log_interaction(phone_number, incoming_msg, reply_text, "share_list_by_name", True)
+            return reply_text
+
+        elif len(matches) > 1:
+            # Multiple people with same name — ask which one
+            lines = [f"You've shared with multiple people named {target_name}:\n"]
+            for i, (m_phone, m_name) in enumerate(matches, 1):
+                lines.append(f"{i}. {m_name} — {_format_phone(m_phone)}")
+            lines.append(f"\nPlease share using their phone number instead.")
+            reply_text = "\n".join(lines)
+            log_interaction(phone_number, incoming_msg, reply_text, "share_list_disambiguate", True)
+            return reply_text
+
+        else:
+            # Unknown name — ask for phone number
+            pending_data = json.dumps({
+                'list_id': list_id,
+                'list_name': actual_name,
+                'recipient_name': target_name,
+            })
+            create_or_update_user(phone_number, pending_share_name=pending_data)
+            reply_text = f"I don't have a number for {target_name}. What's their phone number?"
+            log_interaction(phone_number, incoming_msg, reply_text, "share_list_ask_phone", True)
+            return reply_text
+
+    # --- Path B: Phone number given ---
+    if not target_phone:
+        reply_text = "Please include the phone number or name of the person you want to share with."
+        log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+        return reply_text
+
+    # Normalize phone number
+    target_phone = _normalize_phone(target_phone)
+
+    # Can't share with yourself
+    if target_phone == phone_number:
+        reply_text = "You can't share a list with yourself!"
+        log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+        return reply_text
+
+    # Create the share
+    success, message = share_list(phone_number, list_id, target_phone)
+    if not success:
+        reply_text = message
+        log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+        return reply_text
+
+    # Store pending state — ask for the recipient's name before sending invitation
+    pending_data = json.dumps({
+        'list_id': list_id,
+        'shared_with_phone': target_phone,
+        'list_name': actual_name,
+    })
+    create_or_update_user(phone_number, pending_share_name=pending_data)
+
+    reply_text = f"What's the name of the person at {_format_phone(target_phone)}?"
+    log_interaction(phone_number, incoming_msg, reply_text, "share_list_ask_name", True)
+    return reply_text
+
+
+def handle_pending_share_name(phone_number: str, incoming_msg: str) -> str | None:
+    """Handle the pending response after a share_list action.
+    Two modes:
+      - shared_with_phone set → owner is providing the recipient's name
+      - recipient_name set (no phone) → owner is providing a phone number
+    Returns reply text if handled, None if no pending state."""
+    import json
+    from services.sms_service import send_sms
+    from models.user import get_user
+    from models.list_model import set_share_name
+
+    user = get_user(phone_number)
+    if not user:
+        return None
+
+    # pending_share_name is stored in the user record
+    from database import get_db_connection, return_db_connection
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('SELECT pending_share_name FROM users WHERE phone_number = %s', (phone_number,))
+    row = c.fetchone()
+    return_db_connection(conn)
+
+    if not row or not row[0]:
+        return None
+
+    try:
+        pending = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        create_or_update_user(phone_number, pending_share_name=None)
+        return None
+
+    list_id = pending['list_id']
+    list_name = pending['list_name']
+    target_phone = pending.get('shared_with_phone')
+    recipient_name = pending.get('recipient_name')
+
+    owner_name = user[1] if user[1] else "Someone"
+
+    # --- Mode 1: Owner is providing a phone number (we already have the name) ---
+    if recipient_name and not target_phone:
+        target_phone = _normalize_phone(incoming_msg.strip())
+
+        if target_phone == phone_number:
+            create_or_update_user(phone_number, pending_share_name=None)
+            reply_text = "You can't share a list with yourself!"
+            log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+            return reply_text
+
+        success, message = share_list(phone_number, list_id, target_phone)
+        if not success:
+            create_or_update_user(phone_number, pending_share_name=None)
+            reply_text = message
+            log_interaction(phone_number, incoming_msg, reply_text, "share_list", False)
+            return reply_text
+
+        set_share_name(list_id, target_phone, recipient_name)
+        create_or_update_user(phone_number, pending_share_name=None)
+
+        # Send invitation
+        recipient = get_user(target_phone)
+        if recipient:
+            invite_msg = (
+                f"[Shared List] Hi {recipient_name}! {owner_name} shared '{list_name}' with you.\n\n"
+                f"Reply ACCEPT to join or DECLINE to skip."
+            )
+        else:
+            invite_msg = (
+                f"Hi {recipient_name}! {owner_name} shared a list with you on Remyndrs. "
+                f"Reply YES to join and see '{list_name}'."
+            )
+        send_sms(target_phone, invite_msg, message_type="reply")
+
+        reply_text = f"Invitation sent to {recipient_name} ({_format_phone(target_phone)}) for '{list_name}'."
+        log_interaction(phone_number, incoming_msg, reply_text, "share_list_named", True)
+        return reply_text
+
+    # --- Mode 2: Owner is providing a name (we already have the phone) ---
+    if target_phone:
+        recipient_name = incoming_msg.strip().title()
+
+        set_share_name(list_id, target_phone, recipient_name)
+        create_or_update_user(phone_number, pending_share_name=None)
+
+        # Send invitation
+        recipient = get_user(target_phone)
+        if recipient:
+            invite_msg = (
+                f"[Shared List] Hi {recipient_name}! {owner_name} shared '{list_name}' with you.\n\n"
+                f"Reply ACCEPT to join or DECLINE to skip."
+            )
+        else:
+            invite_msg = (
+                f"Hi {recipient_name}! {owner_name} shared a list with you on Remyndrs. "
+                f"Reply YES to join and see '{list_name}'."
+            )
+        send_sms(target_phone, invite_msg, message_type="reply")
+
+        reply_text = f"Invitation sent to {recipient_name} ({_format_phone(target_phone)}) for '{list_name}'."
+        log_interaction(phone_number, incoming_msg, reply_text, "share_list_named", True)
+        return reply_text
+
+    # Shouldn't reach here — clear state
+    create_or_update_user(phone_number, pending_share_name=None)
+    return None
+
+
+def handle_unshare_list(
+    phone_number: str,
+    incoming_msg: str,
+    ai_response: dict[str, Any]
+) -> str:
+    """Handle unshare_list action — remove sharing from a list."""
+    list_name = ai_response.get("list_name")
+    target_phone = ai_response.get("phone_number")
+
+    list_info = get_list_by_name(phone_number, list_name)
+    if not list_info:
+        reply_text = f"I couldn't find a list called '{list_name}'."
+        log_interaction(phone_number, incoming_msg, reply_text, "unshare_list", False)
+        return reply_text
+
+    list_id, actual_name = list_info
+
+    if target_phone:
+        # Remove specific user
+        target_phone = _normalize_phone(target_phone)
+        success, message = unshare_list(phone_number, list_id, target_phone)
+        if success:
+            reply_text = f"Removed {_format_phone(target_phone)} from '{actual_name}'."
+        else:
+            reply_text = message
+    else:
+        # Remove all sharing
+        success, message = unshare_list_all(phone_number, list_id)
+        if success:
+            reply_text = f"Stopped sharing '{actual_name}'. {message}"
+        else:
+            reply_text = message
+
+    log_interaction(phone_number, incoming_msg, reply_text, "unshare_list", success)
+    return reply_text
+
+
+def handle_show_list_members(
+    phone_number: str,
+    incoming_msg: str,
+    ai_response: dict[str, Any]
+) -> str:
+    """Handle show_list_members action — show who has access to a shared list."""
+    from models.user import get_user
+
+    list_name = ai_response.get("list_name")
+    list_info = get_list_by_name(phone_number, list_name)
+
+    if not list_info:
+        reply_text = f"I couldn't find a list called '{list_name}'."
+        log_interaction(phone_number, incoming_msg, reply_text, "show_list_members", False)
+        return reply_text
+
+    list_id, actual_name = list_info
+    members = get_list_members(list_id)
+
+    if not members:
+        reply_text = f"'{actual_name}' isn't shared with anyone."
+    else:
+        lines = [f"'{actual_name}' is shared with:\n"]
+        for i, (member_phone, status, permission, name) in enumerate(members, 1):
+            display = name if name else _format_phone(member_phone)
+            status_label = " (pending)" if status == 'pending' else ""
+            lines.append(f"{i}. {display}{status_label}")
+
+        reply_text = "\n".join(lines)
+
+    log_interaction(phone_number, incoming_msg, reply_text, "show_list_members", True)
+    return reply_text
+
+
+def handle_leave_shared_list(
+    phone_number: str,
+    incoming_msg: str,
+    ai_response: dict[str, Any]
+) -> str:
+    """Handle leave_shared_list action — user leaves a shared list they don't own."""
+    from models.list_model import get_accessible_list_by_name
+
+    list_name = ai_response.get("list_name")
+    accessible = get_accessible_list_by_name(phone_number, list_name)
+
+    if not accessible:
+        reply_text = f"I couldn't find a shared list called '{list_name}'."
+        log_interaction(phone_number, incoming_msg, reply_text, "leave_shared_list", False)
+        return reply_text
+
+    list_id, actual_name, is_shared, owner_phone = accessible
+
+    if not is_shared:
+        reply_text = f"'{actual_name}' is your own list. Use 'delete {actual_name}' to remove it."
+        log_interaction(phone_number, incoming_msg, reply_text, "leave_shared_list", False)
+        return reply_text
+
+    success, message = leave_shared_list(phone_number, list_id)
+    if success:
+        reply_text = f"You've left '{actual_name}'."
+    else:
+        reply_text = message
+
+    log_interaction(phone_number, incoming_msg, reply_text, "leave_shared_list", success)
+    return reply_text
+
+
+def handle_accept_share(phone_number: str, incoming_msg: str) -> str:
+    """Handle ACCEPT keyword for pending shared list invitations."""
+    from services.sms_service import send_sms
+    from models.list_model import get_share_name
+
+    pending = get_pending_shares(phone_number)
+
+    if not pending:
+        return None  # No pending shares — let normal processing continue
+
+    if len(pending) == 1:
+        share_id, list_id, owner_phone, list_name = pending[0]
+        success, message = accept_share(phone_number, list_id)
+        if success:
+            reply_text = f"You now have access to '{list_name}'! Text 'Show {list_name}' to see it."
+            display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+            send_sms(owner_phone, f"{display_name} accepted your shared list '{list_name}'.", message_type="reply")
+        else:
+            reply_text = message
+    else:
+        # Multiple pending — accept the most recent
+        share_id, list_id, owner_phone, list_name = pending[0]
+        success, message = accept_share(phone_number, list_id)
+        remaining = len(pending) - 1
+        if success:
+            reply_text = (
+                f"You now have access to '{list_name}'!\n\n"
+                f"You have {remaining} more pending invitation{'s' if remaining > 1 else ''}. "
+                f"Reply ACCEPT again to accept the next one."
+            )
+            display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+            send_sms(owner_phone, f"{display_name} accepted your shared list '{list_name}'.", message_type="reply")
+        else:
+            reply_text = message
+
+    log_interaction(phone_number, incoming_msg, reply_text, "accept_share", True)
+    return reply_text
+
+
+def handle_decline_share(phone_number: str, incoming_msg: str) -> str:
+    """Handle DECLINE keyword for pending shared list invitations."""
+    from services.sms_service import send_sms
+    from models.list_model import get_share_name
+
+    pending = get_pending_shares(phone_number)
+
+    if not pending:
+        return None  # No pending shares — let normal processing continue
+
+    share_id, list_id, owner_phone, list_name = pending[0]
+    success, message = decline_share(phone_number, list_id)
+
+    if success:
+        reply_text = f"Declined the invitation for '{list_name}'."
+        # Notify the owner
+        display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+        send_sms(owner_phone, f"{display_name} declined your shared list '{list_name}'.", message_type="reply")
+    else:
+        reply_text = message
+
+    log_interaction(phone_number, incoming_msg, reply_text, "decline_share", True)
+    return reply_text
+
+
+# =====================================================
+# SHARED LIST DISPLAY HELPERS
+# =====================================================
+
+
+def get_all_lists_with_shared(phone_number: str) -> list[dict]:
+    """Get all lists (owned + shared) for display. Returns list of dicts with list info."""
+    own_lists = get_lists(phone_number)
+    shared_lists = get_shared_lists_for_user(phone_number)
+
+    result = []
+    for list_id, list_name, item_count, completed_count in own_lists:
+        result.append({
+            'list_id': list_id,
+            'list_name': list_name,
+            'item_count': item_count or 0,
+            'completed_count': completed_count or 0,
+            'is_shared': False,
+            'owner_phone': None,
+        })
+
+    for list_id, list_name, item_count, completed_count, owner_phone in shared_lists:
+        result.append({
+            'list_id': list_id,
+            'list_name': list_name,
+            'item_count': item_count or 0,
+            'completed_count': completed_count or 0,
+            'is_shared': True,
+            'owner_phone': owner_phone,
+        })
+
+    return result
+
+
+def format_all_lists_display(phone_number: str) -> str:
+    """Format all lists (owned + shared) for SMS display."""
+    all_lists = get_all_lists_with_shared(phone_number)
+
+    if not all_lists:
+        return "You don't have any lists yet. Try 'Create a grocery list'!"
+
+    lines = []
+    for i, lst in enumerate(all_lists, 1):
+        prefix = "[Shared] " if lst['is_shared'] else ""
+        lines.append(f"{i}. {prefix}{lst['list_name']} ({lst['item_count']} items)")
+
+    # Check for pending invitations
+    pending = get_pending_shares(phone_number)
+    pending_note = ""
+    if pending:
+        pending_note = f"\n\nYou have {len(pending)} pending shared list invitation{'s' if len(pending) > 1 else ''}. Reply ACCEPT or DECLINE."
+
+    return "Your lists:\n\n" + "\n".join(lines) + "\n\nReply with a number to see that list." + pending_note
+
+
+# =====================================================
+# PHONE NUMBER HELPERS
+# =====================================================
+
+
+def _normalize_phone(phone: str) -> str:
+    """Normalize a phone number to E.164 format."""
+    # Strip all non-digit characters
+    digits = ''.join(c for c in phone if c.isdigit())
+
+    # Add country code if missing
+    if len(digits) == 10:
+        digits = '1' + digits
+    if not digits.startswith('+'):
+        digits = '+' + digits
+
+    return digits
+
+
+def _format_phone(phone: str) -> str:
+    """Format a phone number for display: (555) 123-4567."""
+    digits = ''.join(c for c in phone if c.isdigit())
+    if len(digits) == 11 and digits[0] == '1':
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    return phone
