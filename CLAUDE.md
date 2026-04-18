@@ -102,6 +102,12 @@ Config in `render.yaml`. Auto-deploys on push to main.
 - Production dependencies: `requirements-prod.txt` (no test frameworks)
 - Development dependencies: `requirements.txt` includes `-r requirements-prod.txt` + pytest
 - If database is recreated, manually update `DATABASE_URL` in all 4 Render services
+- **Render env groups** — shared config is split across these groups; update the group once and all services linked to it pick up the change:
+  - `Beta phone Numbers` — `SHARED_LISTS_BETA_PHONES`, `SMART_SUGGESTIONS_BETA_PHONES` (comma-separated E.164)
+  - `Googlae Analytics and Search API` — Google Analytics + Search Console credentials
+  - `Stripe Payment Processing` — live Stripe keys/webhooks
+  - `Stripe Test Payment Processing` — test-mode Stripe keys/webhooks
+  - `SMTP Sending` — outbound email credentials
 
 **CORS:** Use FastAPI's `CORSMiddleware`. Do NOT use manual `@app.options()` handlers.
 
