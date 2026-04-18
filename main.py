@@ -4037,11 +4037,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # If user sends just a number and has lists (but no pending item), show that list
         if incoming_msg.strip().isdigit() and not get_pending_list_item(phone_number):
             list_num = int(incoming_msg.strip())
-            lists = get_lists(phone_number)
-            if lists and 1 <= list_num <= len(lists):
-                selected_list = lists[list_num - 1]
-                list_id = selected_list[0]
-                list_name = selected_list[1]
+            from routes.handlers.lists import get_all_lists_with_shared
+            all_lists = get_all_lists_with_shared(phone_number)
+            if all_lists and 1 <= list_num <= len(all_lists):
+                selected = all_lists[list_num - 1]
+                list_id = selected['list_id']
+                list_name = selected['list_name']
+                is_shared = selected['is_shared']
+                prefix = "[Shared] " if is_shared else ""
                 # Set context so "Delete #" knows we're viewing this specific list
                 create_or_update_user(phone_number, last_active_list=list_name)
                 items = get_list_items(list_id)
@@ -4052,9 +4055,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             item_lines.append(f"{i}. [x] {item_text}")
                         else:
                             item_lines.append(f"{i}. {item_text}")
-                    reply = f"{list_name}:\n\n" + "\n".join(item_lines)
+                    reply = f"{prefix}{list_name}:\n\n" + "\n".join(item_lines)
                 else:
-                    reply = f"Your {list_name} is empty."
+                    reply = f"{prefix}{list_name} is empty." if is_shared else f"Your {list_name} is empty."
 
                 resp = MessagingResponse()
                 resp.message(reply)

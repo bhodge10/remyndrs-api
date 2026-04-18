@@ -779,3 +779,167 @@ class TestNonUserInvitationFlow:
         result = await simulator.send_message(PHONE_NEW, "No")
         # Should enter onboarding, not get a decline message
         assert "welcome" in result["output"].lower() or "name" in result["output"].lower()
+
+
+# =====================================================
+# REGRESSION: Non-owner edit paths on shared lists
+# See GitHub issue / Heather's bug report 2026-04-18:
+# shared list recipient tried to add item, got disambiguation menu
+# that didn't include the shared list.
+# =====================================================
+
+
+@pytest.fixture
+def accepted_share(premium_owner, free_user, owner_list):
+    """Share owner_list with free_user and auto-accept."""
+    from models.list_model import share_list, accept_share
+    share_list(PHONE_OWNER, owner_list["list_id"], PHONE_SHARED)
+    accept_share(PHONE_SHARED, owner_list["list_id"])
+    return owner_list
+
+
+class TestSharedListEditPaths:
+    """Non-owner operations on an accepted shared list must work end-to-end."""
+
+    def test_add_to_list_adds_item_to_shared_list(self, accepted_share):
+        from routes.handlers.lists import handle_add_to_list
+        from models.list_model import get_list_items
+
+        with patch('routes.handlers.lists.log_interaction'):
+            reply = handle_add_to_list(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Add cheese to the Grocery List",
+                ai_response={"list_name": "Grocery List", "item_text": "cheese"},
+            )
+
+        assert "cheese" in reply.lower()
+        assert "shared" in reply.lower()  # UI tells recipient it's a shared list
+        items = [i[1] for i in get_list_items(accepted_share["list_id"])]
+        assert "cheese" in items
+
+    def test_add_to_list_does_not_create_duplicate_for_non_owner(self, accepted_share):
+        """Non-owner adding to a shared list must not silently auto-create a personal duplicate."""
+        from routes.handlers.lists import handle_add_to_list
+        from models.list_model import get_lists
+
+        before = {l[1] for l in get_lists(PHONE_SHARED)}
+        with patch('routes.handlers.lists.log_interaction'):
+            handle_add_to_list(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Add cheese to Grocery List",
+                ai_response={"list_name": "Grocery List", "item_text": "cheese"},
+            )
+        after = {l[1] for l in get_lists(PHONE_SHARED)}
+        assert after == before, "Shared-list add created a phantom personal list for the non-owner"
+
+    def test_show_list_displays_shared(self, accepted_share):
+        from routes.handlers.lists import handle_show_list
+
+        with patch('routes.handlers.lists.log_interaction'):
+            reply = handle_show_list(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Show Grocery List",
+                ai_response={"list_name": "Grocery List"},
+            )
+        assert "[Shared]" in reply
+        assert "Milk" in reply
+        assert "Eggs" in reply
+
+    def test_add_item_ask_list_includes_shared_in_menu(self, accepted_share):
+        """The Heather-bug regression: disambiguation menu must include accessible shared lists."""
+        from routes.handlers.lists import handle_add_item_ask_list, create_list
+
+        # Give the recipient a couple of personal lists too so we get the menu branch
+        create_list(PHONE_SHARED, "honey do list")
+        create_list(PHONE_SHARED, "birthday list")
+
+        with patch('routes.handlers.lists.log_interaction'):
+            reply = handle_add_item_ask_list(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Add cheese",
+                ai_response={"item_text": "cheese"},
+            )
+        assert "Which list" in reply
+        assert "[Shared] Grocery List" in reply, (
+            f"Disambiguation menu missing shared list. Got: {reply}"
+        )
+
+    def test_complete_item_on_shared_list(self, accepted_share):
+        from routes.handlers.lists import handle_complete_item
+        from models.list_model import get_list_items
+
+        with patch('routes.handlers.lists.log_interaction'):
+            reply = handle_complete_item(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Check off Milk on Grocery List",
+                ai_response={"list_name": "Grocery List", "item_text": "Milk"},
+            )
+        assert "milk" in reply.lower()
+        completed = [i for i in get_list_items(accepted_share["list_id"]) if i[2]]
+        assert any("milk" in item[1].lower() for item in completed)
+
+    def test_non_owner_cannot_delete_shared_list(self, accepted_share):
+        from routes.handlers.lists import handle_delete_list
+        from models.list_model import get_list_by_name
+
+        with patch('routes.handlers.lists.log_interaction'):
+            reply = handle_delete_list(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Delete Grocery List",
+                ai_response={"list_name": "Grocery List"},
+            )
+        assert "owner" in reply.lower()
+        # List still exists on the owner's side
+        assert get_list_by_name(PHONE_OWNER, "Grocery List") is not None
+
+    def test_non_owner_cannot_rename_shared_list(self, accepted_share):
+        from routes.handlers.lists import handle_rename_list
+        from models.list_model import get_list_by_name
+
+        with patch('routes.handlers.lists.log_interaction'):
+            reply = handle_rename_list(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Rename Grocery List to Food",
+                ai_response={"old_name": "Grocery List", "new_name": "Food"},
+            )
+        assert "owner" in reply.lower()
+        assert get_list_by_name(PHONE_OWNER, "Grocery List") is not None
+
+    def test_non_owner_cannot_clear_shared_list(self, accepted_share):
+        from routes.handlers.lists import handle_clear_list
+        from models.list_model import get_list_items
+
+        with patch('routes.handlers.lists.log_interaction'):
+            reply = handle_clear_list(
+                phone_number=PHONE_SHARED,
+                incoming_msg="Clear Grocery List",
+                ai_response={"list_name": "Grocery List"},
+            )
+        assert "owner" in reply.lower()
+        # Items still there
+        assert len(get_list_items(accepted_share["list_id"])) == 2
+
+    def test_ai_context_includes_shared_lists(self, accepted_share):
+        """AI prompt must include shared lists so the model can route messages to them."""
+        from services.ai_service import process_with_ai
+
+        # Capture the prompt passed to OpenAI without actually calling it
+        captured = {}
+
+        class _FakeResp:
+            def __init__(self):
+                self.choices = [type('C', (), {'message': type('M', (), {'content': '{"action":"help","response":"ok"}'})()})()]
+                self.usage = type('U', (), {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2})()
+
+        def fake_create(**kwargs):
+            captured['messages'] = kwargs.get('messages', [])
+            return _FakeResp()
+
+        with patch('services.ai_service.OpenAI') as mock_openai:
+            mock_openai.return_value.chat.completions.create = fake_create
+            process_with_ai("hi", PHONE_SHARED, {})
+
+        system_prompt = next((m['content'] for m in captured.get('messages', []) if m['role'] == 'system'), "")
+        assert "[Shared] Grocery List" in system_prompt, (
+            f"AI system prompt missing shared list context. Got:\n{system_prompt[:800]}"
+        )

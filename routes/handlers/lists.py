@@ -19,7 +19,7 @@ from models.list_model import (
     accept_share, decline_share, leave_shared_list,
     add_list_item as db_add_list_item,
     mark_item_complete_by_list_id, mark_item_incomplete_by_list_id,
-    delete_list_item_by_list_id
+    delete_list_item_by_list_id, is_shared_list_read_only
 )
 from services.ai_service import parse_list_items
 from utils.validation import (
@@ -118,7 +118,24 @@ def handle_add_to_list(
 
     # Parse multiple items
     items_to_add = parse_list_items(item_text, phone_number)
-    list_info = get_list_by_name(phone_number, list_name)
+
+    # Look up list across owned + accepted shared lists
+    accessible = get_accessible_list_by_name(phone_number, list_name)
+    is_shared = False
+    owner_phone = None
+    if accessible:
+        list_id, actual_name, is_shared, owner_phone = accessible
+        list_info = (list_id, actual_name)
+    else:
+        list_info = None
+
+    # Enforce read-only for shared lists whose owner has lost Premium
+    if is_shared:
+        read_only, _ = is_shared_list_read_only(list_info[0])
+        if read_only:
+            reply_text = f"The shared list '{list_info[1]}' is currently read-only because the owner's Premium plan has expired."
+            log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", False)
+            return reply_text
 
     # Auto-create list if it doesn't exist
     if not list_info:
@@ -159,14 +176,17 @@ def handle_add_to_list(
         list_id = list_info[0]
         list_name = list_info[1]
 
-        allowed, limit_msg = can_add_list_item(phone_number, list_id)
+        # For shared lists, tier limits follow the list owner (who is Premium)
+        limit_phone = owner_phone if is_shared else phone_number
+
+        allowed, limit_msg = can_add_list_item(limit_phone, list_id)
         if not allowed:
             # List is already full - use Level 4 formatter
             reply_text = format_list_item_limit_message(
-                phone_number, list_name, items_to_add, 0
+                limit_phone, list_name, items_to_add, 0
             )
         else:
-            tier_limits = get_tier_limits(get_user_tier(phone_number))
+            tier_limits = get_tier_limits(get_user_tier(limit_phone))
             max_items = tier_limits['max_items_per_list']
             item_count = get_item_count(list_id)
             available_slots = max_items - item_count
@@ -183,17 +203,21 @@ def handle_add_to_list(
             if len(added_items) < len(items_to_add):
                 # Some items skipped - use Level 4 formatter
                 reply_text = format_list_item_limit_message(
-                    phone_number, list_name, items_to_add, len(added_items)
+                    limit_phone, list_name, items_to_add, len(added_items)
                 )
             else:
                 # All items added successfully
+                display_name = f"shared list '{list_name}'" if is_shared else f"your {list_name}"
                 if len(added_items) == 1:
-                    base_reply = ai_response.get("confirmation", f"Added {added_items[0]} to your {list_name}")
+                    base_reply = ai_response.get("confirmation", f"Added {added_items[0]} to {display_name}")
                 else:
-                    base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                    base_reply = f"Added {len(added_items)} items to {display_name}: {', '.join(added_items)}"
 
-                # Add progressive counter
-                reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
+                # Progressive counter only for owned lists (shared lists follow owner's limits)
+                if not is_shared:
+                    reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
+                else:
+                    reply_text = base_reply
 
     log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
     return reply_text
@@ -204,30 +228,43 @@ def handle_add_item_ask_list(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle add_item_ask_list action - when list name is ambiguous."""
+    """Handle add_item_ask_list action - when list name is ambiguous.
+
+    Disambiguation menu includes owned + accepted shared lists (marked [Shared]).
+    """
     from services.tier_service import (
         can_add_list_item, get_tier_limits, get_user_tier,
         format_list_item_limit_message, add_list_item_counter_to_message
     )
 
     item_text = ai_response.get("item_text")
-    lists = get_lists(phone_number)
+    all_lists = get_all_lists_with_shared(phone_number)
 
-    if len(lists) == 1:
+    if len(all_lists) == 1:
         # Only one list, add directly
-        list_id = lists[0][0]
-        list_name = lists[0][1]
+        only = all_lists[0]
+        list_id = only['list_id']
+        list_name = only['list_name']
+        is_shared = only['is_shared']
+        owner_phone = only['owner_phone']
+
+        if is_shared:
+            read_only, _ = is_shared_list_read_only(list_id)
+            if read_only:
+                reply_text = f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired."
+                log_interaction(phone_number, incoming_msg, reply_text, "add_item_ask_list", False)
+                return reply_text
 
         items_to_add = parse_list_items(item_text, phone_number)
+        limit_phone = owner_phone if is_shared else phone_number
 
-        allowed, limit_msg = can_add_list_item(phone_number, list_id)
+        allowed, _ = can_add_list_item(limit_phone, list_id)
         if not allowed:
-            # List is full - use Level 4 formatter
             reply_text = format_list_item_limit_message(
-                phone_number, list_name, items_to_add, 0
+                limit_phone, list_name, items_to_add, 0
             )
         else:
-            tier_limits = get_tier_limits(get_user_tier(phone_number))
+            tier_limits = get_tier_limits(get_user_tier(limit_phone))
             max_items = tier_limits['max_items_per_list']
             item_count = get_item_count(list_id)
             available_slots = max_items - item_count
@@ -240,26 +277,24 @@ def handle_add_item_ask_list(
 
             create_or_update_user(phone_number, last_active_list=list_name)
 
-            # Handle partial or full adds with progressive education
             if len(added_items) < len(items_to_add):
-                # Some items skipped - use Level 4 formatter
                 reply_text = format_list_item_limit_message(
-                    phone_number, list_name, items_to_add, len(added_items)
+                    limit_phone, list_name, items_to_add, len(added_items)
                 )
             else:
-                # All items added successfully
+                display = f"shared list '{list_name}'" if is_shared else f"your {list_name}"
                 if len(added_items) == 1:
-                    base_reply = f"Added {added_items[0]} to your {list_name}"
+                    base_reply = f"Added {added_items[0]} to {display}"
                 else:
-                    base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                    base_reply = f"Added {len(added_items)} items to {display}: {', '.join(added_items)}"
+                reply_text = base_reply if is_shared else add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
-                # Add progressive counter
-                reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
-
-    elif len(lists) > 1:
-        # Multiple lists, ask which one
+    elif len(all_lists) > 1:
         create_or_update_user(phone_number, pending_list_item=item_text)
-        list_options = "\n".join([f"{i+1}. {l[1]}" for i, l in enumerate(lists)])
+        list_options = "\n".join(
+            f"{i+1}. {'[Shared] ' if l['is_shared'] else ''}{l['list_name']}"
+            for i, l in enumerate(all_lists)
+        )
         reply_text = f"Which list would you like to add these to?\n\n{list_options}\n\nReply with a number:"
     else:
         reply_text = "You don't have any lists yet. Try 'Create a grocery list' first!"
@@ -273,13 +308,15 @@ def handle_show_list(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle show_list action - show a specific list."""
+    """Handle show_list action - show a specific list (owned or shared)."""
     list_name = ai_response.get("list_name")
-    list_info = get_list_by_name(phone_number, list_name)
+    accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
 
-    if list_info:
-        create_or_update_user(phone_number, last_active_list=list_info[1])
-        items = get_list_items(list_info[0])
+    if accessible:
+        list_id, actual_name, is_shared, _owner_phone = accessible
+        create_or_update_user(phone_number, last_active_list=actual_name)
+        items = get_list_items(list_id)
+        prefix = "[Shared] " if is_shared else ""
 
         if items:
             item_lines = []
@@ -288,9 +325,9 @@ def handle_show_list(
                     item_lines.append(f"{i}. [x] {item_text}")
                 else:
                     item_lines.append(f"{i}. {item_text}")
-            reply_text = f"{list_info[1]}:\n\n" + "\n".join(item_lines)
+            reply_text = f"{prefix}{actual_name}:\n\n" + "\n".join(item_lines)
         else:
-            reply_text = f"Your {list_info[1]} is empty."
+            reply_text = f"{prefix}{actual_name} is empty." if is_shared else f"Your {actual_name} is empty."
     else:
         reply_text = f"I couldn't find a list called '{list_name}'."
 
@@ -304,9 +341,11 @@ def handle_show_current_list(phone_number: str, incoming_msg: str) -> str:
     logger.info(f"show_current_list: last_active={last_active}")
 
     if last_active:
-        list_info = get_list_by_name(phone_number, last_active)
-        if list_info:
-            items = get_list_items(list_info[0])
+        accessible = get_accessible_list_by_name(phone_number, last_active)
+        if accessible:
+            list_id, actual_name, is_shared, _owner_phone = accessible
+            items = get_list_items(list_id)
+            prefix = "[Shared] " if is_shared else ""
             if items:
                 item_lines = []
                 for i, (item_id, item_text, completed) in enumerate(items, 1):
@@ -314,9 +353,9 @@ def handle_show_current_list(phone_number: str, incoming_msg: str) -> str:
                         item_lines.append(f"{i}. [x] {item_text}")
                     else:
                         item_lines.append(f"{i}. {item_text}")
-                reply_text = f"{list_info[1]}:\n\n" + "\n".join(item_lines)
+                reply_text = f"{prefix}{actual_name}:\n\n" + "\n".join(item_lines)
             else:
-                reply_text = f"Your {list_info[1]} is empty."
+                reply_text = f"{prefix}{actual_name} is empty." if is_shared else f"Your {actual_name} is empty."
         else:
             # Last active list was deleted
             reply_text = _show_all_lists_or_single(phone_number)
@@ -328,12 +367,15 @@ def handle_show_current_list(phone_number: str, incoming_msg: str) -> str:
 
 
 def _show_all_lists_or_single(phone_number: str) -> str:
-    """Helper to show all lists or single list directly."""
-    lists = get_lists(phone_number)
+    """Helper to show all lists (owned + shared) or single list directly."""
+    all_lists = get_all_lists_with_shared(phone_number)
 
-    if len(lists) == 1:
-        list_id = lists[0][0]
-        list_name = lists[0][1]
+    if len(all_lists) == 1:
+        only = all_lists[0]
+        list_id = only['list_id']
+        list_name = only['list_name']
+        is_shared = only['is_shared']
+        prefix = "[Shared] " if is_shared else ""
         create_or_update_user(phone_number, last_active_list=list_name)
         items = get_list_items(list_id)
 
@@ -344,26 +386,22 @@ def _show_all_lists_or_single(phone_number: str) -> str:
                     item_lines.append(f"{i}. [x] {item_text}")
                 else:
                     item_lines.append(f"{i}. {item_text}")
-            return f"{list_name}:\n\n" + "\n".join(item_lines)
+            return f"{prefix}{list_name}:\n\n" + "\n".join(item_lines)
         else:
-            return f"Your {list_name} is empty."
-    elif lists:
-        list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
+            return f"{prefix}{list_name} is empty." if is_shared else f"Your {list_name} is empty."
+    elif all_lists:
+        list_lines = []
+        for i, lst in enumerate(all_lists, 1):
+            prefix = "[Shared] " if lst['is_shared'] else ""
+            list_lines.append(f"{i}. {prefix}{lst['list_name']} ({lst['item_count']} items)")
         return "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
     else:
         return "You don't have any lists yet. Try 'Create a grocery list'!"
 
 
 def handle_show_all_lists(phone_number: str, incoming_msg: str) -> str:
-    """Handle show_all_lists action."""
-    lists = get_lists(phone_number)
-
-    if lists:
-        list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
-        reply_text = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
-    else:
-        reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
-
+    """Handle show_all_lists action (owned + shared)."""
+    reply_text = format_all_lists_display(phone_number)
     log_interaction(phone_number, incoming_msg, reply_text, "show_all_lists", True)
     return reply_text
 
@@ -373,14 +411,26 @@ def handle_complete_item(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle complete_item action - mark item as done."""
+    """Handle complete_item action - mark item as done (owned or shared list)."""
     list_name = ai_response.get("list_name")
     item_text = ai_response.get("item_text")
 
-    if mark_item_complete(phone_number, list_name, item_text):
-        reply_text = ai_response.get("confirmation", f"Checked off {item_text}")
+    accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
+    if accessible:
+        list_id, actual_name, is_shared, _owner_phone = accessible
+        if is_shared:
+            read_only, _ = is_shared_list_read_only(list_id)
+            if read_only:
+                reply_text = f"The shared list '{actual_name}' is currently read-only because the owner's Premium plan has expired."
+                log_interaction(phone_number, incoming_msg, reply_text, "complete_item", False)
+                return reply_text
+        if mark_item_complete_by_list_id(list_id, item_text):
+            display = f"shared list '{actual_name}'" if is_shared else f"your {actual_name}"
+            reply_text = ai_response.get("confirmation", f"Checked off {item_text} from {display}")
+        else:
+            reply_text = f"Couldn't find '{item_text}' in '{actual_name}'."
     else:
-        # Try to find item in any list
+        # Try to find item in any owned list
         found = find_item_in_any_list(phone_number, item_text)
         if len(found) == 1:
             list_name = found[0][1]
@@ -402,12 +452,24 @@ def handle_uncomplete_item(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle uncomplete_item action - unmark item as done."""
+    """Handle uncomplete_item action - unmark item as done (owned or shared list)."""
     list_name = ai_response.get("list_name")
     item_text = ai_response.get("item_text")
 
-    if mark_item_incomplete(phone_number, list_name, item_text):
-        reply_text = ai_response.get("confirmation", f"Unmarked {item_text}")
+    accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
+    if accessible:
+        list_id, actual_name, is_shared, _owner_phone = accessible
+        if is_shared:
+            read_only, _ = is_shared_list_read_only(list_id)
+            if read_only:
+                reply_text = f"The shared list '{actual_name}' is currently read-only because the owner's Premium plan has expired."
+                log_interaction(phone_number, incoming_msg, reply_text, "uncomplete_item", False)
+                return reply_text
+        if mark_item_incomplete_by_list_id(list_id, item_text):
+            display = f"shared list '{actual_name}'" if is_shared else f"your {actual_name}"
+            reply_text = ai_response.get("confirmation", f"Unmarked {item_text} in {display}")
+        else:
+            reply_text = f"Couldn't find '{item_text}' to unmark."
     else:
         reply_text = f"Couldn't find '{item_text}' to unmark."
 
@@ -420,20 +482,44 @@ def handle_delete_item(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle delete_item action - remove item from list (asks for confirmation)."""
+    """Handle delete_item action - remove item from list (asks for confirmation).
+
+    Resolves across owned + shared lists so the confirmation step can act on the right list.
+    """
     list_name = ai_response.get("list_name")
     item_text = ai_response.get("item_text")
 
-    # Store pending delete for confirmation
-    confirm_data = json.dumps({
-        'awaiting_confirmation': True,
-        'type': 'list_item',
-        'list_name': list_name,
-        'text': item_text
-    })
-    create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+    accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
+    if accessible:
+        list_id, actual_name, is_shared, _owner_phone = accessible
+        if is_shared:
+            read_only, _ = is_shared_list_read_only(list_id)
+            if read_only:
+                reply_text = f"The shared list '{actual_name}' is currently read-only because the owner's Premium plan has expired."
+                log_interaction(phone_number, incoming_msg, reply_text, "delete_item_confirm", False)
+                return reply_text
+        confirm_data = json.dumps({
+            'awaiting_confirmation': True,
+            'type': 'list_item',
+            'list_name': actual_name,
+            'list_id': list_id,
+            'is_shared': is_shared,
+            'text': item_text,
+        })
+        create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+        display = f"shared list '{actual_name}'" if is_shared else actual_name
+        reply_text = f"Remove '{item_text}' from {display}?\n\nReply YES to confirm or CANCEL to keep it."
+    else:
+        # Preserve old behavior: store with name only; confirmation will report not-found
+        confirm_data = json.dumps({
+            'awaiting_confirmation': True,
+            'type': 'list_item',
+            'list_name': list_name,
+            'text': item_text,
+        })
+        create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+        reply_text = f"Remove '{item_text}' from {list_name}?\n\nReply YES to confirm or CANCEL to keep it."
 
-    reply_text = f"Remove '{item_text}' from {list_name}?\n\nReply YES to confirm or CANCEL to keep it."
     log_interaction(phone_number, incoming_msg, "Asking delete_item confirmation", "delete_item_confirm", True)
     return reply_text
 
@@ -443,7 +529,7 @@ def handle_delete_list(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle delete_list action - delete entire list."""
+    """Handle delete_list action - delete entire list (owner only)."""
     list_name = ai_response.get("list_name")
     list_info = get_list_by_name(phone_number, list_name)
 
@@ -460,7 +546,12 @@ def handle_delete_list(
             db_delete_list(phone_number, actual_name)
             reply_text = f"Deleted your {actual_name}."
     else:
-        reply_text = f"I couldn't find a list called '{list_name}'."
+        # Not owned — is it a shared list?
+        accessible = get_accessible_list_by_name(phone_number, list_name)
+        if accessible and accessible[2]:  # is_shared
+            reply_text = f"Only the owner can delete '{accessible[1]}'. Reply 'Leave {accessible[1]}' to remove yourself from the share."
+        else:
+            reply_text = f"I couldn't find a list called '{list_name}'."
 
     log_interaction(phone_number, incoming_msg, reply_text, "delete_list", True)
     return reply_text
@@ -471,7 +562,7 @@ def handle_clear_list(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle clear_list action - remove all items from list."""
+    """Handle clear_list action - remove all items from list (owner only)."""
     list_name = ai_response.get("list_name")
     list_info = get_list_by_name(phone_number, list_name)
 
@@ -479,7 +570,11 @@ def handle_clear_list(
         db_clear_list(phone_number, list_info[1])
         reply_text = f"Cleared all items from your {list_info[1]}."
     else:
-        reply_text = f"I couldn't find a list called '{list_name}'."
+        accessible = get_accessible_list_by_name(phone_number, list_name)
+        if accessible and accessible[2]:  # is_shared
+            reply_text = f"Only the owner can clear '{accessible[1]}'."
+        else:
+            reply_text = f"I couldn't find a list called '{list_name}'."
 
     log_interaction(phone_number, incoming_msg, reply_text, "clear_list", True)
     return reply_text
@@ -490,11 +585,18 @@ def handle_rename_list(
     incoming_msg: str,
     ai_response: dict[str, Any]
 ) -> str:
-    """Handle rename_list action."""
+    """Handle rename_list action (owner only)."""
     old_name = ai_response.get("old_name")
     new_name = ai_response.get("new_name")
 
     list_info = get_list_by_name(phone_number, old_name)
+
+    if not list_info:
+        accessible = get_accessible_list_by_name(phone_number, old_name)
+        if accessible and accessible[2]:  # is_shared
+            reply_text = f"Only the owner can rename '{accessible[1]}'."
+            log_interaction(phone_number, incoming_msg, reply_text, "rename_list", False)
+            return reply_text
 
     if list_info:
         is_valid, result = validate_list_name(new_name)
