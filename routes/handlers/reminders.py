@@ -18,6 +18,7 @@ from models.reminder import (
 )
 from utils.timezone import get_user_current_time
 from utils.validation import detect_sensitive_data, get_sensitive_data_warning
+from utils.date_parsing import extract_explicit_date
 from database import log_interaction
 
 
@@ -199,6 +200,26 @@ def handle_reminder(
             reply_text = get_sensitive_data_warning()
             log_interaction(phone_number, incoming_msg, reply_text, "reminder_blocked", False)
             return reply_text
+
+    # Verify AI's date against any explicit "MONTH DAY" date the user typed.
+    # Guards against AI misparses like "May 8" → tomorrow's date.
+    if reminder_date:
+        try:
+            ai_naive = datetime.strptime(reminder_date, '%Y-%m-%d %H:%M:%S')
+            user_now_local = get_user_current_time(phone_number)
+            explicit = extract_explicit_date(incoming_msg, user_now_local.date())
+            if explicit and explicit != ai_naive.date():
+                logger.warning(
+                    f"AI date mismatch for {phone_number}: AI said {ai_naive.date()}, "
+                    f"user message contains {explicit}. Overriding to user-specified date."
+                )
+                corrected = ai_naive.replace(year=explicit.year, month=explicit.month, day=explicit.day)
+                reminder_date = corrected.strftime('%Y-%m-%d %H:%M:%S')
+                ai_response["reminder_date"] = reminder_date
+                if confidence >= 70:
+                    confidence = 60  # trip confirmation path so the user can verify
+        except (ValueError, TypeError) as e:
+            logger.debug(f"Skipping date verification (unparseable AI date): {e}")
 
     # Check tier limit (pass reminder_date for v2 weekly counting)
     allowed, limit_msg = can_create_reminder(phone_number, reminder_date)
