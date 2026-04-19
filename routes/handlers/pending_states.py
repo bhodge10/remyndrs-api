@@ -134,7 +134,16 @@ def handle_pending_delete(
                         reply_msg = "Couldn't delete that reminder."
 
                 elif delete_type == 'list_item':
-                    if delete_list_item(phone_number, selected['list_name'], selected['text']):
+                    list_id = selected.get('list_id')
+                    is_shared = selected.get('is_shared', False)
+                    if list_id is not None:
+                        from models.list_model import delete_list_item_by_list_id
+                        if delete_list_item_by_list_id(list_id, selected['text']):
+                            display = f"shared list '{selected['list_name']}'" if is_shared else selected['list_name']
+                            reply_msg = f"Removed '{selected['text']}' from {display}"
+                        else:
+                            reply_msg = "Couldn't delete that list item."
+                    elif delete_list_item(phone_number, selected['list_name'], selected['text']):
                         reply_msg = f"Removed '{selected['text']}' from {selected['list_name']}"
                     else:
                         reply_msg = "Couldn't delete that list item."
