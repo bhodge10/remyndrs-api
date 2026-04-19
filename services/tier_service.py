@@ -385,10 +385,15 @@ def can_create_list(phone_number: str) -> tuple[bool, str | None]:
 
 
 def can_share_list(phone_number: str) -> tuple[bool, str | None]:
-    """Check if user can share a list (must be Premium, and in beta whitelist if set)."""
+    """Check if user can share a list (must be Premium + in beta whitelist OR opted-in)."""
     from config import SHARED_LISTS_BETA_PHONES
-    if SHARED_LISTS_BETA_PHONES and phone_number not in SHARED_LISTS_BETA_PHONES:
-        return (False, "Shared lists aren't available for your account yet. Stay tuned!")
+    from models.user import get_shared_lists_beta_opt_in
+
+    if SHARED_LISTS_BETA_PHONES:
+        allowlisted = phone_number in SHARED_LISTS_BETA_PHONES
+        opted_in = get_shared_lists_beta_opt_in(phone_number)
+        if not (allowlisted or opted_in):
+            return (False, "Shared lists are in beta. Text JOIN SHARED LISTS to opt in.")
 
     tier = get_user_tier(phone_number)
     if tier not in (TIER_PREMIUM, TIER_FAMILY):

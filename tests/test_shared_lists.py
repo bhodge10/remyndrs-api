@@ -296,6 +296,102 @@ class TestShareListTierGating:
         assert "premium" in msg.lower() or "upgrade" in msg.lower()
 
 
+class TestSharedListsBetaOptIn:
+    """Tests for the shared lists beta whitelist + opt-in flag."""
+
+    def test_premium_blocked_when_whitelist_set_and_not_opted_in(self, premium_owner):
+        from services.tier_service import can_share_list
+        with patch("config.SHARED_LISTS_BETA_PHONES", ["+15550001111"]):
+            allowed, msg = can_share_list(PHONE_OWNER)
+        assert allowed is False
+        assert "beta" in msg.lower()
+
+    def test_premium_allowed_via_whitelist(self, premium_owner):
+        from services.tier_service import can_share_list
+        with patch("config.SHARED_LISTS_BETA_PHONES", [PHONE_OWNER]):
+            allowed, msg = can_share_list(PHONE_OWNER)
+        assert allowed is True
+
+    def test_premium_allowed_via_opt_in_flag(self, premium_owner):
+        from services.tier_service import can_share_list
+        from models.user import create_or_update_user
+        create_or_update_user(PHONE_OWNER, shared_lists_beta_opt_in=True)
+        with patch("config.SHARED_LISTS_BETA_PHONES", ["+15550001111"]):
+            allowed, msg = can_share_list(PHONE_OWNER)
+        assert allowed is True
+
+    def test_opt_in_does_not_bypass_premium_check(self, free_user):
+        """Free-tier user with opt-in flag still can't share (premium check runs after)."""
+        from services.tier_service import can_share_list
+        from models.user import create_or_update_user
+        create_or_update_user(PHONE_SHARED, shared_lists_beta_opt_in=True)
+        with patch("config.SHARED_LISTS_BETA_PHONES", ["+15550001111"]):
+            allowed, msg = can_share_list(PHONE_SHARED)
+        assert allowed is False
+        assert "premium" in msg.lower() or "upgrade" in msg.lower()
+
+    def test_get_shared_lists_beta_opt_in_defaults_false(self, premium_owner):
+        from models.user import get_shared_lists_beta_opt_in
+        assert get_shared_lists_beta_opt_in(PHONE_OWNER) is False
+
+    def test_get_shared_lists_beta_opt_in_reflects_flag(self, premium_owner):
+        from models.user import create_or_update_user, get_shared_lists_beta_opt_in
+        create_or_update_user(PHONE_OWNER, shared_lists_beta_opt_in=True)
+        assert get_shared_lists_beta_opt_in(PHONE_OWNER) is True
+
+
+class TestSharedListsBetaKeywordHandlers:
+    """Tests for JOIN / LEAVE SHARED LISTS keyword handlers."""
+
+    @pytest.mark.asyncio
+    async def test_premium_can_join(self, simulator, sms_capture, ai_mock, onboarded_user):
+        from models.user import create_or_update_user, get_shared_lists_beta_opt_in
+        phone = onboarded_user['phone']
+        create_or_update_user(phone, premium_status="premium")
+
+        result = await simulator.send_message(phone, "JOIN SHARED LISTS")
+        assert "beta" in result['output'].lower() or "active" in result['output'].lower()
+        assert get_shared_lists_beta_opt_in(phone) is True
+
+    @pytest.mark.asyncio
+    async def test_free_tier_blocked_from_joining(self, simulator, sms_capture, ai_mock, onboarded_user):
+        from models.user import get_shared_lists_beta_opt_in
+        phone = onboarded_user['phone']
+        # onboarded_user defaults to free tier
+
+        result = await simulator.send_message(phone, "JOIN SHARED LISTS")
+        assert "premium" in result['output'].lower() or "upgrade" in result['output'].lower()
+        assert get_shared_lists_beta_opt_in(phone) is False
+
+    @pytest.mark.asyncio
+    async def test_join_twice_is_idempotent(self, simulator, sms_capture, ai_mock, onboarded_user):
+        from models.user import create_or_update_user, get_shared_lists_beta_opt_in
+        phone = onboarded_user['phone']
+        create_or_update_user(phone, premium_status="premium")
+
+        await simulator.send_message(phone, "JOIN SHARED LISTS")
+        result = await simulator.send_message(phone, "JOIN SHARED LISTS")
+        assert "already" in result['output'].lower()
+        assert get_shared_lists_beta_opt_in(phone) is True
+
+    @pytest.mark.asyncio
+    async def test_leave_clears_opt_in(self, simulator, sms_capture, ai_mock, onboarded_user):
+        from models.user import create_or_update_user, get_shared_lists_beta_opt_in
+        phone = onboarded_user['phone']
+        create_or_update_user(phone, premium_status="premium")
+
+        await simulator.send_message(phone, "JOIN SHARED LISTS")
+        result = await simulator.send_message(phone, "LEAVE SHARED LISTS")
+        assert "left" in result['output'].lower() or "leav" in result['output'].lower()
+        assert get_shared_lists_beta_opt_in(phone) is False
+
+    @pytest.mark.asyncio
+    async def test_leave_when_not_opted_in_is_noop(self, simulator, sms_capture, ai_mock, onboarded_user):
+        phone = onboarded_user['phone']
+        result = await simulator.send_message(phone, "LEAVE SHARED LISTS")
+        assert "not" in result['output'].lower()
+
+
 # =====================================================
 # LIMIT ENFORCEMENT TESTS
 # =====================================================

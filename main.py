@@ -3447,6 +3447,75 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SHARED LISTS BETA OPT-IN
+        # ==========================================
+
+        if msg_upper in [
+            "JOIN SHARED LISTS BETA", "JOIN SHARED LISTS", "SHARED LISTS BETA",
+            "BETA SHARED LISTS", "JOIN BETA", "JOIN SHARED LIST BETA",
+        ]:
+            from services.tier_service import get_user_tier
+            from config import TIER_PREMIUM, TIER_FAMILY, PREMIUM_MONTHLY_PRICE
+            from models.user import get_shared_lists_beta_opt_in
+
+            tier = get_user_tier(phone_number)
+            if tier not in (TIER_PREMIUM, TIER_FAMILY):
+                resp = MessagingResponse()
+                resp.message(staging_prefix(
+                    f"Shared lists are a Premium feature. Text UPGRADE to unlock them ({PREMIUM_MONTHLY_PRICE}/mo), "
+                    "then text JOIN SHARED LISTS to join the beta."
+                ))
+                log_interaction(phone_number, incoming_msg, "Shared lists beta: non-premium", "shared_lists_beta_blocked", False)
+                return Response(content=str(resp), media_type="application/xml")
+
+            if get_shared_lists_beta_opt_in(phone_number):
+                resp = MessagingResponse()
+                resp.message(staging_prefix(
+                    "You're already in the shared lists beta!\n\n"
+                    "Share a list: SHARE [list] WITH [phone]\n"
+                    "Report a bug: BUG [what happened]\n"
+                    "Send feedback: FEEDBACK [thoughts]\n\n"
+                    "Leave beta: LEAVE SHARED LISTS"
+                ))
+                log_interaction(phone_number, incoming_msg, "Already in shared lists beta", "shared_lists_beta_already", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            create_or_update_user(phone_number, shared_lists_beta_opt_in=True)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(
+                "Thanks for joining the shared lists beta!\n\n"
+                "Share a list: SHARE [list] WITH [phone]\n"
+                "(e.g. SHARE groceries WITH 5551234567)\n\n"
+                "Hit a bug? Text BUG [what went wrong]\n"
+                "Got feedback? Text FEEDBACK [your thoughts]\n\n"
+                "We rely on testers like you to tell us what's broken or confusing.\n\n"
+                "Leave beta: LEAVE SHARED LISTS"
+            ))
+            log_interaction(phone_number, incoming_msg, "Joined shared lists beta", "shared_lists_beta_join", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        if msg_upper in [
+            "LEAVE SHARED LISTS BETA", "LEAVE SHARED LISTS", "LEAVE BETA",
+            "EXIT SHARED LISTS BETA", "OPT OUT SHARED LISTS",
+        ]:
+            from models.user import get_shared_lists_beta_opt_in
+
+            if not get_shared_lists_beta_opt_in(phone_number):
+                resp = MessagingResponse()
+                resp.message(staging_prefix("You're not currently in the shared lists beta."))
+                log_interaction(phone_number, incoming_msg, "Not in shared lists beta", "shared_lists_beta_leave_noop", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            create_or_update_user(phone_number, shared_lists_beta_opt_in=False)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(
+                "You've left the shared lists beta. Existing shared lists still work; you just can't create new ones.\n\n"
+                "To rejoin: JOIN SHARED LISTS"
+            ))
+            log_interaction(phone_number, incoming_msg, "Left shared lists beta", "shared_lists_beta_leave", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # TIMEZONE COMMANDS
         # ==========================================
 

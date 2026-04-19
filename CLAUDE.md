@@ -191,6 +191,8 @@ Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION
 ### Shared Lists
 Premium-only feature allowing users to share lists with up to 4 non-premium users. Sharing is tracked in `list_shares` table with pending/accepted/declined status. Non-owners can add/remove/complete items but cannot delete, rename, or share the list. Key functions in `models/list_model.py`: `share_list()`, `accept_share()`, `get_accessible_list_by_name()`, `can_user_access_list()`. Handlers in `routes/handlers/lists.py`. Config: `SHARED_LIST_MAX_MEMBERS=4`, `SHARED_LIST_MAX_PER_USER=3`, `SHARED_LIST_MAX_RECEIVED=5`. ACCEPT/DECLINE keywords handled before AI processing. See `docs/shared-lists.md` for full scope.
 
+**Beta gating:** `can_share_list()` in `services/tier_service.py` enforces Premium tier AND (phone in `SHARED_LISTS_BETA_PHONES` env allowlist OR `users.shared_lists_beta_opt_in = TRUE`). Users self-enroll via `JOIN SHARED LISTS` keyword (Premium-only; free-tier users get an upgrade message). `LEAVE SHARED LISTS` clears the flag. Keyword handlers live in `main.py` near the smart nudge block. When the allowlist env var is empty, the gate is a no-op and any Premium user can share.
+
 ### Smart Nudges
 Proactive AI intelligence layer — sends ONE contextual insight per day. 8 nudge types, tier-gated. OFF by default. See `docs/changelog.md` for full implementation details.
 
