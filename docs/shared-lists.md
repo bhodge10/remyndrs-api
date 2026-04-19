@@ -258,3 +258,23 @@ simulator.send(free_user, "Delete grocery list")  # should be rejected
 2. **Should we allow the owner to set a shared list as "view-only"?** Permission column supports it but adds UX complexity
 3. **What happens to pending shares after 7 days?** Auto-expire? Remind?
 4. **Should we allow sharing by name instead of phone number?** e.g., "Share with Mom" — requires a contacts/family-member mapping that doesn't exist yet. Defer to Family Plan.
+
+## Potential Future Features (Not Implemented)
+
+### Transitive sharing (member-invited sharing)
+
+**Idea:** Allow accepted members of a shared list (not just the owner) to invite new people to that list. Privacy is preserved because the inviter supplies the invitee's phone number directly.
+
+**Status:** Deferred. Too many design variables to resolve before committing to an implementation.
+
+**Key variables to resolve before building:**
+- Who qualifies as an inviter? Owner only → any accepted member → premium-accepted members only
+- Depth limit (prevent chain-invite trees). Likely depth=1 — owner-direct-invitees can invite, but their invitees cannot
+- Rate limit (transitive invites per list per 24h) to prevent flooding the owner
+- Owner veto window — notification with "REMOVE [name]" shortcut during a time window before the invitee sees the invite
+- Cap accounting — does a transitive invite count against `SHARED_LIST_MAX_MEMBERS` only, or also against the member's `SHARED_LIST_MAX_PER_USER`?
+- Attribution in Sarah's invite message ("Heather shared Brad's grocery list" vs "Heather shared grocery list")
+- Behavior when owner is opted-out / blocked
+- SMS cost: every transitive invite adds at least one extra SMS (owner notification)
+
+**When to revisit:** If direct sharing shows strong adoption but owners report they'd rather let invited members add people themselves (common in household / roommate / project-collab scenarios).
