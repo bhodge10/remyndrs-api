@@ -666,6 +666,9 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_share_name TEXT",
             # Shared lists: owner-assigned name for the person they shared with
             "ALTER TABLE list_shares ADD COLUMN IF NOT EXISTS shared_with_name TEXT",
+            # Shared lists beta: user-initiated opt-in (Premium-only feature, but any user can opt in)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS shared_lists_beta_opt_in BOOLEAN DEFAULT FALSE",
+            "UPDATE users SET shared_lists_beta_opt_in = FALSE WHERE shared_lists_beta_opt_in IS NULL",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
