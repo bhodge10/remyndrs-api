@@ -894,6 +894,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             msg_lower = incoming_msg.lower().strip()
             referral_source = REFERRAL_MESSAGES.get(msg_lower)
 
+            # Prefix match for marketing-site CTAs that send "<keyword>! Start my Remyndrs trial →".
+            # Keeps bare "Hello"/"GO" working while tagging the longer body correctly.
+            if not referral_source:
+                if re.match(r'^hello\b', msg_lower):
+                    referral_source = "website-ios"
+                elif re.match(r'^go\b', msg_lower):
+                    referral_source = "facebook"
+
             # Fuzzy fallback: check if message contains key phrases
             if not referral_source:
                 for keyword, source, condition in REFERRAL_FUZZY:
