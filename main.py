@@ -2592,29 +2592,38 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             # UX PRIORITY: If user is viewing a specific list, ONLY delete from that list
             # Don't show options from reminders/memories - that's confusing
             if last_active and last_active not in ("__RECURRING__", "__REMINDERS__", "__LISTS__", "__MEMORIES__"):
-                # User is viewing a specific list - delete directly from it
-                list_info = get_list_by_name(phone_number, last_active)
-                if list_info:
-                    list_id = list_info[0]
-                    list_name = list_info[1]
+                # User is viewing a specific list (owned or shared) - delete directly from it
+                accessible = get_accessible_list_by_name(phone_number, last_active)
+                if accessible:
+                    list_id, list_name, is_shared, _owner_phone = accessible
+                    if is_shared:
+                        read_only, _ = is_shared_list_read_only(list_id)
+                        if read_only:
+                            resp = MessagingResponse()
+                            resp.message(f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired.")
+                            return Response(content=str(resp), media_type="application/xml")
                     items = get_list_items(list_id)
                     if items and 1 <= item_num <= len(items):
                         item_id, item_text, _ = items[item_num - 1]
-                        # Single item from active list - ask for confirmation
+                        # Single item from active list - ask for confirmation.
+                        # Include list_id + is_shared so the YES handler dispatches to the right list.
                         confirm_data = json.dumps({
                             'awaiting_confirmation': True,
                             'type': 'list_item',
                             'list_name': list_name,
-                            'text': item_text
+                            'list_id': list_id,
+                            'is_shared': is_shared,
+                            'text': item_text,
                         })
                         create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+                        display = f"shared list '{list_name}'" if is_shared else list_name
                         resp = MessagingResponse()
-                        resp.message(f"Remove '{item_text}' from {list_name}?\n\nReply YES to confirm or CANCEL to keep it.")
+                        resp.message(f"Remove '{item_text}' from {display}?\n\nReply YES to confirm or CANCEL to keep it.")
                         log_interaction(phone_number, incoming_msg, "Delete from active list", "delete_list_item_confirm", True)
                         return Response(content=str(resp), media_type="application/xml")
                     else:
                         resp = MessagingResponse()
-                        resp.message(f"Your {list_name} doesn't have an item #{item_num}.")
+                        resp.message(f"{list_name} doesn't have an item #{item_num}.")
                         return Response(content=str(resp), media_type="application/xml")
 
             # No active list context - show options from all types
@@ -2635,19 +2644,24 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     'display': f"Reminder: {display_prefix}{reminder[2][:40]}"
                 })
 
-            # Check all lists for items at this position
-            all_lists = get_lists(phone_number)
+            # Check all lists (owned + accepted shared) for items at this position
+            from routes.handlers.lists import get_all_lists_with_shared
+            all_lists = get_all_lists_with_shared(phone_number)
             for lst in all_lists:
-                list_id = lst[0]
-                list_name = lst[1]
+                list_id = lst['list_id']
+                list_name = lst['list_name']
+                is_shared = lst['is_shared']
                 items = get_list_items(list_id)
                 if items and 1 <= item_num <= len(items):
                     item_id, item_text, _ = items[item_num - 1]
+                    display_list = f"shared list '{list_name}'" if is_shared else list_name
                     delete_options.append({
                         'type': 'list_item',
                         'list_name': list_name,
+                        'list_id': list_id,
+                        'is_shared': is_shared,
                         'text': item_text,
-                        'display': f"'{item_text}' from {list_name}"
+                        'display': f"'{item_text}' from {display_list}",
                     })
 
             # Check for memory at this position
@@ -2695,15 +2709,21 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if check_match:
             item_num = int(check_match.group(1))
             last_active = get_last_active_list(phone_number)
-            if last_active:
-                list_info = get_list_by_name(phone_number, last_active)
-                if list_info:
-                    list_id = list_info[0]
-                    list_name = list_info[1]
+            if last_active and last_active not in ("__RECURRING__", "__REMINDERS__", "__LISTS__", "__MEMORIES__"):
+                accessible = get_accessible_list_by_name(phone_number, last_active)
+                if accessible:
+                    list_id, list_name, is_shared, _owner_phone = accessible
+                    if is_shared:
+                        read_only, _ = is_shared_list_read_only(list_id)
+                        if read_only:
+                            resp = MessagingResponse()
+                            resp.message(f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired.")
+                            return Response(content=str(resp), media_type="application/xml")
                     items = get_list_items(list_id)
                     if items and 1 <= item_num <= len(items):
                         item_id, item_text, _ = items[item_num - 1]
-                        if mark_item_complete(phone_number, list_name, item_text):
+                        from models.list_model import mark_item_complete_by_list_id
+                        if mark_item_complete_by_list_id(list_id, item_text):
                             reply_msg = f"Checked off '{item_text}'"
                         else:
                             reply_msg = f"Couldn't check off item #{item_num}"
@@ -2713,7 +2733,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         return Response(content=str(resp), media_type="application/xml")
                     else:
                         resp = MessagingResponse()
-                        resp.message(f"Item #{item_num} not found. Your {list_name} has {len(items)} items.")
+                        resp.message(f"Item #{item_num} not found. {list_name} has {len(items)} items.")
                         return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================

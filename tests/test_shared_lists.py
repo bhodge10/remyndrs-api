@@ -920,6 +920,42 @@ class TestSharedListEditPaths:
         assert len(get_list_items(accepted_share["list_id"])) == 2
 
     @pytest.mark.asyncio
+    async def test_show_then_delete_by_number_targets_shared_list(self, accepted_share, simulator, ai_mock):
+        """After 'Show <shared>', 'Delete N' should target the shared list, not fall back to
+        a cross-type disambiguation menu. Regression for Heather's screenshot bug."""
+        ai_mock.set_response("show grocery list", {
+            "action": "show_list",
+            "list_name": "Grocery List",
+        })
+        await simulator.send_message(PHONE_SHARED, "Show Grocery List")
+
+        result = await simulator.send_message(PHONE_SHARED, "Delete 1")
+        out = result["output"].lower()
+        assert "what would you like to delete" not in out, (
+            f"Delete-by-number lost shared-list context. Got: {result['output']}"
+        )
+        # Should ask for YES/CANCEL confirmation targeted at the shared list
+        assert "milk" in out and ("yes" in out or "remove" in out), (
+            f"Expected confirmation prompt for Milk from shared list. Got: {result['output']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_check_by_number_targets_shared_list(self, accepted_share, simulator, ai_mock):
+        """After 'Show <shared>', 'Check 1' should check off item on the shared list."""
+        from models.list_model import get_list_items
+        ai_mock.set_response("show grocery list", {
+            "action": "show_list",
+            "list_name": "Grocery List",
+        })
+        await simulator.send_message(PHONE_SHARED, "Show Grocery List")
+
+        result = await simulator.send_message(PHONE_SHARED, "Check 1")
+        out = result["output"].lower()
+        assert "checked off" in out, f"Check-by-number failed on shared list. Got: {result['output']}"
+        completed = [i for i in get_list_items(accepted_share["list_id"]) if i[2]]
+        assert any("milk" in item[1].lower() for item in completed)
+
+    @pytest.mark.asyncio
     async def test_end_to_end_add_to_shared_list_via_sms(self, accepted_share, simulator, ai_mock):
         """End-to-end via the SMS webhook — catches inline-dispatch bugs in main.py.
 
