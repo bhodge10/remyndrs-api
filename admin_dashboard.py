@@ -1197,6 +1197,124 @@ async def debug_inactivity_nudge(admin: str = Depends(verify_admin)):
             return_db_connection(conn)
 
 
+@router.get("/admin/debug/day-1-2-nudges")
+async def debug_day_1_2_nudges(admin: str = Depends(verify_admin)):
+    """Diagnose why Day 1 / Day 2 lifecycle nudges aren't firing for recent signups.
+
+    Returns the state of every signup in the last 21 days alongside the per-user
+    verdict from each nudge's gating rules, so we can see which gate is filtering
+    users out.
+    """
+    from config import FREE_TRIAL_DAYS
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        c.execute("""
+            SELECT
+                phone_number,
+                created_at,
+                onboarding_complete,
+                trial_end_date,
+                timezone,
+                tier,
+                opted_out,
+                COALESCE(post_onboarding_interactions, 0),
+                COALESCE(day_1_nudge_sent, FALSE),
+                COALESCE(day_2_nudge_sent, FALSE),
+                COALESCE(day_3_nudge_sent, FALSE)
+            FROM users
+            WHERE created_at > NOW() - INTERVAL '21 days'
+            ORDER BY created_at DESC
+        """)
+        rows = c.fetchall()
+
+        users_out = []
+        for row in rows:
+            (phone, created_at, onboarded, trial_end, tz_str, tier,
+             opted_out, interactions, d1_sent, d2_sent, d3_sent) = row
+
+            try:
+                user_tz = pytz.timezone(tz_str or 'America/New_York')
+            except pytz.exceptions.UnknownTimeZoneError:
+                user_tz = pytz.timezone('America/New_York')
+            local_hour_now = datetime.now(pytz.utc).astimezone(user_tz).hour
+
+            days_in_trial = None
+            if trial_end:
+                signup_date_utc = trial_end - timedelta(days=FREE_TRIAL_DAYS)
+                days_in_trial = (now_utc - signup_date_utc).days
+
+            d1_reasons = []
+            if not onboarded:
+                d1_reasons.append("onboarding_incomplete")
+            if opted_out:
+                d1_reasons.append("opted_out")
+            if trial_end is None or trial_end <= now_utc:
+                d1_reasons.append("trial_ended_or_missing")
+            if d1_sent:
+                d1_reasons.append("already_sent")
+            if interactions > 0:
+                d1_reasons.append(f"interactions>0 (={interactions})")
+            if days_in_trial is not None and not (0 <= days_in_trial <= 1):
+                d1_reasons.append(f"days_in_trial={days_in_trial} outside 0-1")
+            if not (9 <= local_hour_now < 10):
+                d1_reasons.append(f"local_hour={local_hour_now} outside 9-10")
+
+            d2_reasons = []
+            if not onboarded:
+                d2_reasons.append("onboarding_incomplete")
+            if opted_out:
+                d2_reasons.append("opted_out")
+            if trial_end is None or trial_end <= now_utc:
+                d2_reasons.append("trial_ended_or_missing")
+            if d2_sent:
+                d2_reasons.append("already_sent")
+            if interactions >= 3:
+                d2_reasons.append(f"interactions>=3 (={interactions})")
+            if days_in_trial is not None and not (1 <= days_in_trial <= 2):
+                d2_reasons.append(f"days_in_trial={days_in_trial} outside 1-2")
+            if not (9 <= local_hour_now < 10):
+                d2_reasons.append(f"local_hour={local_hour_now} outside 9-10")
+
+            users_out.append({
+                "phone_last4": phone[-4:] if phone else None,
+                "created_at_utc": str(created_at) if created_at else None,
+                "age_hours": round((now_utc - created_at.replace(tzinfo=None)).total_seconds() / 3600, 1) if created_at else None,
+                "onboarding_complete": onboarded,
+                "trial_end_date_utc": str(trial_end) if trial_end else None,
+                "days_in_trial": days_in_trial,
+                "timezone": tz_str,
+                "local_hour_now": local_hour_now,
+                "tier": tier,
+                "opted_out": opted_out,
+                "post_onboarding_interactions": interactions,
+                "day_1_nudge_sent": d1_sent,
+                "day_2_nudge_sent": d2_sent,
+                "day_3_nudge_sent": d3_sent,
+                "day_1_blocked_by": d1_reasons or ["eligible_right_now"],
+                "day_2_blocked_by": d2_reasons or ["eligible_right_now"],
+            })
+
+        return JSONResponse(content={
+            "now_utc": str(now_utc),
+            "free_trial_days": FREE_TRIAL_DAYS,
+            "total_signups_last_21d": len(users_out),
+            "users": users_out,
+        })
+
+    except Exception as e:
+        logger.error(f"Error in debug_day_1_2_nudges: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 @router.get("/admin/debug/unknown-referrals")
 async def debug_unknown_referrals(
     start_date: Optional[str] = "2026-03-01",
