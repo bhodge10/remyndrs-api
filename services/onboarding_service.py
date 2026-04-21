@@ -321,13 +321,17 @@ Last question: ZIP code?
                     shared_note += f"\n(Plus {len(accepted_lists) - 1} more shared list{'s' if len(accepted_lists) > 2 else ''}!)"
                 resp.message(f"""You're all set, {first_name}! 🎉
 
-You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories. After that, the core service is free forever — no credit card ever needed.{shared_note}""")
+You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories. After that, the core service is free forever — no credit card ever needed.{shared_note}
+
+Keep an eye out for a quick morning tip over the next week or so — I'll show you what else I can do.""")
             else:
                 resp.message(f"""Perfect! You're all set, {first_name}! 🎉
 
 You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories. After that, the core service is free forever — no credit card ever needed.
 
 I just saved your first memory: "{first_memory}"
+
+Keep an eye out for a quick morning tip over the next week or so — I'll show you what else I can do.
 
 Try asking me: "What do I have saved?" """)
 
