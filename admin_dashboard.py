@@ -1221,7 +1221,7 @@ async def debug_day_1_2_nudges(admin: str = Depends(verify_admin)):
                 onboarding_complete,
                 trial_end_date,
                 timezone,
-                tier,
+                premium_status,
                 opted_out,
                 COALESCE(post_onboarding_interactions, 0),
                 COALESCE(day_1_nudge_sent, FALSE),
@@ -1235,7 +1235,7 @@ async def debug_day_1_2_nudges(admin: str = Depends(verify_admin)):
 
         users_out = []
         for row in rows:
-            (phone, created_at, onboarded, trial_end, tz_str, tier,
+            (phone, created_at, onboarded, trial_end, tz_str, premium_status,
              opted_out, interactions, d1_sent, d2_sent, d3_sent) = row
 
             try:
@@ -1290,7 +1290,7 @@ async def debug_day_1_2_nudges(admin: str = Depends(verify_admin)):
                 "days_in_trial": days_in_trial,
                 "timezone": tz_str,
                 "local_hour_now": local_hour_now,
-                "tier": tier,
+                "premium_status": premium_status,
                 "opted_out": opted_out,
                 "post_onboarding_interactions": interactions,
                 "day_1_nudge_sent": d1_sent,
