@@ -1305,7 +1305,8 @@ def send_smart_nudges(self):
 def send_day_1_morning_nudge(self):
     """
     Send a gentle morning nudge on Day 1 (the morning after signup).
-    Only sends to users who haven't sent any messages since completing onboarding.
+    Part of the onboarding tip curriculum disclosed during onboarding — goes to
+    every onboarded trial user on Day 1 regardless of engagement level.
 
     Runs hourly via Celery Beat. Timezone-aware: only sends at 9-10 AM local.
     Only sends once per user (tracks with day_1_nudge_sent flag).
@@ -1323,10 +1324,9 @@ def send_day_1_morning_nudge(self):
 
         now_utc = datetime.utcnow()
 
-        # Find users on Day 1 of trial who haven't engaged since onboarding
+        # Find onboarded users still in trial who haven't received the Day 1 nudge
         c.execute("""
-            SELECT phone_number, first_name, trial_end_date, timezone,
-                   COALESCE(post_onboarding_interactions, 0) as interactions
+            SELECT phone_number, first_name, trial_end_date, timezone
             FROM users
             WHERE trial_end_date IS NOT NULL
               AND trial_end_date > %s
@@ -1344,11 +1344,7 @@ def send_day_1_morning_nudge(self):
         nudges_sent = 0
 
         for user in users:
-            phone_number, first_name, trial_end_date, timezone_str, interactions = user
-
-            # Only send if user has NOT sent any messages since onboarding
-            if interactions > 0:
-                continue
+            phone_number, first_name, trial_end_date, timezone_str = user
 
             # Only send when it's 9-10 AM in user's local timezone
             try:
@@ -1414,9 +1410,11 @@ def send_day_1_morning_nudge(self):
 def send_day_2_feature_prompt(self):
     """
     Send a contextual feature prompt on Day 2 (two mornings after signup).
-    Version A: If user has 0 reminders — suggests trying a reminder.
-    Version B: If user has 1+ reminders but no memories — suggests saving a memory.
-    Only sends to users with fewer than 3 messages since onboarding.
+    Part of the onboarding tip curriculum — content branches on what the user
+    has already tried so we don't teach a feature they've used:
+      Version A: 0 reminders — suggests trying a reminder.
+      Version B: 1+ reminders but 0 memories — suggests saving a memory.
+      Both: user has already discovered both features; skip.
 
     Runs hourly via Celery Beat. Timezone-aware: only sends at 9-10 AM local.
     Only sends once per user (tracks with day_2_nudge_sent flag).
@@ -1434,10 +1432,9 @@ def send_day_2_feature_prompt(self):
 
         now_utc = datetime.utcnow()
 
-        # Find users on Day 2 of trial with low engagement
+        # Find onboarded users still in trial who haven't received the Day 2 nudge
         c.execute("""
-            SELECT phone_number, first_name, trial_end_date, timezone,
-                   COALESCE(post_onboarding_interactions, 0) as interactions
+            SELECT phone_number, first_name, trial_end_date, timezone
             FROM users
             WHERE trial_end_date IS NOT NULL
               AND trial_end_date > %s
@@ -1455,11 +1452,7 @@ def send_day_2_feature_prompt(self):
         nudges_sent = 0
 
         for user in users:
-            phone_number, first_name, trial_end_date, timezone_str, interactions = user
-
-            # Only send if user has sent fewer than 3 messages since onboarding
-            if interactions >= 3:
-                continue
+            phone_number, first_name, trial_end_date, timezone_str = user
 
             # Only send when it's 9-10 AM in user's local timezone
             try:
