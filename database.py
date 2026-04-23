@@ -651,6 +651,30 @@ def init_db():
             )""",
             "CREATE INDEX IF NOT EXISTS idx_analytics_summaries_date ON analytics_summaries(summary_date DESC)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_summaries_date_period ON analytics_summaries(summary_date, period_days)",
+            # Threaded analytics chat (admin-only): conversations + per-turn messages
+            """CREATE TABLE IF NOT EXISTS analytics_conversations (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT 'New conversation',
+                admin_user TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived BOOLEAN DEFAULT FALSE
+            )""",
+            """CREATE TABLE IF NOT EXISTS analytics_messages (
+                id SERIAL PRIMARY KEY,
+                conversation_id INTEGER NOT NULL REFERENCES analytics_conversations(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                model TEXT,
+                effort TEXT,
+                data_source TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_input_tokens INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_analytics_messages_conv ON analytics_messages(conversation_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_analytics_conversations_active ON analytics_conversations(archived, last_active_at DESC)",
             # Nudge tracking for pending onboarding users
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_nudged_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS nudge_count_24h INTEGER DEFAULT 0",

@@ -505,6 +505,378 @@ def answer_analytics_question(
     }
 
 
+_CONVERSATION_SYSTEM_PROMPT = (
+    "You are an analytics expert for Remyndrs, an SMS-based AI memory and reminder service. "
+    "You are in an ongoing planning conversation with the admin about website analytics and "
+    "growth strategy. Use the provided Google Analytics 4 + Search Console data to answer. "
+    "Cite specific numbers when relevant. Be concise but substantive. When the admin asks a "
+    "follow-up, remember what you've already discussed and build on it rather than repeating "
+    "yourself. If the data does not contain what they asked about, say so plainly."
+)
+
+
+def _build_data_payload(raw_data: dict, period_days, summary_date) -> dict:
+    ga4 = raw_data.get("ga4", {})
+    sc = raw_data.get("search_console", {})
+    return {
+        "period_days": period_days,
+        "summary_date": str(summary_date) if summary_date else None,
+        "totals": ga4.get("totals", {}),
+        "daily_trend": ga4.get("daily_trend", []),
+        "traffic_sources": ga4.get("traffic_sources", [])[:10],
+        "landing_pages": ga4.get("landing_pages", [])[:10],
+        "devices": ga4.get("devices", [])[:5],
+        "key_events": ga4.get("key_events", []),
+        "ab_variants": ga4.get("ab_variants", []),
+        "search_top_queries": sc.get("top_queries", [])[:10] if not sc.get("error") else [],
+        "search_top_pages": sc.get("top_pages", [])[:5] if not sc.get("error") else [],
+    }
+
+
+def _auto_title(question: str) -> str:
+    """Derive a short conversation title from the first user question."""
+    text = (question or "").strip().split("\n")[0]
+    if len(text) > 60:
+        text = text[:57].rstrip() + "..."
+    return text or "New conversation"
+
+
+def create_conversation(admin_user: str = None, title: str = None) -> dict:
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO analytics_conversations (title, admin_user)
+                VALUES (%s, %s)
+                RETURNING id, title, admin_user, created_at, last_active_at, archived
+                """,
+                (title or "New conversation", admin_user),
+            )
+            row = cur.fetchone()
+        return {
+            "id": row[0],
+            "title": row[1],
+            "admin_user": row[2],
+            "created_at": row[3].isoformat() if row[3] else None,
+            "last_active_at": row[4].isoformat() if row[4] else None,
+            "archived": row[5],
+        }
+    except Exception as e:
+        logger.error(f"Error creating analytics conversation: {e}")
+        return {"error": str(e)}
+
+
+def list_conversations(include_archived: bool = False, limit: int = 50) -> list:
+    try:
+        with get_db_cursor() as cur:
+            if include_archived:
+                cur.execute(
+                    """
+                    SELECT c.id, c.title, c.admin_user, c.created_at, c.last_active_at, c.archived,
+                           (SELECT COUNT(*) FROM analytics_messages m WHERE m.conversation_id = c.id) AS msg_count
+                    FROM analytics_conversations c
+                    ORDER BY c.last_active_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT c.id, c.title, c.admin_user, c.created_at, c.last_active_at, c.archived,
+                           (SELECT COUNT(*) FROM analytics_messages m WHERE m.conversation_id = c.id) AS msg_count
+                    FROM analytics_conversations c
+                    WHERE c.archived = FALSE
+                    ORDER BY c.last_active_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "title": r[1],
+                "admin_user": r[2],
+                "created_at": r[3].isoformat() if r[3] else None,
+                "last_active_at": r[4].isoformat() if r[4] else None,
+                "archived": r[5],
+                "message_count": r[6],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"Error listing analytics conversations: {e}")
+        return []
+
+
+def get_conversation_with_messages(conv_id: int) -> dict:
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, admin_user, created_at, last_active_at, archived
+                FROM analytics_conversations
+                WHERE id = %s
+                """,
+                (conv_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            conv = {
+                "id": row[0],
+                "title": row[1],
+                "admin_user": row[2],
+                "created_at": row[3].isoformat() if row[3] else None,
+                "last_active_at": row[4].isoformat() if row[4] else None,
+                "archived": row[5],
+            }
+            cur.execute(
+                """
+                SELECT id, role, content, model, effort, data_source,
+                       input_tokens, output_tokens, cache_read_input_tokens, created_at
+                FROM analytics_messages
+                WHERE conversation_id = %s
+                ORDER BY id ASC
+                """,
+                (conv_id,),
+            )
+            msgs = cur.fetchall()
+        conv["messages"] = [
+            {
+                "id": m[0],
+                "role": m[1],
+                "content": m[2],
+                "model": m[3],
+                "effort": m[4],
+                "data_source": m[5],
+                "input_tokens": m[6],
+                "output_tokens": m[7],
+                "cache_read_input_tokens": m[8],
+                "created_at": m[9].isoformat() if m[9] else None,
+            }
+            for m in msgs
+        ]
+        return conv
+    except Exception as e:
+        logger.error(f"Error fetching analytics conversation {conv_id}: {e}")
+        return None
+
+
+def rename_conversation(conv_id: int, title: str) -> bool:
+    title = (title or "").strip()
+    if not title:
+        return False
+    if len(title) > 200:
+        title = title[:200]
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                "UPDATE analytics_conversations SET title = %s WHERE id = %s",
+                (title, conv_id),
+            )
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error renaming conversation {conv_id}: {e}")
+        return False
+
+
+def delete_conversation(conv_id: int) -> bool:
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                "DELETE FROM analytics_conversations WHERE id = %s",
+                (conv_id,),
+            )
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error deleting conversation {conv_id}: {e}")
+        return False
+
+
+def _insert_message(
+    conv_id: int, role: str, content: str,
+    model: str = None, effort: str = None, data_source: str = None,
+    input_tokens: int = None, output_tokens: int = None,
+    cache_read_input_tokens: int = None,
+) -> int:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO analytics_messages
+                (conversation_id, role, content, model, effort, data_source,
+                 input_tokens, output_tokens, cache_read_input_tokens)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (conv_id, role, content, model, effort, data_source,
+             input_tokens, output_tokens, cache_read_input_tokens),
+        )
+        return cur.fetchone()[0]
+
+
+def send_message_in_conversation(
+    conv_id: int,
+    question: str,
+    model_choice: str = "haiku",
+    effort: str = "medium",
+    period_days: int = 7,
+) -> dict:
+    """Append a user message to a conversation, call Claude with full history, store the reply.
+
+    Returns dict with keys:
+        user_message (dict), assistant_message (dict), conversation (dict), error (on failure).
+    """
+    question = (question or "").strip()
+    if not question:
+        return {"error": "Question is required"}
+    if len(question) > 4000:
+        return {"error": "Question too long (max 4000 chars)"}
+
+    model_key = (model_choice or "haiku").lower()
+    if model_key not in _MODEL_ID_BY_CHOICE:
+        return {"error": f"Invalid model choice '{model_choice}'"}
+    model_id = _MODEL_ID_BY_CHOICE[model_key]
+
+    effort_to_send = None
+    if model_key == "opus":
+        effort_normalized = (effort or "medium").lower()
+        if effort_normalized not in _VALID_OPUS_EFFORTS:
+            return {"error": f"Invalid effort '{effort}'"}
+        effort_to_send = effort_normalized
+
+    conv = get_conversation_with_messages(conv_id)
+    if not conv:
+        return {"error": "Conversation not found"}
+
+    # Fetch data — wider cache window for threaded chat so caching pays off across a planning session
+    raw_data, stored_period_days, summary_date, age_hours = _get_latest_raw_data(max_age_hours=24)
+    data_source = "cache"
+    if not raw_data:
+        try:
+            from services.analytics_service import get_ga4_data, get_search_console_data
+        except ImportError as e:
+            return {"error": f"Analytics service unavailable: {e}"}
+        ga4 = get_ga4_data(period_days)
+        if ga4.get("error"):
+            return {"error": f"GA4 data unavailable: {ga4['error']}"}
+        sc = get_search_console_data(period_days)
+        raw_data = {"ga4": ga4, "search_console": sc}
+        stored_period_days = period_days
+        summary_date = datetime.utcnow().date()
+        data_source = "fresh"
+
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        return {"error": "anthropic package not installed"}
+
+    import os
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return {"error": "ANTHROPIC_API_KEY not set in environment"}
+
+    client = Anthropic()
+
+    data_payload = _build_data_payload(raw_data, stored_period_days, summary_date)
+
+    # System = stable instructions + data snapshot. Cache-control marker here makes everything
+    # up through system cacheable across turns — a win once the thread has 2+ messages.
+    system = [
+        {"type": "text", "text": _CONVERSATION_SYSTEM_PROMPT},
+        {
+            "type": "text",
+            "text": f"ANALYTICS DATA (JSON):\n{json.dumps(data_payload, indent=2)}",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    messages = []
+    for m in conv["messages"]:
+        messages.append({"role": m["role"], "content": m["content"]})
+    messages.append({"role": "user", "content": question})
+
+    kwargs = {
+        "model": model_id,
+        "max_tokens": 2048,
+        "system": system,
+        "messages": messages,
+    }
+    if model_key == "opus":
+        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["output_config"] = {"effort": effort_to_send}
+        if effort_to_send in ("high", "xhigh", "max"):
+            kwargs["max_tokens"] = 8192
+
+    try:
+        response = client.messages.create(**kwargs)
+    except Exception as e:
+        logger.error(f"Claude API error in conversation {conv_id}: {e}")
+        return {"error": f"Claude API call failed: {e}"}
+
+    answer_text = next(
+        (b.text for b in response.content if getattr(b, "type", None) == "text"),
+        "",
+    ).strip()
+    if not answer_text:
+        return {"error": "Empty response from Claude"}
+
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "input_tokens", None) if usage else None
+    output_tokens = getattr(usage, "output_tokens", None) if usage else None
+    cache_read = getattr(usage, "cache_read_input_tokens", None) if usage else None
+
+    # Persist both turns and bump last_active_at. Auto-title on first user turn.
+    try:
+        with get_db_cursor() as cur:
+            is_first = len(conv["messages"]) == 0
+            user_msg_id = _insert_message(
+                conv_id, "user", question,
+                model=model_id, effort=effort_to_send, data_source=data_source,
+            )
+            assistant_msg_id = _insert_message(
+                conv_id, "assistant", answer_text,
+                model=model_id, effort=effort_to_send, data_source=data_source,
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                cache_read_input_tokens=cache_read,
+            )
+            if is_first and (conv["title"] in (None, "", "New conversation")):
+                cur.execute(
+                    "UPDATE analytics_conversations SET title = %s, last_active_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    (_auto_title(question), conv_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE analytics_conversations SET last_active_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    (conv_id,),
+                )
+    except Exception as e:
+        logger.error(f"Error persisting conversation {conv_id} messages: {e}")
+        return {"error": f"Failed to save messages: {e}"}
+
+    return {
+        "user_message": {
+            "id": user_msg_id,
+            "role": "user",
+            "content": question,
+            "model": model_id,
+            "effort": effort_to_send,
+        },
+        "assistant_message": {
+            "id": assistant_msg_id,
+            "role": "assistant",
+            "content": answer_text,
+            "model": model_id,
+            "effort": effort_to_send,
+            "data_source": data_source,
+            "data_age_hours": round(age_hours, 2) if age_hours is not None else None,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": cache_read,
+        },
+    }
+
+
 def _store_summary(
     summary_date, period_days: int, raw_data: dict,
     summary_text: str, trends: dict, metrics_snapshot: dict

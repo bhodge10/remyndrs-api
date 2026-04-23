@@ -4085,6 +4085,102 @@ async def ai_analytics_query(request: Request, admin: str = Depends(verify_admin
 
 
 # =====================================================
+# THREADED ANALYTICS CHAT
+# =====================================================
+
+@router.get("/admin/analytics/conversations")
+async def list_analytics_conversations(
+    include_archived: bool = False,
+    limit: int = 50,
+    admin: str = Depends(verify_admin),
+):
+    from services.analytics_summary_service import list_conversations
+    items = list_conversations(include_archived=include_archived, limit=min(limit, 200))
+    return JSONResponse(content={"conversations": items, "count": len(items)})
+
+
+@router.post("/admin/analytics/conversations")
+async def create_analytics_conversation(request: Request, admin: str = Depends(verify_admin)):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = (body.get("title") or "").strip() or None
+    from services.analytics_summary_service import create_conversation
+    result = create_conversation(admin_user=admin, title=title)
+    if result.get("error"):
+        return JSONResponse(content={"error": result["error"]}, status_code=500)
+    return JSONResponse(content=result, status_code=201)
+
+
+@router.get("/admin/analytics/conversations/{conv_id}")
+async def get_analytics_conversation(conv_id: int, admin: str = Depends(verify_admin)):
+    from services.analytics_summary_service import get_conversation_with_messages
+    conv = get_conversation_with_messages(conv_id)
+    if not conv:
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    return JSONResponse(content=conv)
+
+
+@router.patch("/admin/analytics/conversations/{conv_id}")
+async def rename_analytics_conversation(
+    conv_id: int, request: Request, admin: str = Depends(verify_admin)
+):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
+    title = (body.get("title") or "").strip()
+    if not title:
+        return JSONResponse(content={"error": "Title is required"}, status_code=400)
+    from services.analytics_summary_service import rename_conversation
+    ok = rename_conversation(conv_id, title)
+    if not ok:
+        return JSONResponse(content={"error": "Not found or rename failed"}, status_code=404)
+    return JSONResponse(content={"status": "success", "id": conv_id, "title": title[:200]})
+
+
+@router.delete("/admin/analytics/conversations/{conv_id}")
+async def delete_analytics_conversation(conv_id: int, admin: str = Depends(verify_admin)):
+    from services.analytics_summary_service import delete_conversation
+    ok = delete_conversation(conv_id)
+    if not ok:
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    return JSONResponse(content={"status": "success", "id": conv_id})
+
+
+@router.post("/admin/analytics/conversations/{conv_id}/messages")
+async def post_analytics_message(
+    conv_id: int, request: Request, admin: str = Depends(verify_admin)
+):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
+
+    question = (body.get("question") or "").strip()
+    if not question:
+        return JSONResponse(content={"error": "Question is required"}, status_code=400)
+    if len(question) > 4000:
+        return JSONResponse(content={"error": "Question too long (max 4000 chars)"}, status_code=400)
+
+    model_choice = body.get("model", "haiku")
+    effort = body.get("effort", "medium")
+
+    from services.analytics_summary_service import send_message_in_conversation
+    result = send_message_in_conversation(
+        conv_id=conv_id,
+        question=question,
+        model_choice=model_choice,
+        effort=effort,
+    )
+    if result.get("error"):
+        status = 404 if result["error"] == "Conversation not found" else 400
+        return JSONResponse(content={"error": result["error"]}, status_code=status)
+    return JSONResponse(content={"status": "success", **result})
+
+
+# =====================================================
 # PRODUCT METRICS ENDPOINT
 # =====================================================
 
@@ -5917,49 +6013,66 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 <div id="aiHistoryList"></div>
             </div>
 
-            <!-- Ask AI Panel -->
-            <div style="background: white; border-radius: 8px; padding: 24px; margin-top: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                <h3 style="color: #2c3e50; margin: 0 0 6px 0;">Ask a question about this data</h3>
-                <p style="color: #7f8c8d; font-size: 0.9em; margin: 0 0 16px 0;">
-                    Claude answers against the most recent GA4 + Search Console pull (re-pulled if &gt; 1 hour old).
-                </p>
-
-                <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 12px;">
-                    <div style="flex: 1; min-width: 200px;">
-                        <label style="display: block; font-size: 0.85em; color: #7f8c8d; margin-bottom: 4px;">Model</label>
-                        <select id="aiQueryModel" onchange="updateAiQueryModelUI()" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px;">
-                            <option value="haiku">Haiku 4.5 — fastest, cheapest</option>
-                            <option value="sonnet">Sonnet 4.6 — balanced</option>
-                            <option value="opus">Opus 4.7 — most capable</option>
-                        </select>
-                    </div>
-                    <div id="aiQueryEffortWrap" style="flex: 1; min-width: 200px; display: none;">
-                        <label style="display: block; font-size: 0.85em; color: #7f8c8d; margin-bottom: 4px;">Effort (Opus only)</label>
-                        <select id="aiQueryEffort" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px;">
-                            <option value="low">Low — quick</option>
-                            <option value="medium" selected>Medium — balanced</option>
-                            <option value="high">High — thorough</option>
-                            <option value="xhigh">X-High — deep reasoning</option>
-                            <option value="max">Max — ceiling (slow, $$$)</option>
-                        </select>
-                    </div>
-                    <div style="color: #95a5a6; font-size: 0.8em; min-width: 180px;" id="aiQueryCostHint">
-                        ~$0.007 / query
-                    </div>
+            <!-- Threaded Analytics Chat -->
+            <div style="background: white; border-radius: 8px; padding: 0; margin-top: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden;">
+                <div style="padding: 20px 24px 12px 24px; border-bottom: 1px solid #eee;">
+                    <h3 style="color: #2c3e50; margin: 0 0 6px 0;">Planning conversations</h3>
+                    <p style="color: #7f8c8d; font-size: 0.9em; margin: 0;">
+                        Ongoing chats with Claude about this data. Pick up where you left off across days.
+                    </p>
                 </div>
 
-                <textarea id="aiQueryInput" placeholder="e.g. Which landing pages have the best engagement rate? What's driving the drop in sessions?" rows="3" style="width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit; font-size: 0.95em; box-sizing: border-box; resize: vertical;"></textarea>
-
-                <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px;">
-                    <button class="btn btn-primary" id="aiQueryAskBtn" style="padding: 8px 18px;" onclick="askAiQuery()">Ask</button>
-                    <span id="aiQueryStatus" style="color: #7f8c8d; font-size: 0.9em;"></span>
-                </div>
-
-                <div id="aiQueryAnswerWrap" style="display: none; margin-top: 20px; padding: 18px; background: #f8f9fa; border-left: 4px solid #3498db; border-radius: 4px;">
-                    <div style="font-size: 0.85em; color: #7f8c8d; margin-bottom: 8px;">
-                        <span id="aiQueryAnswerMeta"></span>
+                <div style="display: flex; min-height: 500px;">
+                    <!-- Sidebar: conversation list -->
+                    <div style="width: 260px; border-right: 1px solid #eee; display: flex; flex-direction: column; background: #fafafa;">
+                        <div style="padding: 12px;">
+                            <button class="btn btn-primary" style="width: 100%; padding: 8px;" onclick="newChatConversation()">+ New conversation</button>
+                        </div>
+                        <div id="chatConvList" style="flex: 1; overflow-y: auto; max-height: 520px;">
+                            <div style="padding: 20px; color: #95a5a6; text-align: center; font-size: 0.9em;">Loading...</div>
+                        </div>
                     </div>
-                    <div id="aiQueryAnswerText" style="color: #2c3e50; white-space: pre-wrap; line-height: 1.6;"></div>
+
+                    <!-- Main: active conversation -->
+                    <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+                        <div id="chatHeader" style="padding: 12px 20px; border-bottom: 1px solid #eee; display: none; align-items: center; gap: 8px;">
+                            <span id="chatTitle" style="font-weight: 600; color: #2c3e50; flex: 1; cursor: text;" onclick="renameActiveChat()" title="Click to rename"></span>
+                            <button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.85em;" onclick="deleteActiveChat()">Delete</button>
+                        </div>
+
+                        <div id="chatMessages" style="flex: 1; overflow-y: auto; max-height: 440px; padding: 20px;">
+                            <div style="color: #95a5a6; text-align: center; padding: 40px 20px;">
+                                Select a conversation on the left, or start a new one.
+                            </div>
+                        </div>
+
+                        <div id="chatInputWrap" style="padding: 12px 20px 20px 20px; border-top: 1px solid #eee; display: none;">
+                            <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 0.85em;">
+                                <label style="color: #7f8c8d;">Model:</label>
+                                <select id="chatModel" onchange="updateChatModelUI()" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="haiku">Haiku 4.5</option>
+                                    <option value="sonnet">Sonnet 4.6</option>
+                                    <option value="opus">Opus 4.7</option>
+                                </select>
+                                <span id="chatEffortWrap" style="display: none;">
+                                    <label style="color: #7f8c8d;">Effort:</label>
+                                    <select id="chatEffort" onchange="updateChatModelUI()" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                        <option value="low">Low</option>
+                                        <option value="medium" selected>Medium</option>
+                                        <option value="high">High</option>
+                                        <option value="xhigh">X-High</option>
+                                        <option value="max">Max</option>
+                                    </select>
+                                </span>
+                                <span id="chatCostHint" style="color: #95a5a6; margin-left: auto;">~$0.007 / msg</span>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: flex-end;">
+                                <textarea id="chatInput" placeholder="Ask a question or follow up..." rows="2" style="flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit; font-size: 0.95em; resize: vertical;" onkeydown="handleChatKey(event)"></textarea>
+                                <button class="btn btn-primary" id="chatSendBtn" style="padding: 10px 18px;" onclick="sendChatMessage()">Send</button>
+                            </div>
+                            <div id="chatStatus" style="color: #7f8c8d; font-size: 0.85em; margin-top: 6px; min-height: 1em;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -9533,94 +9646,259 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
-        // Cost hints keyed on model+effort (rough; 4K input + 500-8K output).
-        const AI_QUERY_COST_HINTS = {{
-            haiku: '~$0.007 / query',
-            sonnet: '~$0.02 / query',
-            'opus-low': '~$0.03 / query',
-            'opus-medium': '~$0.08 / query',
-            'opus-high': '~$0.15 / query',
-            'opus-xhigh': '~$0.25 / query',
-            'opus-max': '~$0.40+ / query',
+        // =============================================
+        // Threaded analytics chat
+        // =============================================
+        const CHAT_COST_HINTS = {{
+            haiku: '~$0.007 / msg',
+            sonnet: '~$0.02 / msg',
+            'opus-low': '~$0.03 / msg',
+            'opus-medium': '~$0.08 / msg',
+            'opus-high': '~$0.15 / msg',
+            'opus-xhigh': '~$0.25 / msg',
+            'opus-max': '~$0.40+ / msg',
         }};
 
-        function updateAiQueryModelUI() {{
-            const model = document.getElementById('aiQueryModel').value;
-            const effortWrap = document.getElementById('aiQueryEffortWrap');
-            const costHint = document.getElementById('aiQueryCostHint');
+        let chatActiveConvId = null;
+        let chatConversations = [];
+
+        function updateChatModelUI() {{
+            const model = document.getElementById('chatModel').value;
+            const effortWrap = document.getElementById('chatEffortWrap');
+            const hint = document.getElementById('chatCostHint');
             if (model === 'opus') {{
-                effortWrap.style.display = 'block';
-                const effort = document.getElementById('aiQueryEffort').value;
-                costHint.textContent = AI_QUERY_COST_HINTS['opus-' + effort] || '';
+                effortWrap.style.display = 'inline';
+                const effort = document.getElementById('chatEffort').value;
+                hint.textContent = CHAT_COST_HINTS['opus-' + effort] || '';
             }} else {{
                 effortWrap.style.display = 'none';
-                costHint.textContent = AI_QUERY_COST_HINTS[model] || '';
+                hint.textContent = CHAT_COST_HINTS[model] || '';
             }}
         }}
 
-        async function askAiQuery() {{
-            const input = document.getElementById('aiQueryInput');
-            const btn = document.getElementById('aiQueryAskBtn');
-            const status = document.getElementById('aiQueryStatus');
-            const answerWrap = document.getElementById('aiQueryAnswerWrap');
-            const answerText = document.getElementById('aiQueryAnswerText');
-            const answerMeta = document.getElementById('aiQueryAnswerMeta');
+        function escapeHtmlChat(s) {{
+            const div = document.createElement('div');
+            div.textContent = s == null ? '' : String(s);
+            return div.innerHTML;
+        }}
 
-            const question = (input.value || '').trim();
-            if (!question) {{
-                status.textContent = 'Enter a question first.';
+        function fmtChatRelative(iso) {{
+            if (!iso) return '';
+            const d = new Date(iso);
+            const diff = (Date.now() - d.getTime()) / 1000;
+            if (diff < 60) return 'just now';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            return Math.floor(diff / 86400) + 'd ago';
+        }}
+
+        async function loadChatConversations() {{
+            const list = document.getElementById('chatConvList');
+            try {{
+                const r = await fetch('/admin/analytics/conversations');
+                const data = await r.json();
+                chatConversations = data.conversations || [];
+                if (chatConversations.length === 0) {{
+                    list.innerHTML = '<div style="padding: 20px; color: #95a5a6; text-align: center; font-size: 0.9em;">No conversations yet. Start one above.</div>';
+                    return;
+                }}
+                list.innerHTML = chatConversations.map(c => {{
+                    const active = c.id === chatActiveConvId;
+                    const bg = active ? '#e3f2fd' : 'transparent';
+                    const border = active ? '3px solid #3498db' : '3px solid transparent';
+                    return `
+                        <div onclick="openChatConversation(${{c.id}})" style="padding: 10px 12px; cursor: pointer; border-left: ${{border}}; background: ${{bg}}; border-bottom: 1px solid #eee;">
+                            <div style="font-size: 0.9em; color: #2c3e50; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${{escapeHtmlChat(c.title)}}">${{escapeHtmlChat(c.title)}}</div>
+                            <div style="font-size: 0.75em; color: #95a5a6; margin-top: 2px;">${{c.message_count}} msgs · ${{fmtChatRelative(c.last_active_at)}}</div>
+                        </div>`;
+                }}).join('');
+            }} catch (e) {{
+                list.innerHTML = '<div style="padding: 20px; color: #e74c3c; text-align: center; font-size: 0.9em;">Failed to load</div>';
+            }}
+        }}
+
+        async function newChatConversation() {{
+            try {{
+                const r = await fetch('/admin/analytics/conversations', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{}}),
+                }});
+                const data = await r.json();
+                if (data.error) {{ alert('Could not create conversation: ' + data.error); return; }}
+                chatActiveConvId = data.id;
+                await loadChatConversations();
+                await openChatConversation(data.id);
+                document.getElementById('chatInput').focus();
+            }} catch (e) {{
+                alert('Failed to create conversation: ' + e.message);
+            }}
+        }}
+
+        async function openChatConversation(convId) {{
+            chatActiveConvId = convId;
+            const messagesEl = document.getElementById('chatMessages');
+            const header = document.getElementById('chatHeader');
+            const inputWrap = document.getElementById('chatInputWrap');
+            messagesEl.innerHTML = '<div style="color: #95a5a6; text-align: center;">Loading...</div>';
+            header.style.display = 'flex';
+            inputWrap.style.display = 'block';
+
+            try {{
+                const r = await fetch('/admin/analytics/conversations/' + convId);
+                if (r.status === 404) {{
+                    messagesEl.innerHTML = '<div style="color: #e74c3c;">Conversation not found</div>';
+                    return;
+                }}
+                const conv = await r.json();
+                document.getElementById('chatTitle').textContent = conv.title || 'Untitled';
+                renderChatMessages(conv.messages || []);
+                // Refresh list to update highlight
+                loadChatConversations();
+            }} catch (e) {{
+                messagesEl.innerHTML = '<div style="color: #e74c3c;">Failed to load: ' + escapeHtmlChat(e.message) + '</div>';
+            }}
+        }}
+
+        function renderChatMessages(messages) {{
+            const messagesEl = document.getElementById('chatMessages');
+            if (messages.length === 0) {{
+                messagesEl.innerHTML = '<div style="color: #95a5a6; text-align: center; padding: 30px 20px;">Ask your first question below.</div>';
                 return;
             }}
+            messagesEl.innerHTML = messages.map(m => {{
+                const isUser = m.role === 'user';
+                const align = isUser ? 'flex-end' : 'flex-start';
+                const bg = isUser ? '#3498db' : '#ecf0f1';
+                const color = isUser ? 'white' : '#2c3e50';
+                const meta = [];
+                if (m.model) meta.push(m.model);
+                if (m.effort) meta.push('effort: ' + m.effort);
+                if (m.input_tokens != null || m.output_tokens != null) {{
+                    meta.push((m.input_tokens || 0) + ' in / ' + (m.output_tokens || 0) + ' out');
+                }}
+                if (m.cache_read_input_tokens) meta.push(m.cache_read_input_tokens + ' cached');
+                return `
+                    <div style="display: flex; justify-content: ${{align}}; margin-bottom: 14px;">
+                        <div style="max-width: 85%;">
+                            <div style="background: ${{bg}}; color: ${{color}}; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; line-height: 1.5;">${{escapeHtmlChat(m.content)}}</div>
+                            ${{!isUser && meta.length ? `<div style="font-size: 0.75em; color: #95a5a6; margin-top: 4px;">${{escapeHtmlChat(meta.join(' · '))}}</div>` : ''}}
+                        </div>
+                    </div>`;
+            }}).join('');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }}
 
-            const model = document.getElementById('aiQueryModel').value;
-            const effort = document.getElementById('aiQueryEffort').value;
+        function handleChatKey(e) {{
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {{
+                e.preventDefault();
+                sendChatMessage();
+            }}
+        }}
+
+        async function sendChatMessage() {{
+            if (!chatActiveConvId) {{
+                alert('No conversation selected. Click "+ New conversation" first.');
+                return;
+            }}
+            const inputEl = document.getElementById('chatInput');
+            const question = (inputEl.value || '').trim();
+            if (!question) return;
+
+            const model = document.getElementById('chatModel').value;
+            const effort = document.getElementById('chatEffort').value;
+            const btn = document.getElementById('chatSendBtn');
+            const status = document.getElementById('chatStatus');
 
             btn.disabled = true;
             btn.textContent = 'Thinking...';
             status.textContent = '';
 
+            // Optimistically append the user message
+            const messagesEl = document.getElementById('chatMessages');
+            const r0 = await fetch('/admin/analytics/conversations/' + chatActiveConvId);
+            let existing = [];
+            if (r0.ok) {{
+                const c = await r0.json();
+                existing = c.messages || [];
+            }}
+            renderChatMessages([...existing, {{ role: 'user', content: question }}]);
+
             try {{
-                const response = await fetch('/admin/analytics/ai-query', {{
+                const r = await fetch('/admin/analytics/conversations/' + chatActiveConvId + '/messages', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ question, model, effort }}),
                 }});
-                const data = await response.json();
+                const data = await r.json();
 
-                if (!response.ok || data.error) {{
-                    status.textContent = 'Error: ' + (data.error || response.statusText);
+                if (!r.ok || data.error) {{
+                    status.textContent = 'Error: ' + (data.error || r.statusText);
+                    // Restore prior state (drop optimistic user msg)
+                    renderChatMessages(existing);
                     return;
                 }}
 
-                answerText.textContent = data.answer || '(no answer returned)';
-                const metaParts = [data.model];
-                if (data.effort) metaParts.push('effort: ' + data.effort);
-                if (data.data_source === 'cache' && data.data_age_hours != null) {{
-                    metaParts.push('data ' + data.data_age_hours + 'h old');
-                }} else if (data.data_source === 'fresh') {{
-                    metaParts.push('freshly pulled');
-                }}
-                if (data.usage) {{
-                    const u = data.usage;
-                    if (u.input_tokens != null || u.output_tokens != null) {{
-                        metaParts.push((u.input_tokens || 0) + ' in / ' + (u.output_tokens || 0) + ' out tokens');
-                    }}
-                }}
-                answerMeta.textContent = metaParts.join(' · ');
-                answerWrap.style.display = 'block';
+                inputEl.value = '';
+                // Reload the conversation to get the canonical message list
+                await openChatConversation(chatActiveConvId);
             }} catch (e) {{
                 status.textContent = 'Failed: ' + e.message;
+                renderChatMessages(existing);
             }} finally {{
                 btn.disabled = false;
-                btn.textContent = 'Ask';
+                btn.textContent = 'Send';
             }}
         }}
 
-        // Wire up effort-change cost hint update
+        async function renameActiveChat() {{
+            if (!chatActiveConvId) return;
+            const current = document.getElementById('chatTitle').textContent;
+            const next = prompt('Rename conversation:', current);
+            if (next == null) return;
+            const title = next.trim();
+            if (!title || title === current) return;
+            try {{
+                const r = await fetch('/admin/analytics/conversations/' + chatActiveConvId, {{
+                    method: 'PATCH',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ title }}),
+                }});
+                if (!r.ok) {{
+                    const data = await r.json();
+                    alert('Rename failed: ' + (data.error || r.statusText));
+                    return;
+                }}
+                document.getElementById('chatTitle').textContent = title;
+                loadChatConversations();
+            }} catch (e) {{
+                alert('Rename failed: ' + e.message);
+            }}
+        }}
+
+        async function deleteActiveChat() {{
+            if (!chatActiveConvId) return;
+            if (!confirm('Delete this conversation and all its messages? This cannot be undone.')) return;
+            try {{
+                const r = await fetch('/admin/analytics/conversations/' + chatActiveConvId, {{ method: 'DELETE' }});
+                if (!r.ok) {{
+                    const data = await r.json();
+                    alert('Delete failed: ' + (data.error || r.statusText));
+                    return;
+                }}
+                chatActiveConvId = null;
+                document.getElementById('chatHeader').style.display = 'none';
+                document.getElementById('chatInputWrap').style.display = 'none';
+                document.getElementById('chatMessages').innerHTML = '<div style="color: #95a5a6; text-align: center; padding: 40px 20px;">Select a conversation on the left, or start a new one.</div>';
+                loadChatConversations();
+            }} catch (e) {{
+                alert('Delete failed: ' + e.message);
+            }}
+        }}
+
         document.addEventListener('DOMContentLoaded', function() {{
-            const effortSel = document.getElementById('aiQueryEffort');
-            if (effortSel) effortSel.addEventListener('change', updateAiQueryModelUI);
-            updateAiQueryModelUI();
+            updateChatModelUI();
+            loadChatConversations();
         }});
 
         async function loadAISummaryHistory() {{
