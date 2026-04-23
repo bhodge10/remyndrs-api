@@ -480,6 +480,27 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         increment_message_count(phone_number)
 
         # ==========================================
+        # ADMIN NOTIFICATIONS (high-signal user events)
+        # ==========================================
+        # Fire-and-forget — never blocks user handling.
+        try:
+            from config import ADMIN_NOTIFICATION_PHONE
+            if ADMIN_NOTIFICATION_PHONE and phone_number != ADMIN_NOTIFICATION_PHONE:
+                msg_stripped_upper = incoming_msg.strip().upper()
+                trigger = None
+                if msg_stripped_upper in ("UPGRADE", "SUBSCRIBE", "PREMIUM", "PRICING"):
+                    trigger = "upgrade"
+                elif "shared list" in incoming_msg.lower():
+                    trigger = "shared list"
+                if trigger:
+                    from services.sms_service import notify_admin
+                    last4 = phone_number[-4:] if phone_number else "?"
+                    preview = incoming_msg.strip()[:120]
+                    notify_admin(f"[Remyndrs] {trigger} trigger from ...{last4}: {preview}")
+        except Exception as e:
+            logger.warning(f"Admin notification hook error: {e}")
+
+        # ==========================================
         # DELETE ACCOUNT COMMAND (two-step confirmation)
         # ==========================================
         if incoming_msg.upper() in ("DELETE ACCOUNT", "CANCEL ACCOUNT", "CANCEL MY ACCOUNT", "DELETE MY ACCOUNT", "REMOVE MY ACCOUNT", "CLOSE MY ACCOUNT"):
