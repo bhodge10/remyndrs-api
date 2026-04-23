@@ -14,7 +14,7 @@ from models.user import create_or_update_user, get_user_timezone
 from models.reminder import (
     save_reminder, save_reminder_with_local_time, get_user_reminders,
     save_recurring_reminder, delete_reminder as db_delete_reminder,
-    search_pending_reminders, update_reminder_time
+    delete_recurring_reminder, search_pending_reminders, update_reminder_time
 )
 from utils.timezone import get_user_current_time
 from utils.validation import detect_sensitive_data, get_sensitive_data_warning
@@ -425,18 +425,26 @@ def handle_delete_reminder(
         reminders = get_user_reminders(phone_number)
         reminder_match = next((r for r in reminders if r[0] == reminder_id), None)
         if reminder_match:
+            text = reminder_match[2]
+            recurring_id = reminder_match[3]
             db_delete_reminder(phone_number, reminder_id)
-            reply_text = f"Deleted reminder: {reminder_match[1]}"
+            reply_text = f"Deleted reminder: {text}"
+            if recurring_id and delete_recurring_reminder(recurring_id, phone_number):
+                reply_text += " (and its recurring schedule)"
         else:
             reply_text = "I couldn't find that reminder."
     elif reminder_number:
         # Delete by list number
         reminders = get_user_reminders(phone_number)
         if 1 <= reminder_number <= len(reminders):
-            reminder_id = reminders[reminder_number - 1][0]
-            text = reminders[reminder_number - 1][1]
+            selected = reminders[reminder_number - 1]
+            reminder_id = selected[0]
+            text = selected[2]
+            recurring_id = selected[3]
             db_delete_reminder(phone_number, reminder_id)
             reply_text = f"Deleted reminder: {text}"
+            if recurring_id and delete_recurring_reminder(recurring_id, phone_number):
+                reply_text += " (and its recurring schedule)"
         else:
             reply_text = f"Invalid reminder number. You have {len(reminders)} reminders."
     elif search_term:
