@@ -675,6 +675,17 @@ def init_db():
             )""",
             "CREATE INDEX IF NOT EXISTS idx_analytics_messages_conv ON analytics_messages(conversation_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_analytics_conversations_active ON analytics_conversations(archived, last_active_at DESC)",
+            # Attachments (images) uploaded to analytics chat messages
+            """CREATE TABLE IF NOT EXISTS analytics_attachments (
+                id SERIAL PRIMARY KEY,
+                message_id INTEGER NOT NULL REFERENCES analytics_messages(id) ON DELETE CASCADE,
+                filename TEXT,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                data BYTEA NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_analytics_attachments_message ON analytics_attachments(message_id)",
             # Nudge tracking for pending onboarding users
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_nudged_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS nudge_count_24h INTEGER DEFAULT 0",

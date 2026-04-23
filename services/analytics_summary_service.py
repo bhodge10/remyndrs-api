@@ -4,9 +4,12 @@ Uses Claude API to generate daily analytics summaries with trend analysis
 from Google Analytics 4 and Search Console data.
 """
 
+import base64
 import json
 import logging
 from datetime import datetime, timedelta
+
+import psycopg2
 
 from database import get_db_cursor
 
@@ -505,6 +508,113 @@ def answer_analytics_question(
     }
 
 
+# Image attachment policy
+MAX_IMAGES_PER_MESSAGE = 3
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
+ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+# Only include image BYTES on the last N user turns when calling Claude; older
+# turns keep their text so the model remembers the conversation, but the bytes
+# are dropped to keep long threads affordable.
+RECENT_IMAGE_TURN_LIMIT = 3
+
+
+def _validate_image(filename: str, mime_type: str, data: bytes) -> str:
+    """Return an error string if invalid, or None if OK."""
+    if not data:
+        return f"{filename or 'attachment'}: empty file"
+    if mime_type not in ALLOWED_IMAGE_MIME_TYPES:
+        return f"{filename or 'attachment'}: unsupported type '{mime_type}' (allowed: JPEG/PNG/GIF/WEBP)"
+    if len(data) > MAX_IMAGE_BYTES:
+        return f"{filename or 'attachment'}: too large ({len(data)} bytes; max {MAX_IMAGE_BYTES})"
+    return None
+
+
+def _insert_attachment(message_id: int, filename: str, mime_type: str, data: bytes) -> int:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO analytics_attachments (message_id, filename, mime_type, size_bytes, data)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (message_id, filename, mime_type, len(data), psycopg2.Binary(data)),
+        )
+        return cur.fetchone()[0]
+
+
+def _get_attachments_metadata_by_message(message_ids: list) -> dict:
+    """Return {message_id: [ {id, filename, mime_type, size_bytes}, ... ]} for the given message ids."""
+    if not message_ids:
+        return {}
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, message_id, filename, mime_type, size_bytes
+                FROM analytics_attachments
+                WHERE message_id = ANY(%s)
+                ORDER BY id ASC
+                """,
+                (list(message_ids),),
+            )
+            rows = cur.fetchall()
+        out = {}
+        for r in rows:
+            out.setdefault(r[1], []).append({
+                "id": r[0],
+                "filename": r[2],
+                "mime_type": r[3],
+                "size_bytes": r[4],
+            })
+        return out
+    except Exception as e:
+        logger.error(f"Error fetching attachment metadata: {e}")
+        return {}
+
+
+def get_attachment_bytes(att_id: int) -> tuple:
+    """Fetch raw attachment bytes for serving. Returns (bytes, mime_type, filename, message_id) or (None, None, None, None)."""
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                "SELECT data, mime_type, filename, message_id FROM analytics_attachments WHERE id = %s",
+                (att_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, None, None, None
+            data = row[0]
+            if isinstance(data, memoryview):
+                data = bytes(data)
+            return data, row[1], row[2], row[3]
+    except Exception as e:
+        logger.error(f"Error fetching attachment {att_id}: {e}")
+        return None, None, None, None
+
+
+def _fetch_attachment_data_batch(att_ids: list) -> dict:
+    """Return {attachment_id: (bytes, mime_type)} for the given ids."""
+    if not att_ids:
+        return {}
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                "SELECT id, data, mime_type FROM analytics_attachments WHERE id = ANY(%s)",
+                (list(att_ids),),
+            )
+            rows = cur.fetchall()
+        out = {}
+        for r in rows:
+            data = r[1]
+            if isinstance(data, memoryview):
+                data = bytes(data)
+            out[r[0]] = (data, r[2])
+        return out
+    except Exception as e:
+        logger.error(f"Error batch-fetching attachments: {e}")
+        return {}
+
+
 _CONVERSATION_SYSTEM_PROMPT = (
     "You are an analytics expert for Remyndrs, an SMS-based AI memory and reminder service. "
     "You are in an ongoing planning conversation with the admin about website analytics and "
@@ -643,6 +753,8 @@ def get_conversation_with_messages(conv_id: int) -> dict:
                 (conv_id,),
             )
             msgs = cur.fetchall()
+        message_ids = [m[0] for m in msgs]
+        attachments_by_msg = _get_attachments_metadata_by_message(message_ids)
         conv["messages"] = [
             {
                 "id": m[0],
@@ -655,6 +767,7 @@ def get_conversation_with_messages(conv_id: int) -> dict:
                 "output_tokens": m[7],
                 "cache_read_input_tokens": m[8],
                 "created_at": m[9].isoformat() if m[9] else None,
+                "attachments": attachments_by_msg.get(m[0], []),
             }
             for m in msgs
         ]
@@ -722,17 +835,31 @@ def send_message_in_conversation(
     model_choice: str = "haiku",
     effort: str = "medium",
     period_days: int = 7,
+    image_files: list = None,
 ) -> dict:
     """Append a user message to a conversation, call Claude with full history, store the reply.
+
+    image_files: optional list of dicts with keys {filename, mime_type, data (bytes)} — attached
+    to the outgoing user message.
 
     Returns dict with keys:
         user_message (dict), assistant_message (dict), conversation (dict), error (on failure).
     """
     question = (question or "").strip()
-    if not question:
-        return {"error": "Question is required"}
+    image_files = image_files or []
+
+    # Allow image-only messages (common claude.ai pattern: drop an image, ask "thoughts?")
+    if not question and not image_files:
+        return {"error": "Question or at least one image is required"}
     if len(question) > 4000:
         return {"error": "Question too long (max 4000 chars)"}
+
+    if len(image_files) > MAX_IMAGES_PER_MESSAGE:
+        return {"error": f"Too many images (max {MAX_IMAGES_PER_MESSAGE} per message)"}
+    for f in image_files:
+        err = _validate_image(f.get("filename"), f.get("mime_type"), f.get("data"))
+        if err:
+            return {"error": err}
 
     model_key = (model_choice or "haiku").lower()
     if model_key not in _MODEL_ID_BY_CHOICE:
@@ -791,10 +918,65 @@ def send_message_in_conversation(
         },
     ]
 
+    # Decide which prior user turns should carry image bytes. Keep bytes on the most recent
+    # RECENT_IMAGE_TURN_LIMIT user turns (counting the new one being sent); older user turns
+    # drop image bytes but keep their text for conversational continuity.
+    prior_user_turns_with_images = []
+    for m in conv["messages"]:
+        if m["role"] == "user" and m.get("attachments"):
+            prior_user_turns_with_images.append(m["id"])
+    # Current turn occupies one slot
+    slots_for_prior = max(0, RECENT_IMAGE_TURN_LIMIT - 1)
+    include_image_ids_for_messages = set(prior_user_turns_with_images[-slots_for_prior:]) if slots_for_prior else set()
+
+    # Batch-fetch bytes for the attachments we actually need
+    att_ids_to_fetch = []
+    for m in conv["messages"]:
+        if m["id"] in include_image_ids_for_messages:
+            att_ids_to_fetch.extend([a["id"] for a in m.get("attachments", [])])
+    attachment_bytes = _fetch_attachment_data_batch(att_ids_to_fetch)
+
     messages = []
     for m in conv["messages"]:
-        messages.append({"role": m["role"], "content": m["content"]})
-    messages.append({"role": "user", "content": question})
+        if m["role"] == "user" and m["id"] in include_image_ids_for_messages and m.get("attachments"):
+            content = []
+            for att in m["attachments"]:
+                entry = attachment_bytes.get(att["id"])
+                if not entry:
+                    continue
+                data, mime = entry
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime,
+                        "data": base64.b64encode(data).decode("ascii"),
+                    },
+                })
+            if m["content"]:
+                content.append({"type": "text", "text": m["content"]})
+            messages.append({"role": "user", "content": content or [{"type": "text", "text": ""}]})
+        else:
+            messages.append({"role": m["role"], "content": m["content"]})
+
+    # Build the new user message content (current turn includes its images)
+    new_user_content = []
+    for f in image_files:
+        new_user_content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": f["mime_type"],
+                "data": base64.b64encode(f["data"]).decode("ascii"),
+            },
+        })
+    if question:
+        new_user_content.append({"type": "text", "text": question})
+    if len(new_user_content) == 1 and new_user_content[0]["type"] == "text":
+        # Collapse single-text content to a string for API simplicity
+        messages.append({"role": "user", "content": question})
+    else:
+        messages.append({"role": "user", "content": new_user_content})
 
     kwargs = {
         "model": model_id,
@@ -827,6 +1009,7 @@ def send_message_in_conversation(
     cache_read = getattr(usage, "cache_read_input_tokens", None) if usage else None
 
     # Persist both turns and bump last_active_at. Auto-title on first user turn.
+    stored_attachments = []
     try:
         with get_db_cursor() as cur:
             is_first = len(conv["messages"]) == 0
@@ -834,6 +1017,14 @@ def send_message_in_conversation(
                 conv_id, "user", question,
                 model=model_id, effort=effort_to_send, data_source=data_source,
             )
+            for f in image_files:
+                att_id = _insert_attachment(user_msg_id, f.get("filename"), f["mime_type"], f["data"])
+                stored_attachments.append({
+                    "id": att_id,
+                    "filename": f.get("filename"),
+                    "mime_type": f["mime_type"],
+                    "size_bytes": len(f["data"]),
+                })
             assistant_msg_id = _insert_message(
                 conv_id, "assistant", answer_text,
                 model=model_id, effort=effort_to_send, data_source=data_source,
@@ -841,9 +1032,10 @@ def send_message_in_conversation(
                 cache_read_input_tokens=cache_read,
             )
             if is_first and (conv["title"] in (None, "", "New conversation")):
+                title_source = question if question else (image_files[0].get("filename") or "Image review")
                 cur.execute(
                     "UPDATE analytics_conversations SET title = %s, last_active_at = CURRENT_TIMESTAMP WHERE id = %s",
-                    (_auto_title(question), conv_id),
+                    (_auto_title(title_source), conv_id),
                 )
             else:
                 cur.execute(
@@ -861,6 +1053,7 @@ def send_message_in_conversation(
             "content": question,
             "model": model_id,
             "effort": effort_to_send,
+            "attachments": stored_attachments,
         },
         "assistant_message": {
             "id": assistant_msg_id,
