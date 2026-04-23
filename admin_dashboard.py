@@ -10,8 +10,8 @@ import time
 from datetime import datetime, timedelta
 from html import escape as html_escape
 import pytz
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Form, File, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from typing import Optional
@@ -4151,33 +4151,54 @@ async def delete_analytics_conversation(conv_id: int, admin: str = Depends(verif
 
 @router.post("/admin/analytics/conversations/{conv_id}/messages")
 async def post_analytics_message(
-    conv_id: int, request: Request, admin: str = Depends(verify_admin)
+    conv_id: int,
+    question: str = Form(""),
+    model: str = Form("haiku"),
+    effort: str = Form("medium"),
+    files: list[UploadFile] = File(default=[]),
+    admin: str = Depends(verify_admin),
 ):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
-
-    question = (body.get("question") or "").strip()
-    if not question:
-        return JSONResponse(content={"error": "Question is required"}, status_code=400)
-    if len(question) > 4000:
-        return JSONResponse(content={"error": "Question too long (max 4000 chars)"}, status_code=400)
-
-    model_choice = body.get("model", "haiku")
-    effort = body.get("effort", "medium")
+    """Multipart endpoint: accepts `question` + optional image `files[]`."""
+    image_files = []
+    for f in files or []:
+        if not f or not getattr(f, "filename", None):
+            continue
+        data = await f.read()
+        image_files.append({
+            "filename": f.filename,
+            "mime_type": f.content_type or "application/octet-stream",
+            "data": data,
+        })
 
     from services.analytics_summary_service import send_message_in_conversation
     result = send_message_in_conversation(
         conv_id=conv_id,
         question=question,
-        model_choice=model_choice,
+        model_choice=model,
         effort=effort,
+        image_files=image_files,
     )
     if result.get("error"):
         status = 404 if result["error"] == "Conversation not found" else 400
         return JSONResponse(content={"error": result["error"]}, status_code=status)
     return JSONResponse(content={"status": "success", **result})
+
+
+@router.get("/admin/analytics/conversations/{conv_id}/attachments/{att_id}")
+async def get_analytics_attachment(conv_id: int, att_id: int, admin: str = Depends(verify_admin)):
+    """Serve an image attachment's raw bytes. Validates that the attachment belongs to the given conversation."""
+    from services.analytics_summary_service import get_attachment_bytes, get_conversation_with_messages
+    data, mime, filename, message_id = get_attachment_bytes(att_id)
+    if not data:
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    # Verify the attachment's message belongs to this conversation
+    conv = get_conversation_with_messages(conv_id)
+    if not conv or not any(m["id"] == message_id for m in conv.get("messages", [])):
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    headers = {"Cache-Control": "private, max-age=3600"}
+    if filename:
+        headers["Content-Disposition"] = f'inline; filename="{filename}"'
+    return Response(content=data, media_type=mime, headers=headers)
 
 
 # =====================================================
@@ -6066,9 +6087,17 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                                 </span>
                                 <span id="chatCostHint" style="color: #95a5a6; margin-left: auto;">~$0.007 / msg</span>
                             </div>
-                            <div style="display: flex; gap: 8px; align-items: flex-end;">
-                                <textarea id="chatInput" placeholder="Ask a question or follow up..." rows="2" style="flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit; font-size: 0.95em; resize: vertical;" onkeydown="handleChatKey(event)"></textarea>
-                                <button class="btn btn-primary" id="chatSendBtn" style="padding: 10px 18px;" onclick="sendChatMessage()">Send</button>
+
+                            <!-- Staged attachments (before send) -->
+                            <div id="chatStagedFiles" style="display: none; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;"></div>
+
+                            <div id="chatDropZone" style="display: flex; gap: 8px; align-items: flex-end; border: 2px dashed transparent; border-radius: 4px; transition: border-color 0.15s;">
+                                <textarea id="chatInput" placeholder="Ask a question, follow up, or drop an image..." rows="2" style="flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit; font-size: 0.95em; resize: vertical;" onkeydown="handleChatKey(event)"></textarea>
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <button type="button" class="btn btn-secondary" style="padding: 8px 14px; font-size: 0.85em;" onclick="document.getElementById('chatFileInput').click()" title="Attach image (max 3, 5MB each)">+ Image</button>
+                                    <button class="btn btn-primary" id="chatSendBtn" style="padding: 8px 14px;" onclick="sendChatMessage()">Send</button>
+                                </div>
+                                <input type="file" id="chatFileInput" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display: none;" onchange="handleChatFilesPicked(event)">
                             </div>
                             <div id="chatStatus" style="color: #7f8c8d; font-size: 0.85em; margin-top: 6px; min-height: 1em;"></div>
                         </div>
@@ -9661,6 +9690,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
 
         let chatActiveConvId = null;
         let chatConversations = [];
+        let chatStagedFiles = [];
+        const CHAT_MAX_IMAGES = 3;
+        const CHAT_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+        const CHAT_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
         function updateChatModelUI() {{
             const model = document.getElementById('chatModel').value;
@@ -9778,15 +9811,121 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     meta.push((m.input_tokens || 0) + ' in / ' + (m.output_tokens || 0) + ' out');
                 }}
                 if (m.cache_read_input_tokens) meta.push(m.cache_read_input_tokens + ' cached');
+
+                let attachmentsHtml = '';
+                if (m.attachments && m.attachments.length) {{
+                    attachmentsHtml = '<div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;">' +
+                        m.attachments.map(att => {{
+                            const url = '/admin/analytics/conversations/' + chatActiveConvId + '/attachments/' + att.id;
+                            return `<a href="${{url}}" target="_blank" title="${{escapeHtmlChat(att.filename || '')}}"><img src="${{url}}" style="max-width: 180px; max-height: 140px; border-radius: 6px; border: 1px solid #ddd;"></a>`;
+                        }}).join('') +
+                        '</div>';
+                }}
+
                 return `
                     <div style="display: flex; justify-content: ${{align}}; margin-bottom: 14px;">
                         <div style="max-width: 85%;">
-                            <div style="background: ${{bg}}; color: ${{color}}; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; line-height: 1.5;">${{escapeHtmlChat(m.content)}}</div>
+                            ${{attachmentsHtml}}
+                            ${{m.content ? `<div style="background: ${{bg}}; color: ${{color}}; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; line-height: 1.5;">${{escapeHtmlChat(m.content)}}</div>` : ''}}
                             ${{!isUser && meta.length ? `<div style="font-size: 0.75em; color: #95a5a6; margin-top: 4px;">${{escapeHtmlChat(meta.join(' · '))}}</div>` : ''}}
                         </div>
                     </div>`;
             }}).join('');
             messagesEl.scrollTop = messagesEl.scrollHeight;
+        }}
+
+        // ---- File staging + drag-and-drop ----
+        function fmtChatBytes(n) {{
+            if (n < 1024) return n + ' B';
+            if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+            return (n / (1024 * 1024)).toFixed(1) + ' MB';
+        }}
+
+        function renderStagedFiles() {{
+            const el = document.getElementById('chatStagedFiles');
+            if (chatStagedFiles.length === 0) {{
+                el.style.display = 'none';
+                el.innerHTML = '';
+                return;
+            }}
+            el.style.display = 'flex';
+            el.innerHTML = chatStagedFiles.map((f, idx) => {{
+                const url = URL.createObjectURL(f.file);
+                return `
+                    <div style="position: relative; width: 80px; height: 80px; border-radius: 6px; overflow: hidden; border: 1px solid #ddd; background: #f0f0f0;">
+                        <img src="${{url}}" style="width: 100%; height: 100%; object-fit: cover;">
+                        <button type="button" onclick="removeStagedFile(${{idx}})" title="Remove" style="position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 50%; width: 22px; height: 22px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">×</button>
+                        <div style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.6); color: white; font-size: 0.7em; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${{escapeHtmlChat(fmtChatBytes(f.file.size))}}</div>
+                    </div>`;
+            }}).join('');
+        }}
+
+        function removeStagedFile(idx) {{
+            chatStagedFiles.splice(idx, 1);
+            renderStagedFiles();
+        }}
+
+        function addStagedFiles(fileList) {{
+            const status = document.getElementById('chatStatus');
+            const incoming = Array.from(fileList || []);
+            const errors = [];
+            for (const f of incoming) {{
+                if (chatStagedFiles.length >= CHAT_MAX_IMAGES) {{
+                    errors.push('Max ' + CHAT_MAX_IMAGES + ' images per message');
+                    break;
+                }}
+                if (!CHAT_ALLOWED_MIME.includes(f.type)) {{
+                    errors.push(f.name + ': unsupported type (' + (f.type || 'unknown') + ')');
+                    continue;
+                }}
+                if (f.size > CHAT_MAX_IMAGE_BYTES) {{
+                    errors.push(f.name + ': too large (' + fmtChatBytes(f.size) + ')');
+                    continue;
+                }}
+                chatStagedFiles.push({{ file: f }});
+            }}
+            renderStagedFiles();
+            status.textContent = errors.length ? errors.join(' · ') : '';
+        }}
+
+        function handleChatFilesPicked(ev) {{
+            addStagedFiles(ev.target.files);
+            // Allow picking the same file twice in a row
+            ev.target.value = '';
+        }}
+
+        function setupChatDropZone() {{
+            const zone = document.getElementById('chatDropZone');
+            if (!zone || zone.dataset.dropWired === '1') return;
+            zone.dataset.dropWired = '1';
+            ['dragenter', 'dragover'].forEach(evt => {{
+                zone.addEventListener(evt, (e) => {{
+                    e.preventDefault();
+                    zone.style.borderColor = '#3498db';
+                }});
+            }});
+            ['dragleave', 'drop'].forEach(evt => {{
+                zone.addEventListener(evt, (e) => {{
+                    e.preventDefault();
+                    zone.style.borderColor = 'transparent';
+                }});
+            }});
+            zone.addEventListener('drop', (e) => {{
+                const files = e.dataTransfer && e.dataTransfer.files;
+                if (files && files.length) addStagedFiles(files);
+            }});
+            // Paste-to-attach from clipboard
+            document.getElementById('chatInput').addEventListener('paste', (e) => {{
+                const items = (e.clipboardData && e.clipboardData.items) || [];
+                const imgs = [];
+                for (const it of items) {{
+                    if (it.type && it.type.startsWith('image/')) {{
+                        const f = it.getAsFile();
+                        if (f) imgs.push(f);
+                    }}
+                }}
+                if (imgs.length) addStagedFiles(imgs);
+            }});
         }}
 
         function handleChatKey(e) {{
@@ -9803,7 +9942,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
             const inputEl = document.getElementById('chatInput');
             const question = (inputEl.value || '').trim();
-            if (!question) return;
+            if (!question && chatStagedFiles.length === 0) return;
 
             const model = document.getElementById('chatModel').value;
             const effort = document.getElementById('chatEffort').value;
@@ -9814,33 +9953,41 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             btn.textContent = 'Thinking...';
             status.textContent = '';
 
-            // Optimistically append the user message
-            const messagesEl = document.getElementById('chatMessages');
+            // Optimistically append the user message (no thumbnails for staged files yet — keep it simple)
             const r0 = await fetch('/admin/analytics/conversations/' + chatActiveConvId);
             let existing = [];
             if (r0.ok) {{
                 const c = await r0.json();
                 existing = c.messages || [];
             }}
-            renderChatMessages([...existing, {{ role: 'user', content: question }}]);
+            const optimisticAttachments = chatStagedFiles.map(s => ({{
+                filename: s.file.name,
+                mime_type: s.file.type,
+            }}));
+            renderChatMessages([...existing, {{ role: 'user', content: question, attachments: [] }}]);
 
             try {{
+                const fd = new FormData();
+                fd.append('question', question);
+                fd.append('model', model);
+                fd.append('effort', effort);
+                for (const s of chatStagedFiles) fd.append('files', s.file, s.file.name);
+
                 const r = await fetch('/admin/analytics/conversations/' + chatActiveConvId + '/messages', {{
                     method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ question, model, effort }}),
+                    body: fd,
                 }});
                 const data = await r.json();
 
                 if (!r.ok || data.error) {{
                     status.textContent = 'Error: ' + (data.error || r.statusText);
-                    // Restore prior state (drop optimistic user msg)
                     renderChatMessages(existing);
                     return;
                 }}
 
                 inputEl.value = '';
-                // Reload the conversation to get the canonical message list
+                chatStagedFiles = [];
+                renderStagedFiles();
                 await openChatConversation(chatActiveConvId);
             }} catch (e) {{
                 status.textContent = 'Failed: ' + e.message;
@@ -9899,6 +10046,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         document.addEventListener('DOMContentLoaded', function() {{
             updateChatModelUI();
             loadChatConversations();
+            setupChatDropZone();
         }});
 
         async function loadAISummaryHistory() {{
