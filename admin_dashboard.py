@@ -8193,7 +8193,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     <td style="font-size: 0.85em;">${{nextStr}}</td>
                     <td>
                         ${{toggleBtn}}
-                        <button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.8em;" onclick="deleteRecurring(${{r.id}}, '${{r.text.replace(/'/g, "\\'").substring(0, 30)}}')">Delete</button>
+                        <button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.8em;" onclick="deleteRecurring(${{r.id}})">Delete</button>
                     </td>
                 `;
             }}
@@ -8229,8 +8229,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
-        async function deleteRecurring(id, text) {{
-            if (!confirm(`Delete recurring reminder "${{text}}"? This cannot be undone.`)) return;
+        async function deleteRecurring(id) {{
+            const recurring = allRecurring.find(r => r.id === id);
+            const preview = recurring ? recurring.text.substring(0, 30) : '';
+            if (!confirm(`Delete recurring reminder "${{preview}}"? This cannot be undone.`)) return;
             try {{
                 const response = await fetch(`/admin/recurring/${{id}}`, {{ method: 'DELETE' }});
                 const data = await response.json();
