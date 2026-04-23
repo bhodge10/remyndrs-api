@@ -4052,6 +4052,38 @@ async def generate_ai_analytics_summary(admin: str = Depends(verify_admin)):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+@router.post("/admin/analytics/ai-query")
+async def ai_analytics_query(request: Request, admin: str = Depends(verify_admin)):
+    """Answer an ad-hoc question about the analytics data using Claude."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
+
+    question = (body.get("question") or "").strip()
+    if not question:
+        return JSONResponse(content={"error": "Question is required"}, status_code=400)
+    if len(question) > 2000:
+        return JSONResponse(content={"error": "Question too long (max 2000 chars)"}, status_code=400)
+
+    model_choice = body.get("model", "haiku")
+    effort = body.get("effort", "medium")
+
+    try:
+        from services.analytics_summary_service import answer_analytics_question
+        result = answer_analytics_question(
+            question=question,
+            model_choice=model_choice,
+            effort=effort,
+        )
+        if result.get("error"):
+            return JSONResponse(content={"status": "error", "error": result["error"]}, status_code=400)
+        return JSONResponse(content={"status": "success", **result})
+    except Exception as e:
+        logger.error(f"Error answering analytics question: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 # =====================================================
 # PRODUCT METRICS ENDPOINT
 # =====================================================
@@ -5883,6 +5915,52 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             <div id="aiSummaryHistory" style="display: none;">
                 <h3 style="color: #2c3e50; margin-bottom: 15px;">Summary History</h3>
                 <div id="aiHistoryList"></div>
+            </div>
+
+            <!-- Ask AI Panel -->
+            <div style="background: white; border-radius: 8px; padding: 24px; margin-top: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <h3 style="color: #2c3e50; margin: 0 0 6px 0;">Ask a question about this data</h3>
+                <p style="color: #7f8c8d; font-size: 0.9em; margin: 0 0 16px 0;">
+                    Claude answers against the most recent GA4 + Search Console pull (re-pulled if &gt; 1 hour old).
+                </p>
+
+                <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 12px;">
+                    <div style="flex: 1; min-width: 200px;">
+                        <label style="display: block; font-size: 0.85em; color: #7f8c8d; margin-bottom: 4px;">Model</label>
+                        <select id="aiQueryModel" onchange="updateAiQueryModelUI()" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="haiku">Haiku 4.5 — fastest, cheapest</option>
+                            <option value="sonnet">Sonnet 4.6 — balanced</option>
+                            <option value="opus">Opus 4.7 — most capable</option>
+                        </select>
+                    </div>
+                    <div id="aiQueryEffortWrap" style="flex: 1; min-width: 200px; display: none;">
+                        <label style="display: block; font-size: 0.85em; color: #7f8c8d; margin-bottom: 4px;">Effort (Opus only)</label>
+                        <select id="aiQueryEffort" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="low">Low — quick</option>
+                            <option value="medium" selected>Medium — balanced</option>
+                            <option value="high">High — thorough</option>
+                            <option value="xhigh">X-High — deep reasoning</option>
+                            <option value="max">Max — ceiling (slow, $$$)</option>
+                        </select>
+                    </div>
+                    <div style="color: #95a5a6; font-size: 0.8em; min-width: 180px;" id="aiQueryCostHint">
+                        ~$0.007 / query
+                    </div>
+                </div>
+
+                <textarea id="aiQueryInput" placeholder="e.g. Which landing pages have the best engagement rate? What's driving the drop in sessions?" rows="3" style="width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit; font-size: 0.95em; box-sizing: border-box; resize: vertical;"></textarea>
+
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px;">
+                    <button class="btn btn-primary" id="aiQueryAskBtn" style="padding: 8px 18px;" onclick="askAiQuery()">Ask</button>
+                    <span id="aiQueryStatus" style="color: #7f8c8d; font-size: 0.9em;"></span>
+                </div>
+
+                <div id="aiQueryAnswerWrap" style="display: none; margin-top: 20px; padding: 18px; background: #f8f9fa; border-left: 4px solid #3498db; border-radius: 4px;">
+                    <div style="font-size: 0.85em; color: #7f8c8d; margin-bottom: 8px;">
+                        <span id="aiQueryAnswerMeta"></span>
+                    </div>
+                    <div id="aiQueryAnswerText" style="color: #2c3e50; white-space: pre-wrap; line-height: 1.6;"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -9454,6 +9532,96 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                 statusEl.textContent = 'Failed: ' + e.message;
             }}
         }}
+
+        // Cost hints keyed on model+effort (rough; 4K input + 500-8K output).
+        const AI_QUERY_COST_HINTS = {{
+            haiku: '~$0.007 / query',
+            sonnet: '~$0.02 / query',
+            'opus-low': '~$0.03 / query',
+            'opus-medium': '~$0.08 / query',
+            'opus-high': '~$0.15 / query',
+            'opus-xhigh': '~$0.25 / query',
+            'opus-max': '~$0.40+ / query',
+        }};
+
+        function updateAiQueryModelUI() {{
+            const model = document.getElementById('aiQueryModel').value;
+            const effortWrap = document.getElementById('aiQueryEffortWrap');
+            const costHint = document.getElementById('aiQueryCostHint');
+            if (model === 'opus') {{
+                effortWrap.style.display = 'block';
+                const effort = document.getElementById('aiQueryEffort').value;
+                costHint.textContent = AI_QUERY_COST_HINTS['opus-' + effort] || '';
+            }} else {{
+                effortWrap.style.display = 'none';
+                costHint.textContent = AI_QUERY_COST_HINTS[model] || '';
+            }}
+        }}
+
+        async function askAiQuery() {{
+            const input = document.getElementById('aiQueryInput');
+            const btn = document.getElementById('aiQueryAskBtn');
+            const status = document.getElementById('aiQueryStatus');
+            const answerWrap = document.getElementById('aiQueryAnswerWrap');
+            const answerText = document.getElementById('aiQueryAnswerText');
+            const answerMeta = document.getElementById('aiQueryAnswerMeta');
+
+            const question = (input.value || '').trim();
+            if (!question) {{
+                status.textContent = 'Enter a question first.';
+                return;
+            }}
+
+            const model = document.getElementById('aiQueryModel').value;
+            const effort = document.getElementById('aiQueryEffort').value;
+
+            btn.disabled = true;
+            btn.textContent = 'Thinking...';
+            status.textContent = '';
+
+            try {{
+                const response = await fetch('/admin/analytics/ai-query', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ question, model, effort }}),
+                }});
+                const data = await response.json();
+
+                if (!response.ok || data.error) {{
+                    status.textContent = 'Error: ' + (data.error || response.statusText);
+                    return;
+                }}
+
+                answerText.textContent = data.answer || '(no answer returned)';
+                const metaParts = [data.model];
+                if (data.effort) metaParts.push('effort: ' + data.effort);
+                if (data.data_source === 'cache' && data.data_age_hours != null) {{
+                    metaParts.push('data ' + data.data_age_hours + 'h old');
+                }} else if (data.data_source === 'fresh') {{
+                    metaParts.push('freshly pulled');
+                }}
+                if (data.usage) {{
+                    const u = data.usage;
+                    if (u.input_tokens != null || u.output_tokens != null) {{
+                        metaParts.push((u.input_tokens || 0) + ' in / ' + (u.output_tokens || 0) + ' out tokens');
+                    }}
+                }}
+                answerMeta.textContent = metaParts.join(' · ');
+                answerWrap.style.display = 'block';
+            }} catch (e) {{
+                status.textContent = 'Failed: ' + e.message;
+            }} finally {{
+                btn.disabled = false;
+                btn.textContent = 'Ask';
+            }}
+        }}
+
+        // Wire up effort-change cost hint update
+        document.addEventListener('DOMContentLoaded', function() {{
+            const effortSel = document.getElementById('aiQueryEffort');
+            if (effortSel) effortSel.addEventListener('change', updateAiQueryModelUI);
+            updateAiQueryModelUI();
+        }});
 
         async function loadAISummaryHistory() {{
             const history = document.getElementById('aiSummaryHistory');

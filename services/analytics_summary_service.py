@@ -335,6 +335,176 @@ def _parse_claude_response(response_text: str) -> tuple:
     return summary_text, trends
 
 
+_MODEL_ID_BY_CHOICE = {
+    "haiku": "claude-haiku-4-5",
+    "sonnet": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-7",
+}
+
+_VALID_OPUS_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _get_latest_raw_data(max_age_hours: int = 1) -> tuple:
+    """Return (raw_data, period_days, summary_date, age_hours) for the most recent summary,
+    or (None, None, None, None) if none exists or the latest is older than max_age_hours."""
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("""
+                SELECT raw_data, period_days, summary_date, created_at
+                FROM analytics_summaries
+                ORDER BY created_at DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+            if not row:
+                return None, None, None, None
+            raw_data, period_days, summary_date, created_at = row
+            if isinstance(raw_data, str):
+                try:
+                    raw_data = json.loads(raw_data)
+                except (json.JSONDecodeError, TypeError):
+                    return None, None, None, None
+            age = datetime.utcnow() - (created_at.replace(tzinfo=None) if created_at.tzinfo else created_at)
+            age_hours = age.total_seconds() / 3600
+            if age_hours > max_age_hours:
+                return None, period_days, summary_date, age_hours
+            return raw_data, period_days, summary_date, age_hours
+    except Exception as e:
+        logger.error(f"Error fetching latest raw_data: {e}")
+        return None, None, None, None
+
+
+def answer_analytics_question(
+    question: str,
+    model_choice: str = "haiku",
+    effort: str = "medium",
+    period_days: int = 7,
+) -> dict:
+    """Answer an ad-hoc question about the website analytics data using Claude.
+
+    Args:
+        question: Admin's natural language question.
+        model_choice: "haiku" | "sonnet" | "opus".
+        effort: "low" | "medium" | "high" | "xhigh" | "max". Only applied to Opus.
+        period_days: Window used when the raw data needs to be re-pulled.
+
+    Returns dict with keys:
+        answer (str), model (str), effort (str|None), data_source (str),
+        usage (dict), error (str, only on failure).
+    """
+    if not question or not question.strip():
+        return {"error": "Question is required"}
+
+    model_key = (model_choice or "haiku").lower()
+    if model_key not in _MODEL_ID_BY_CHOICE:
+        return {"error": f"Invalid model choice '{model_choice}'"}
+    model_id = _MODEL_ID_BY_CHOICE[model_key]
+
+    effort_to_send = None
+    if model_key == "opus":
+        effort_normalized = (effort or "medium").lower()
+        if effort_normalized not in _VALID_OPUS_EFFORTS:
+            return {"error": f"Invalid effort '{effort}'"}
+        effort_to_send = effort_normalized
+
+    # Try to reuse recently stored raw data; fall back to a fresh pull.
+    raw_data, stored_period_days, summary_date, age_hours = _get_latest_raw_data(max_age_hours=1)
+    data_source = "cache"
+    if not raw_data:
+        try:
+            from services.analytics_service import get_ga4_data, get_search_console_data
+        except ImportError as e:
+            return {"error": f"Analytics service unavailable: {e}"}
+        ga4 = get_ga4_data(period_days)
+        if ga4.get("error"):
+            return {"error": f"GA4 data unavailable: {ga4['error']}"}
+        sc = get_search_console_data(period_days)
+        raw_data = {"ga4": ga4, "search_console": sc}
+        stored_period_days = period_days
+        summary_date = datetime.utcnow().date()
+        data_source = "fresh"
+
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        return {"error": "anthropic package not installed"}
+
+    import os
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return {"error": "ANTHROPIC_API_KEY not set in environment"}
+
+    client = Anthropic()
+
+    ga4 = raw_data.get("ga4", {})
+    sc = raw_data.get("search_console", {})
+
+    data_payload = {
+        "period_days": stored_period_days,
+        "summary_date": str(summary_date) if summary_date else None,
+        "totals": ga4.get("totals", {}),
+        "daily_trend": ga4.get("daily_trend", []),
+        "traffic_sources": ga4.get("traffic_sources", [])[:10],
+        "landing_pages": ga4.get("landing_pages", [])[:10],
+        "devices": ga4.get("devices", [])[:5],
+        "key_events": ga4.get("key_events", []),
+        "ab_variants": ga4.get("ab_variants", []),
+        "search_top_queries": sc.get("top_queries", [])[:10] if not sc.get("error") else [],
+        "search_top_pages": sc.get("top_pages", [])[:5] if not sc.get("error") else [],
+    }
+
+    system_prompt = (
+        "You are an analytics expert for Remyndrs, an SMS-based AI memory and reminder service. "
+        "Answer the admin's question using the provided website analytics data (Google Analytics 4 + "
+        "Search Console). Be concise, cite specific numbers from the data, and flag any limitations "
+        "in what the data can tell us. If the data does not contain what the admin asked about, say so."
+    )
+
+    user_content = (
+        f"DATA (JSON):\n{json.dumps(data_payload, indent=2)}\n\n"
+        f"QUESTION: {question.strip()}"
+    )
+
+    kwargs = {
+        "model": model_id,
+        "max_tokens": 2048,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_content}],
+    }
+    if model_key == "opus":
+        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["output_config"] = {"effort": effort_to_send}
+        # Opus 4.7 can return very long outputs at high effort — give it room.
+        if effort_to_send in ("high", "xhigh", "max"):
+            kwargs["max_tokens"] = 8192
+
+    try:
+        response = client.messages.create(**kwargs)
+    except Exception as e:
+        logger.error(f"Claude API error answering analytics question: {e}")
+        return {"error": f"Claude API call failed: {e}"}
+
+    answer_text = next(
+        (b.text for b in response.content if getattr(b, "type", None) == "text"),
+        "",
+    ).strip()
+
+    usage = getattr(response, "usage", None)
+    usage_dict = {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
+    } if usage else {}
+
+    return {
+        "answer": answer_text,
+        "model": model_id,
+        "effort": effort_to_send,
+        "data_source": data_source,
+        "data_age_hours": round(age_hours, 2) if age_hours is not None else None,
+        "usage": usage_dict,
+    }
+
+
 def _store_summary(
     summary_date, period_days: int, raw_data: dict,
     summary_text: str, trends: dict, metrics_snapshot: dict
