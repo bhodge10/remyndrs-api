@@ -97,3 +97,15 @@ def send_sms(to_number, message, media_url=None, message_type="other"):
     except Exception as e:
         logger.error(f"Error sending SMS to {to_number}: {e}")
         raise  # Re-raise so callers can handle/retry
+
+
+def notify_admin(message):
+    """Send an admin notification SMS. Never raises — failure is logged and swallowed
+    so user-facing request handling is never blocked by a notification error."""
+    from config import ADMIN_NOTIFICATION_PHONE
+    if not ADMIN_NOTIFICATION_PHONE:
+        return
+    try:
+        send_sms(ADMIN_NOTIFICATION_PHONE, message, message_type="admin_notification")
+    except Exception as e:
+        logger.warning(f"Admin notification to {ADMIN_NOTIFICATION_PHONE} failed: {e}")

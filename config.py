@@ -81,6 +81,10 @@ MAX_ITEMS_PER_LIST = 40
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
+# Admin notification phone — receives alerts for high-signal user events
+# (e.g. UPGRADE keyword, shared-list mentions). Empty = notifications disabled.
+ADMIN_NOTIFICATION_PHONE = os.environ.get("ADMIN_NOTIFICATION_PHONE", "+18593935374")
+
 # Customer Service Portal Authentication
 # Falls back to admin credentials if not set
 CS_USERNAME = os.environ.get("CS_USERNAME", ADMIN_USERNAME)
