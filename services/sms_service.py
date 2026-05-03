@@ -46,6 +46,56 @@ def _log_outbound(phone_number, message_type):
         logger.warning(f"Failed to log outbound SMS: {e}")
 
 
+# System-pushed message types — included in the "recently messaged?" check
+# so two different lifecycle systems don't fire back-to-back. User-pulled
+# replies (reminder, reply, billing, support, signup, alert) are excluded.
+PUSHED_MESSAGE_TYPES = (
+    'trial_lifecycle',
+    'smart_nudge',
+    'engagement_nudge',
+    'daily_summary',
+    'onboarding_followup',
+    'broadcast',
+)
+
+
+def recently_pushed_message(phone_number, hours=48, types=PUSHED_MESSAGE_TYPES):
+    """Anti-bunching guard: True if the user received any system-pushed
+    lifecycle/nudge/broadcast message within the last `hours`.
+
+    Used by the post-trial/inactivity tasks before sending so two different
+    systems (e.g. weekly inactivity nudge + one-shot 30-day winback) don't
+    land 24h apart and feel like spam.
+
+    Fails open — if the DB check itself errors, returns False so we don't
+    silently block all lifecycle messages on infra issues.
+    """
+    from datetime import datetime, timedelta
+    from database import get_db_connection, return_db_connection
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT 1 FROM sms_outbound_log
+            WHERE phone_number = %s
+              AND message_type = ANY(%s)
+              AND created_at > %s
+            LIMIT 1
+            """,
+            (phone_number, list(types), cutoff),
+        )
+        return c.fetchone() is not None
+    except Exception as e:
+        logger.warning(f"recently_pushed_message check failed for {phone_number[-4:]}: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def send_sms(to_number, message, media_url=None, message_type="other"):
     """Send an SMS/MMS message via Twilio
 

@@ -21,7 +21,7 @@ from models.reminder import (
     check_reminder_exists_for_recurring,
     update_recurring_reminder_generated,
 )
-from services.sms_service import send_sms, UserOptedOutError
+from services.sms_service import send_sms, UserOptedOutError, recently_pushed_message
 from services.metrics_service import track_reminder_delivery
 
 logger = get_task_logger(__name__)
@@ -1816,6 +1816,11 @@ def send_post_trial_reengagement(self):
             if not (2 <= days_since_expiry <= 3):
                 continue
 
+            # Anti-bunching: skip if any other lifecycle/nudge fired in last 48h
+            if recently_pushed_message(phone_number):
+                logger.info(f"Skipping post-trial re-engagement for ...{phone_number[-4:]} — another lifecycle message sent in last 48h")
+                continue
+
             try:
                 greeting = f"Hi {first_name}!" if first_name else "Hi there!"
 
@@ -1923,6 +1928,11 @@ def send_14d_post_trial_touchpoint(self):
 
             # Range check to handle signup time-of-day
             if not (13 <= days_since_expiry <= 14):
+                continue
+
+            # Anti-bunching: skip if any other lifecycle/nudge fired in last 48h
+            if recently_pushed_message(phone_number):
+                logger.info(f"Skipping 14-day touchpoint for ...{phone_number[-4:]} — another lifecycle message sent in last 48h")
                 continue
 
             try:
@@ -2047,6 +2057,11 @@ def send_30d_winback(self):
             if not (9 <= user_local_hour < 10):
                 continue
 
+            # Anti-bunching: skip if any other lifecycle/nudge fired in last 48h
+            if recently_pushed_message(phone_number):
+                logger.info(f"Skipping 30-day winback for ...{phone_number[-4:]} — another lifecycle message sent in last 48h")
+                continue
+
             try:
                 greeting = f"Hi {first_name}!" if first_name else "Hi there!"
 
@@ -2150,6 +2165,11 @@ def send_inactivity_nudge(self):
                 user_tz = pytz.timezone('America/New_York')
             user_local_hour = datetime.now(pytz.utc).astimezone(user_tz).hour
             if not (9 <= user_local_hour < 10):
+                continue
+
+            # Anti-bunching: skip if any other lifecycle/nudge fired in last 48h
+            if recently_pushed_message(phone_number):
+                logger.info(f"Skipping inactivity nudge for ...{phone_number[-4:]} — another lifecycle message sent in last 48h")
                 continue
 
             try:
