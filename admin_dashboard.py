@@ -3786,6 +3786,125 @@ async def cs_get_customer_memories(phone_number: str, admin: str = Depends(verif
             return_db_connection(conn)
 
 
+@router.get("/admin/cs/customer/{phone_number}/nudges")
+async def cs_get_customer_nudges(phone_number: str, admin: str = Depends(verify_admin)):
+    """Smart-nudge config + recent history for a single user.
+
+    Returns enough info to answer "is this user being nudged correctly?":
+      - config: tier, trial state, nudges-enabled flag, configured nudge time
+      - expected_cadence: what the schedule rules say should happen
+      - daily_counts: last 30 days of actual sends (UTC date)
+      - recent: last 50 nudges with type, text, response
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute('''
+            SELECT premium_status, trial_end_date,
+                   smart_nudges_enabled, smart_nudge_time,
+                   daily_summary_enabled, daily_summary_last_sent,
+                   timezone, COALESCE(opted_out, FALSE)
+            FROM users WHERE phone_number = %s
+        ''', (phone_number,))
+        row = c.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        premium_status = row[0] or 'free'
+        trial_end_date = row[1]
+        nudges_enabled = bool(row[2])
+        nudge_time = str(row[3]) if row[3] else None
+        daily_summary_enabled = bool(row[4])
+        daily_summary_last_sent = row[5]
+        timezone_str = row[6]
+        opted_out = bool(row[7])
+
+        # Expected cadence per services/nudge_service.py:is_nudge_eligible
+        if not nudges_enabled or opted_out:
+            expected_cadence = "disabled"
+        elif premium_status == 'free':
+            expected_cadence = "weekly (Sundays only)"
+        else:
+            expected_cadence = "daily"
+
+        trial_active = False
+        if trial_end_date:
+            from datetime import datetime
+            now = datetime.utcnow()
+            te = trial_end_date if trial_end_date.tzinfo is None else trial_end_date.replace(tzinfo=None)
+            trial_active = te > now
+
+        # Per-day counts, last 30 days
+        c.execute('''
+            SELECT DATE(sent_at AT TIME ZONE 'UTC') AS day, COUNT(*)
+            FROM smart_nudges
+            WHERE phone_number = %s AND sent_at > NOW() - INTERVAL '30 days'
+            GROUP BY day ORDER BY day DESC
+        ''', (phone_number,))
+        daily_counts = [{"date": str(d), "count": n} for d, n in c.fetchall()]
+
+        # Recent nudges
+        c.execute('''
+            SELECT id, nudge_type, nudge_text, sent_at,
+                   user_response, user_responded_at, action_taken
+            FROM smart_nudges
+            WHERE phone_number = %s
+            ORDER BY sent_at DESC LIMIT 50
+        ''', (phone_number,))
+        recent = []
+        for r in c.fetchall():
+            recent.append({
+                "id": r[0],
+                "type": r[1],
+                "text": r[2],
+                "sent_at": str(r[3]) if r[3] else None,
+                "user_response": r[4],
+                "responded_at": str(r[5]) if r[5] else None,
+                "action_taken": r[6],
+            })
+
+        # Total + duplicate-day check
+        c.execute('''
+            SELECT COUNT(*), COUNT(DISTINCT DATE(sent_at AT TIME ZONE 'UTC'))
+            FROM smart_nudges
+            WHERE phone_number = %s AND sent_at > NOW() - INTERVAL '30 days'
+        ''', (phone_number,))
+        total_30d, distinct_days_30d = c.fetchone()
+        days_with_multiple = sum(1 for d in daily_counts if d["count"] > 1)
+
+        return {
+            "config": {
+                "tier": premium_status,
+                "trial_end_date": str(trial_end_date) if trial_end_date else None,
+                "trial_active": trial_active,
+                "smart_nudges_enabled": nudges_enabled,
+                "smart_nudge_time": nudge_time,
+                "daily_summary_enabled": daily_summary_enabled,
+                "daily_summary_last_sent": str(daily_summary_last_sent) if daily_summary_last_sent else None,
+                "timezone": timezone_str,
+                "opted_out": opted_out,
+                "expected_cadence": expected_cadence,
+            },
+            "stats_30d": {
+                "total": total_30d or 0,
+                "distinct_days": distinct_days_30d or 0,
+                "days_with_multiple": days_with_multiple,
+            },
+            "daily_counts": daily_counts,
+            "recent": recent,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CS get nudges error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 class UpdateTierRequest(BaseModel):
     tier: str
     reason: str = ""
@@ -5673,12 +5792,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     <button class="btn" onclick="csShowTab('reminders')" id="csTabReminders" style="background: #3498db; color: white;">Reminders</button>
                     <button class="btn btn-secondary" onclick="csShowTab('lists')" id="csTabLists">Lists</button>
                     <button class="btn btn-secondary" onclick="csShowTab('memories')" id="csTabMemories">Memories</button>
+                    <button class="btn btn-secondary" onclick="csShowTab('nudges')" id="csTabNudges">Nudges</button>
                 </div>
 
                 <div id="csTabContent">
                     <div id="csRemindersTab"></div>
                     <div id="csListsTab" style="display: none;"></div>
                     <div id="csMemoriesTab" style="display: none;"></div>
+                    <div id="csNudgesTab" style="display: none;"></div>
                 </div>
             </div>
         </div>
@@ -8911,6 +9032,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             document.getElementById('csRemindersTab').style.display = 'none';
             document.getElementById('csListsTab').style.display = 'none';
             document.getElementById('csMemoriesTab').style.display = 'none';
+            document.getElementById('csNudgesTab').style.display = 'none';
 
             // Load and show selected tab
             const tabDiv = document.getElementById('cs' + tab.charAt(0).toUpperCase() + tab.slice(1) + 'Tab');
@@ -8966,6 +9088,92 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     }} else {{
                         tabDiv.innerHTML = '<div style="color: #95a5a6; padding: 20px; text-align: center;">No memories</div>';
                     }}
+                }} else if (tab === 'nudges') {{
+                    const cfg = data.config || {{}};
+                    const stats = data.stats_30d || {{}};
+                    const recent = data.recent || [];
+                    const daily = data.daily_counts || [];
+
+                    // Compare actual sends to expected cadence to flag anomalies
+                    let cadenceColor = '#27ae60';
+                    let cadenceNote = 'Matches expected cadence';
+                    if (cfg.expected_cadence === 'disabled' && stats.total > 0) {{
+                        cadenceColor = '#e67e22';
+                        cadenceNote = 'Sends recorded despite nudges being disabled — may be stale history';
+                    }} else if (cfg.expected_cadence === 'weekly (Sundays only)' && stats.distinct_days > 5) {{
+                        cadenceColor = '#e74c3c';
+                        cadenceNote = `Free user receiving on ${{stats.distinct_days}} distinct days in last 30d — should be Sundays only (≤5)`;
+                    }} else if (stats.days_with_multiple > 0) {{
+                        cadenceColor = '#e74c3c';
+                        cadenceNote = `${{stats.days_with_multiple}} day(s) with more than one nudge — possible duplicate sends`;
+                    }} else if (cfg.expected_cadence === 'daily' && stats.distinct_days > 0) {{
+                        cadenceNote = `${{stats.distinct_days}} of last 30 days received a nudge (daily expected)`;
+                    }}
+
+                    const dailyBars = daily.length > 0
+                        ? daily.slice(0, 30).map(d => `
+                            <div style="display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 0.85em;">
+                                <span style="color: #7f8c8d; min-width: 90px;">${{d.date}}</span>
+                                <span style="background: ${{d.count > 1 ? '#e74c3c' : '#3498db'}}; color: white; padding: 2px 10px; border-radius: 10px; min-width: 30px; text-align: center;">${{d.count}}</span>
+                                ${{d.count > 1 ? '<span style="color: #e74c3c; font-size: 0.85em;">⚠ multiple sends</span>' : ''}}
+                            </div>
+                        `).join('')
+                        : '<div style="color: #95a5a6;">No sends in last 30 days</div>';
+
+                    const recentRows = recent.length > 0
+                        ? recent.map(n => {{
+                            const responseCell = n.user_response
+                                ? `<span style="color:#2c3e50;">${{n.user_response}}</span>` + (n.action_taken ? `<br><span style="color:#95a5a6; font-size:0.8em;">${{n.action_taken}}</span>` : '')
+                                : '<span style="color:#bdc3c7;">—</span>';
+                            return `<tr>
+                                <td style="font-size:0.85em; white-space: nowrap;">${{new Date(n.sent_at).toLocaleString()}}</td>
+                                <td><span style="background:#ecf0f1; padding: 2px 8px; border-radius: 10px; font-size: 0.8em;">${{n.type}}</span></td>
+                                <td style="max-width: 400px;">${{n.text}}</td>
+                                <td>${{responseCell}}</td>
+                            </tr>`;
+                          }}).join('')
+                        : '<tr><td colspan="4" style="color:#95a5a6; text-align:center; padding:20px;">No nudges sent yet</td></tr>';
+
+                    tabDiv.innerHTML = `
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">
+                                <h4 style="margin: 0 0 10px; color: #2c3e50;">Configuration</h4>
+                                <div style="line-height: 1.7; font-size: 0.9em;">
+                                    <div><strong>Tier:</strong> ${{cfg.tier}}${{cfg.trial_active ? ' (trial active)' : ''}}</div>
+                                    <div><strong>Trial ends:</strong> ${{cfg.trial_end_date || '—'}}</div>
+                                    <div><strong>Smart nudges:</strong> ${{cfg.smart_nudges_enabled ? 'ON' : 'OFF'}}</div>
+                                    <div><strong>Nudge time:</strong> ${{cfg.smart_nudge_time || '—'}} (${{cfg.timezone || '—'}})</div>
+                                    <div><strong>Daily summary:</strong> ${{cfg.daily_summary_enabled ? 'ON' : 'OFF'}}</div>
+                                    <div><strong>Opted out:</strong> ${{cfg.opted_out ? 'YES' : 'no'}}</div>
+                                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;"><strong>Expected cadence:</strong> ${{cfg.expected_cadence}}</div>
+                                </div>
+                            </div>
+                            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">
+                                <h4 style="margin: 0 0 10px; color: #2c3e50;">Last 30 days</h4>
+                                <div style="line-height: 1.7; font-size: 0.9em;">
+                                    <div><strong>Total sent:</strong> ${{stats.total || 0}}</div>
+                                    <div><strong>Distinct days:</strong> ${{stats.distinct_days || 0}}</div>
+                                    <div><strong>Days with >1 send:</strong> ${{stats.days_with_multiple || 0}}</div>
+                                </div>
+                                <div style="margin-top: 12px; padding: 10px; background: ${{cadenceColor}}; color: white; border-radius: 4px; font-size: 0.85em;">
+                                    ${{cadenceNote}}
+                                </div>
+                            </div>
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Daily send counts</h4>
+                        <div style="background: white; padding: 10px 15px; border-radius: 4px; max-height: 240px; overflow-y: auto; border: 1px solid #ecf0f1; margin-bottom: 20px;">
+                            ${{dailyBars}}
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Recent nudges</h4>
+                        <div style="overflow-x: auto;">
+                            <table class="history-table">
+                                <thead><tr><th>Sent</th><th>Type</th><th>Text</th><th>User response</th></tr></thead>
+                                <tbody>${{recentRows}}</tbody>
+                            </table>
+                        </div>
+                    `;
                 }}
             }} catch (e) {{
                 tabDiv.innerHTML = `<div style="color: #e74c3c;">Error loading ${{tab}}: ${{e.message}}</div>`;
