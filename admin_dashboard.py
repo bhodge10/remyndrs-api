@@ -3874,6 +3874,42 @@ async def cs_get_customer_nudges(phone_number: str, admin: str = Depends(verify_
         total_30d, distinct_days_30d = c.fetchone()
         days_with_multiple = sum(1 for d in daily_counts if d["count"] > 1)
 
+        # ALL outbound messages (last 30 days) — captures lifecycle, broadcasts,
+        # billing, replies, etc. that wouldn't show in smart_nudges. Critical for
+        # diagnosing "why is this user getting so many messages?" when smart
+        # nudges are OFF but messages are still flowing.
+        c.execute('''
+            SELECT message_type, COUNT(*) AS total,
+                   COUNT(DISTINCT DATE(created_at AT TIME ZONE 'UTC')) AS days,
+                   MAX(created_at) AS last_sent
+            FROM sms_outbound_log
+            WHERE phone_number = %s AND created_at > NOW() - INTERVAL '30 days'
+            GROUP BY message_type ORDER BY total DESC
+        ''', (phone_number,))
+        outbound_by_type = [
+            {
+                "type": r[0],
+                "total": r[1],
+                "distinct_days": r[2],
+                "last_sent": str(r[3]) if r[3] else None,
+            }
+            for r in c.fetchall()
+        ]
+
+        # Per-day outbound history with message types
+        c.execute('''
+            SELECT DATE(created_at AT TIME ZONE 'UTC') AS day,
+                   COUNT(*) AS total,
+                   STRING_AGG(DISTINCT message_type, ', ') AS types
+            FROM sms_outbound_log
+            WHERE phone_number = %s AND created_at > NOW() - INTERVAL '30 days'
+            GROUP BY day ORDER BY day DESC
+        ''', (phone_number,))
+        outbound_by_day = [
+            {"date": str(r[0]), "count": r[1], "types": r[2]}
+            for r in c.fetchall()
+        ]
+
         return {
             "config": {
                 "tier": premium_status,
@@ -3894,6 +3930,8 @@ async def cs_get_customer_nudges(phone_number: str, admin: str = Depends(verify_
             },
             "daily_counts": daily_counts,
             "recent": recent,
+            "outbound_by_type": outbound_by_type,
+            "outbound_by_day": outbound_by_day,
         }
     except HTTPException:
         raise
@@ -9134,6 +9172,30 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                           }}).join('')
                         : '<tr><td colspan="4" style="color:#95a5a6; text-align:center; padding:20px;">No nudges sent yet</td></tr>';
 
+                    const outboundByType = data.outbound_by_type || [];
+                    const outboundByDay = data.outbound_by_day || [];
+
+                    const outboundTypeRows = outboundByType.length > 0
+                        ? outboundByType.map(t => `
+                            <tr>
+                                <td><span style="background:#ecf0f1; padding: 2px 8px; border-radius: 10px; font-size: 0.85em;">${{t.type}}</span></td>
+                                <td><strong>${{t.total}}</strong></td>
+                                <td>${{t.distinct_days}}</td>
+                                <td style="font-size:0.85em;">${{t.last_sent ? new Date(t.last_sent).toLocaleString() : '—'}}</td>
+                            </tr>
+                        `).join('')
+                        : '<tr><td colspan="4" style="color:#95a5a6; text-align:center; padding:15px;">No outbound messages in last 30 days</td></tr>';
+
+                    const outboundDayRows = outboundByDay.length > 0
+                        ? outboundByDay.slice(0, 30).map(d => `
+                            <div style="display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 0.85em; border-bottom: 1px solid #f4f4f4;">
+                                <span style="color: #7f8c8d; min-width: 90px;">${{d.date}}</span>
+                                <span style="background: ${{d.count > 1 ? '#e67e22' : '#3498db'}}; color: white; padding: 2px 10px; border-radius: 10px; min-width: 30px; text-align: center;">${{d.count}}</span>
+                                <span style="color: #2c3e50; font-size: 0.85em;">${{d.types}}</span>
+                            </div>
+                        `).join('')
+                        : '<div style="color: #95a5a6;">No outbound messages in last 30 days</div>';
+
                     tabDiv.innerHTML = `
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
                             <div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">
@@ -9145,11 +9207,11 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                                     <div><strong>Nudge time:</strong> ${{cfg.smart_nudge_time || '—'}} (${{cfg.timezone || '—'}})</div>
                                     <div><strong>Daily summary:</strong> ${{cfg.daily_summary_enabled ? 'ON' : 'OFF'}}</div>
                                     <div><strong>Opted out:</strong> ${{cfg.opted_out ? 'YES' : 'no'}}</div>
-                                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;"><strong>Expected cadence:</strong> ${{cfg.expected_cadence}}</div>
+                                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;"><strong>Expected cadence (smart_nudge):</strong> ${{cfg.expected_cadence}}</div>
                                 </div>
                             </div>
                             <div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">
-                                <h4 style="margin: 0 0 10px; color: #2c3e50;">Last 30 days</h4>
+                                <h4 style="margin: 0 0 10px; color: #2c3e50;">Smart nudges, last 30 days</h4>
                                 <div style="line-height: 1.7; font-size: 0.9em;">
                                     <div><strong>Total sent:</strong> ${{stats.total || 0}}</div>
                                     <div><strong>Distinct days:</strong> ${{stats.distinct_days || 0}}</div>
@@ -9161,12 +9223,28 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                             </div>
                         </div>
 
-                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Daily send counts</h4>
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">All outbound messages by type (last 30d)</h4>
+                        <div style="background: #fff8e1; border-left: 3px solid #f39c12; padding: 8px 12px; margin-bottom: 10px; font-size: 0.85em; color: #555;">
+                            Includes lifecycle, broadcast, billing, replies, etc. — not just smart nudges. Use this to find which message type is firing.
+                        </div>
+                        <div style="overflow-x: auto; margin-bottom: 20px;">
+                            <table class="history-table">
+                                <thead><tr><th>Message type</th><th>Total sends</th><th>Distinct days</th><th>Last sent</th></tr></thead>
+                                <tbody>${{outboundTypeRows}}</tbody>
+                            </table>
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">All outbound messages by day (last 30d)</h4>
+                        <div style="background: white; padding: 10px 15px; border-radius: 4px; max-height: 280px; overflow-y: auto; border: 1px solid #ecf0f1; margin-bottom: 20px;">
+                            ${{outboundDayRows}}
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Smart nudge daily counts</h4>
                         <div style="background: white; padding: 10px 15px; border-radius: 4px; max-height: 240px; overflow-y: auto; border: 1px solid #ecf0f1; margin-bottom: 20px;">
                             ${{dailyBars}}
                         </div>
 
-                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Recent nudges</h4>
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Recent smart nudges</h4>
                         <div style="overflow-x: auto;">
                             <table class="history-table">
                                 <thead><tr><th>Sent</th><th>Type</th><th>Text</th><th>User response</th></tr></thead>
