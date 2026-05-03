@@ -4920,6 +4920,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <span class="nav-title">Remyndrs Dashboard</span>
         <button onclick="showRecentMessages()" style="padding: 8px 16px; background: #9b59b6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Recent Messages</button>
         <a href="/admin/monitoring" style="padding: 8px 16px; background: #27ae60; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Monitoring</a>
+        <a href="/admin/investment-health" style="padding: 8px 16px; background: #2c3e50; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Investment Health</a>
         <a href="#overview">Overview</a>
         <a href="#broadcast">Broadcast</a>
         <a href="#support">Support Tickets</a>
@@ -10112,6 +10113,454 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         // Load AI summary on page load
         loadAISummary();
 
+    </script>
+</body>
+</html>
+    """
+
+    return HTMLResponse(content=html)
+
+
+# =====================================================
+# INVESTMENT HEALTH DASHBOARD
+# =====================================================
+
+@router.get("/admin/investment-health/data")
+async def admin_investment_health_data(admin: str = Depends(verify_admin)):
+    """Live Stripe-derived inputs for the Investment Health page."""
+    from services.stripe_service import get_investment_health_metrics
+    from services.investment_health import DEFAULT_INPUTS
+
+    live = get_investment_health_metrics()
+    return JSONResponse({
+        "live": live,
+        "manual_defaults": {
+            "cac": DEFAULT_INPUTS["cac"],
+            "monthly_burn": DEFAULT_INPUTS["monthly_burn"],
+        },
+    })
+
+
+@router.get("/admin/investment-health", response_class=HTMLResponse)
+async def admin_investment_health(admin: str = Depends(verify_admin)):
+    """Interactive investment-health decision tool — live Stripe metrics with
+    manual override per input, reactive verdict card, and 6 health checks."""
+    html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Investment Health · Remyndrs Admin</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            color: #333;
+        }
+        h1 { margin-bottom: 8px; color: #2c3e50; }
+        h2 { margin: 24px 0 12px; color: #34495e; font-size: 1.2em; }
+        .subhead { color: #7f8c8d; margin-bottom: 20px; font-size: 0.95em; }
+
+        .nav-menu {
+            position: sticky; top: 0; background: white;
+            padding: 12px 20px; margin: -20px -20px 20px -20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 100; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+        }
+        .nav-menu a {
+            padding: 8px 16px; background: #f8f9fa; border-radius: 4px;
+            text-decoration: none; color: #2c3e50; font-size: 0.9em;
+            font-weight: 500; transition: all 0.2s; border: 1px solid #e0e0e0;
+        }
+        .nav-menu a:hover { background: #3498db; color: white; border-color: #3498db; }
+        .nav-menu .nav-title { font-weight: bold; color: #2c3e50; margin-right: 10px; }
+
+        .header-row {
+            display: flex; justify-content: space-between; align-items: center;
+            flex-wrap: wrap; gap: 12px; margin-bottom: 20px;
+        }
+        .reset-btn {
+            padding: 10px 20px; background: #3498db; color: white;
+            border: none; border-radius: 4px; cursor: pointer;
+            font-size: 0.95em; font-weight: 500;
+        }
+        .reset-btn:hover { background: #2980b9; }
+        .reset-btn:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .last-synced { color: #95a5a6; font-size: 0.85em; }
+
+        .inputs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px; margin-bottom: 30px;
+        }
+        .input-card {
+            background: white; padding: 18px; border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .input-label {
+            font-size: 0.9em; color: #7f8c8d; margin-bottom: 8px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .badge {
+            font-size: 0.7em; padding: 2px 8px; border-radius: 10px;
+            font-weight: 600; cursor: pointer; user-select: none;
+        }
+        .badge.live { background: #d5f5e3; color: #27ae60; }
+        .badge.manual { background: #fdebd0; color: #e67e22; }
+        .badge.manual-only { background: #ecf0f1; color: #7f8c8d; cursor: default; }
+        .input-row { display: flex; align-items: center; gap: 10px; }
+        .input-row input[type="number"] {
+            flex: 1; padding: 8px 10px; font-size: 1.3em;
+            border: 1px solid #e0e0e0; border-radius: 4px; font-weight: 600;
+            color: #2c3e50; background: white;
+        }
+        .input-row input[type="number"]:focus { outline: none; border-color: #3498db; }
+        .input-prefix { font-size: 1.3em; color: #95a5a6; font-weight: 600; }
+        .input-suffix { font-size: 1.1em; color: #95a5a6; font-weight: 500; }
+
+        .verdict-card {
+            padding: 24px 28px; border-radius: 8px; color: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15); margin-bottom: 30px;
+        }
+        .verdict-card.green { background: linear-gradient(135deg, #27ae60, #229954); }
+        .verdict-card.yellow { background: linear-gradient(135deg, #f39c12, #d68910); }
+        .verdict-card.red { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+        .verdict-title { font-size: 1.6em; font-weight: 700; margin-bottom: 8px; }
+        .verdict-message { font-size: 1em; line-height: 1.5; opacity: 0.95; }
+
+        .checks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+        }
+        .check-card {
+            background: white; padding: 18px; border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .check-header {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+        }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+        .status-dot.green { background: #27ae60; }
+        .status-dot.yellow { background: #f39c12; }
+        .status-dot.red { background: #e74c3c; }
+        .check-label { color: #7f8c8d; font-size: 0.9em; font-weight: 500; }
+        .check-value {
+            font-size: 1.8em; font-weight: bold; color: #2c3e50; margin-bottom: 4px;
+        }
+        .check-context { font-size: 0.8em; color: #95a5a6; }
+
+        .loading-overlay {
+            position: fixed; inset: 0; background: rgba(255,255,255,0.85);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.1em; color: #7f8c8d; z-index: 200;
+        }
+    </style>
+</head>
+<body>
+    <div class="nav-menu">
+        <span class="nav-title">Remyndrs Dashboard</span>
+        <a href="/admin/dashboard">Back to Dashboard</a>
+        <a href="/admin/monitoring" style="background: #27ae60; color: white; border-color: #27ae60;">Monitoring</a>
+    </div>
+
+    <h1>Investment Health</h1>
+    <p class="subhead">Decision-support tool: should we keep investing? Pulls live Stripe metrics; click any "live" badge to switch to manual entry for "what if" scenarios.</p>
+
+    <div class="header-row">
+        <button class="reset-btn" id="resetBtn" onclick="resetToLive()">Reset to live data</button>
+        <span class="last-synced" id="lastSynced">Loading…</span>
+    </div>
+
+    <div id="loadingOverlay" class="loading-overlay">Loading live Stripe data…</div>
+
+    <h2>Inputs</h2>
+    <div class="inputs-grid" id="inputsGrid"></div>
+
+    <div class="verdict-card yellow" id="verdictCard">
+        <div class="verdict-title" id="verdictTitle">—</div>
+        <div class="verdict-message" id="verdictMessage">Computing…</div>
+    </div>
+
+    <h2>Health checks</h2>
+    <div class="checks-grid" id="checksGrid"></div>
+
+    <script>
+        // ------- input definitions -------
+        const INPUTS = [
+            {key: 'current_users', label: 'Current paid users', live: true, type: 'int'},
+            {key: 'net_now',       label: 'Net new paid this month', live: true, type: 'int'},
+            {key: 'net_3mo',       label: 'Net new paid 3 months ago', live: true, type: 'int'},
+            {key: 'churn_rate',    label: 'Monthly churn rate', live: true, type: 'percent', min: 1, step: 0.1},
+            {key: 'cac',           label: 'Blended CAC', live: false, type: 'currency', min: 0},
+            {key: 'arpu',          label: 'Net revenue per user', live: true, type: 'currency', min: 0, step: 0.5},
+            {key: 'monthly_burn',  label: 'Monthly burn', live: false, type: 'currency', min: 0},
+        ];
+
+        // state.values holds the *current* shown value (live or manual)
+        // state.live holds the most recent live data
+        // state.mode[key] is 'live' or 'manual'
+        const state = { values: {}, live: {}, mode: {} };
+
+        // ------- math (mirrors services/investment_health.py) -------
+        function clampChurn(p) { return Math.max(p, 1.0); }
+
+        function computeDerived(v) {
+            const churn_d = clampChurn(v.churn_rate) / 100.0;
+            let ltv, ltv_cac, payback, breakeven_users;
+            if (v.arpu <= 0) {
+                ltv = 0; ltv_cac = 0; payback = Infinity; breakeven_users = Infinity;
+            } else {
+                ltv = v.arpu / churn_d;
+                ltv_cac = v.cac > 0 ? ltv / v.cac : Infinity;
+                payback = v.cac / v.arpu;
+                breakeven_users = v.monthly_burn / v.arpu;
+            }
+            const gross_adds = Math.max(0, v.net_now + v.current_users * churn_d);
+            const steady_state = churn_d > 0 ? gross_adds / churn_d : Infinity;
+            const can_reach = steady_state >= breakeven_users;
+
+            let months_to_breakeven = null;
+            if (v.current_users >= breakeven_users) {
+                months_to_breakeven = 0;
+            } else if (can_reach && v.net_now > 0) {
+                let u = v.current_users, m = 0;
+                while (u < breakeven_users && m < 240) {
+                    u = u * (1 - churn_d) + gross_adds;
+                    m += 1;
+                }
+                months_to_breakeven = m < 240 ? m : null;
+            }
+
+            return {
+                ltv, ltv_cac, payback, breakeven_users,
+                gross_adds, steady_state, can_reach, months_to_breakeven,
+                growth_delta: v.net_now - v.net_3mo,
+            };
+        }
+
+        function statusOf(metric, v, d) {
+            if (metric === 'churn') {
+                if (v.churn_rate < 7) return 'green';
+                if (v.churn_rate <= 10) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'growth') {
+                if (v.net_now <= 0) return 'red';
+                return d.growth_delta >= -3 ? 'green' : 'yellow';
+            }
+            if (metric === 'ltv_cac') {
+                if (d.ltv_cac >= 3.0) return 'green';
+                if (d.ltv_cac >= 1.5) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'payback') {
+                if (d.payback < 12) return 'green';
+                if (d.payback <= 24) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'breakeven') {
+                if (d.months_to_breakeven === null) return 'red';
+                if (d.months_to_breakeven <= 12) return 'green';
+                if (d.months_to_breakeven <= 24) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'steady_state') {
+                if (d.breakeven_users <= 0 || !isFinite(d.breakeven_users)) return 'red';
+                const r = d.steady_state / d.breakeven_users;
+                if (r >= 1.3) return 'green';
+                if (r >= 1.0) return 'yellow';
+                return 'red';
+            }
+        }
+
+        function verdictFor(checks) {
+            const primary = ['churn', 'growth', 'ltv_cac', 'breakeven'].map(k => checks[k]);
+            const red_count = primary.filter(s => s === 'red').length;
+            const green_count = primary.filter(s => s === 'green').length;
+            const critical_red = checks.churn === 'red' || checks.ltv_cac === 'red';
+
+            if (critical_red || red_count >= 2) {
+                return {
+                    color: 'red', title: 'Stop or restructure',
+                    message: red_count + " critical fail(s). Unit economics or product stickiness won't fix themselves with more ad spend. Cut burn, fix retention or pricing, or wind down before adding more capital.",
+                };
+            }
+            if (green_count >= 3) {
+                return {
+                    color: 'green', title: 'Continue investing',
+                    message: green_count + " of 4 health checks pass. Slower ramp than original target is fine — the underlying business works. Keep optimizing creative, conversion, and the upgrade flow.",
+                };
+            }
+            return {
+                color: 'yellow', title: 'Pivot before reinvesting',
+                message: green_count + " of 4 pass, " + red_count + " fail. Fixable problem in one dimension. Address the weak metric before adding more spend — don't double down on a leak.",
+            };
+        }
+
+        // ------- formatting -------
+        const fmtCurrency = n => '$' + Math.round(n).toLocaleString();
+        const fmtCount = n => Math.round(n).toLocaleString();
+        const fmtPercent = n => n.toFixed(1) + '%';
+        const fmtRatio = n => isFinite(n) ? n.toFixed(1) + 'x' : '∞';
+        const fmtMonths = m => m === null ? 'Never' : (m >= 240 ? '>20 yr' : m + ' mo');
+
+        // ------- rendering -------
+        function renderInputs() {
+            const grid = document.getElementById('inputsGrid');
+            grid.innerHTML = '';
+            INPUTS.forEach(inp => {
+                const card = document.createElement('div');
+                card.className = 'input-card';
+
+                let badge;
+                if (!inp.live) {
+                    badge = '<span class="badge manual-only">manual</span>';
+                } else {
+                    const m = state.mode[inp.key] || 'live';
+                    badge = `<span class="badge ${m}" onclick="toggleMode('${inp.key}')" title="Click to ${m === 'live' ? 'override manually' : 'restore live value'}">${m}</span>`;
+                }
+
+                let prefix = '', suffix = '', step = inp.step || 1, min = inp.min;
+                if (inp.type === 'currency') prefix = '$';
+                if (inp.type === 'percent') suffix = '%';
+
+                card.innerHTML = `
+                    <div class="input-label">
+                        <span>${inp.label}</span>
+                        ${badge}
+                    </div>
+                    <div class="input-row">
+                        ${prefix ? '<span class="input-prefix">' + prefix + '</span>' : ''}
+                        <input type="number" id="input_${inp.key}" value="${state.values[inp.key]}" step="${step}" ${min !== undefined ? 'min="' + min + '"' : ''} oninput="onInput('${inp.key}', this.value)">
+                        ${suffix ? '<span class="input-suffix">' + suffix + '</span>' : ''}
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function renderResults() {
+            const v = state.values;
+            const d = computeDerived(v);
+            const checks = {
+                churn: statusOf('churn', v, d),
+                growth: statusOf('growth', v, d),
+                ltv_cac: statusOf('ltv_cac', v, d),
+                payback: statusOf('payback', v, d),
+                breakeven: statusOf('breakeven', v, d),
+                steady_state: statusOf('steady_state', v, d),
+            };
+            const verdict = verdictFor(checks);
+
+            const card = document.getElementById('verdictCard');
+            card.className = 'verdict-card ' + verdict.color;
+            document.getElementById('verdictTitle').textContent = verdict.title;
+            document.getElementById('verdictMessage').textContent = verdict.message;
+
+            const cardDefs = [
+                {k: 'churn',        label: 'Monthly churn',     value: fmtPercent(v.churn_rate), context: 'trailing 90 days'},
+                {k: 'growth',       label: 'Growth trend',      value: (d.growth_delta >= 0 ? '+' : '') + Math.round(d.growth_delta), context: Math.round(v.net_now) + ' now vs ' + Math.round(v.net_3mo) + ' three months ago'},
+                {k: 'ltv_cac',      label: 'LTV / CAC',         value: fmtRatio(d.ltv_cac), context: 'LTV ' + fmtCurrency(d.ltv) + ' / CAC ' + fmtCurrency(v.cac)},
+                {k: 'payback',      label: 'CAC payback',       value: isFinite(d.payback) ? d.payback.toFixed(1) + ' mo' : '∞', context: 'months to recover acquisition cost'},
+                {k: 'breakeven',    label: 'Months to breakeven', value: fmtMonths(d.months_to_breakeven), context: 'need ' + fmtCount(d.breakeven_users) + ' paid users'},
+                {k: 'steady_state', label: 'Steady-state ceiling', value: fmtCount(d.steady_state), context: 'breakeven needs ' + fmtCount(d.breakeven_users)},
+            ];
+
+            const grid = document.getElementById('checksGrid');
+            grid.innerHTML = cardDefs.map(c => `
+                <div class="check-card">
+                    <div class="check-header">
+                        <span class="status-dot ${checks[c.k]}"></span>
+                        <span class="check-label">${c.label}</span>
+                    </div>
+                    <div class="check-value">${c.value}</div>
+                    <div class="check-context">${c.context}</div>
+                </div>
+            `).join('');
+        }
+
+        // ------- event handlers -------
+        function onInput(key, raw) {
+            const inp = INPUTS.find(i => i.key === key);
+            let val = parseFloat(raw);
+            if (isNaN(val)) val = 0;
+            if (inp.min !== undefined && val < inp.min) val = inp.min;
+            state.values[key] = val;
+            if (inp.live) state.mode[key] = 'manual';
+            renderInputs();
+            // re-focus the changed input so the user can keep typing
+            const el = document.getElementById('input_' + key);
+            if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+            renderResults();
+        }
+
+        function toggleMode(key) {
+            const inp = INPUTS.find(i => i.key === key);
+            if (!inp.live) return;
+            if (state.mode[key] === 'manual') {
+                // restore live
+                state.mode[key] = 'live';
+                state.values[key] = state.live[key];
+            } else {
+                // switch to manual (keeps current value)
+                state.mode[key] = 'manual';
+            }
+            renderInputs();
+            renderResults();
+        }
+
+        function resetToLive() {
+            INPUTS.forEach(inp => {
+                if (inp.live) {
+                    state.mode[inp.key] = 'live';
+                    state.values[inp.key] = state.live[inp.key];
+                }
+            });
+            renderInputs();
+            renderResults();
+        }
+
+        async function loadLive() {
+            try {
+                const res = await fetch('/admin/investment-health/data', {credentials: 'same-origin'});
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const live = data.live || {};
+                const manual_defaults = data.manual_defaults || {};
+
+                state.live = {
+                    current_users: live.current_users ?? 0,
+                    net_now: live.net_now ?? 0,
+                    net_3mo: live.net_3mo ?? 0,
+                    churn_rate: live.churn_rate ?? 7,
+                    arpu: live.arpu ?? 8,
+                };
+                state.values = {
+                    ...state.live,
+                    cac: manual_defaults.cac ?? 60,
+                    monthly_burn: manual_defaults.monthly_burn ?? 4167,
+                };
+                INPUTS.forEach(i => { if (i.live) state.mode[i.key] = 'live'; });
+
+                const ts = live.fetched_at ? new Date(live.fetched_at).toLocaleString() : 'unknown';
+                let label = 'Live data synced ' + ts;
+                if (live.error) label += ' · ' + live.error + ' (using fallback values)';
+                document.getElementById('lastSynced').textContent = label;
+            } catch (e) {
+                document.getElementById('lastSynced').textContent = 'Could not load live data: ' + e.message + ' (using defaults)';
+                state.live = { current_users: 0, net_now: 0, net_3mo: 0, churn_rate: 7, arpu: 8 };
+                state.values = { ...state.live, cac: 60, monthly_burn: 4167 };
+                INPUTS.forEach(i => { if (i.live) state.mode[i.key] = 'live'; });
+            } finally {
+                document.getElementById('loadingOverlay').style.display = 'none';
+                renderInputs();
+                renderResults();
+            }
+        }
+
+        loadLive();
     </script>
 </body>
 </html>
