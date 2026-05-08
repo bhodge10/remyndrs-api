@@ -3479,6 +3479,41 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SOFT OPT-OUT: PAUSE / RESUME LIFECYCLE MESSAGES
+        # ==========================================
+        # Silences proactive lifecycle/marketing messages (trial warnings, day-N
+        # nudges, winbacks, inactivity nudges) without disabling user-requested
+        # reminders. STOP remains the hard opt-out for everything.
+        if msg_upper in [
+            "PAUSE", "PAUSE MESSAGES", "PAUSE NOTIFICATIONS",
+            "QUIET", "QUIET MODE",
+            "MUTE", "MUTE MESSAGES", "MUTE NOTIFICATIONS",
+        ]:
+            from models.user import pause_lifecycle_messages
+            pause_lifecycle_messages(phone_number)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(
+                "Got it — I'll only text you about reminders you've asked for. "
+                "No more check-ins or trial messages.\n\n"
+                "Text RESUME anytime to turn them back on, or STOP to opt out of everything."
+            ))
+            log_interaction(phone_number, incoming_msg, "Lifecycle messages paused", "lifecycle_pause", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        if msg_upper in [
+            "RESUME", "RESUME MESSAGES", "RESUME NOTIFICATIONS",
+            "UNPAUSE", "UNMUTE", "UNMUTE MESSAGES",
+        ]:
+            from models.user import resume_lifecycle_messages
+            resume_lifecycle_messages(phone_number)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(
+                "Welcome back! You'll start receiving check-ins and lifecycle messages again."
+            ))
+            log_interaction(phone_number, incoming_msg, "Lifecycle messages resumed", "lifecycle_resume", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # SHARED LISTS BETA OPT-IN
         # ==========================================
 
@@ -6113,6 +6148,22 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     reply_text = staging_prefix(f"Daily summary enabled! You'll receive a summary of your day's reminders at {dh}:{m:02d} {ap}.\n\nTo change the time, text: SUMMARY TIME 7AM")
                 else:
                     reply_text = staging_prefix("Daily summary disabled. You'll no longer receive daily reminder summaries.")
+
+            elif setting == "lifecycle_messages":
+                from models.user import pause_lifecycle_messages, resume_lifecycle_messages
+                pause = value.lower() in ['paused', 'pause', 'off', 'false', 'disable', 'disabled', 'stop', 'mute']
+                if pause:
+                    pause_lifecycle_messages(phone_number)
+                    reply_text = staging_prefix(
+                        "Got it — I'll only text you about reminders you've asked for. "
+                        "No more check-ins or trial messages.\n\n"
+                        "Text RESUME anytime to turn them back on, or STOP to opt out of everything."
+                    )
+                else:
+                    resume_lifecycle_messages(phone_number)
+                    reply_text = staging_prefix(
+                        "Welcome back! You'll start receiving check-ins and lifecycle messages again."
+                    )
             else:
                 reply_text = "I'm not sure which setting you'd like to change. You can change your daily summary time by texting something like 'change my summary time to 8am'."
 
