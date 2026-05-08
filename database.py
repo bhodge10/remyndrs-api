@@ -704,6 +704,11 @@ def init_db():
             # Shared lists beta: user-initiated opt-in (Premium-only feature, but any user can opt in)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS shared_lists_beta_opt_in BOOLEAN DEFAULT FALSE",
             "UPDATE users SET shared_lists_beta_opt_in = FALSE WHERE shared_lists_beta_opt_in IS NULL",
+            # Soft opt-out: silence proactive lifecycle/marketing messages while still
+            # allowing user-requested reminders. Hard STOP still uses opted_out.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_messages_opted_out BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_messages_opted_out_at TIMESTAMP",
+            "UPDATE users SET lifecycle_messages_opted_out = FALSE WHERE lifecycle_messages_opted_out IS NULL",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
