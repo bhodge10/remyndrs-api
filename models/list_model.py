@@ -778,6 +778,68 @@ def share_list(owner_phone: str, list_id: int, shared_with_phone: str) -> tuple[
             return_db_connection(conn)
 
 
+def set_share_name(list_id: int, shared_with_phone: str, name: str) -> bool:
+    """Set the owner-assigned name for a shared user."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            'UPDATE list_shares SET shared_with_name = %s WHERE list_id = %s AND shared_with_phone = %s',
+            (name, list_id, shared_with_phone)
+        )
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error setting share name: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_share_name(list_id: int, shared_with_phone: str) -> str | None:
+    """Get the owner-assigned name for a shared user."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            'SELECT shared_with_name FROM list_shares WHERE list_id = %s AND shared_with_phone = %s',
+            (list_id, shared_with_phone)
+        )
+        row = c.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        logger.error(f"Error getting share name: {e}")
+        return None
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_known_recipients(owner_phone: str, name: str) -> list[tuple[str, str]]:
+    """Look up previous share recipients by name for this owner.
+    Returns [(phone, name), ...] matching the given name (case-insensitive)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            """SELECT DISTINCT shared_with_phone, shared_with_name
+               FROM list_shares
+               WHERE owner_phone = %s AND LOWER(shared_with_name) = LOWER(%s)""",
+            (owner_phone, name)
+        )
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Error looking up known recipients: {e}")
+        return []
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def accept_share(phone_number: str, list_id: int) -> tuple[bool, str]:
     """Accept a pending shared list invitation. Returns (success, message)."""
     conn = None
@@ -905,15 +967,15 @@ def unshare_list_all(owner_phone: str, list_id: int) -> tuple[bool, str]:
             return_db_connection(conn)
 
 
-def get_list_members(list_id: int) -> list[tuple[str, str, str]]:
-    """Get all members of a shared list. Returns [(phone, status, permission), ...]."""
+def get_list_members(list_id: int) -> list[tuple[str, str, str, str | None]]:
+    """Get all members of a shared list. Returns [(phone, status, permission, name), ...]."""
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
 
         c.execute(
-            """SELECT shared_with_phone, status, permission
+            """SELECT shared_with_phone, status, permission, shared_with_name
                FROM list_shares WHERE list_id = %s
                ORDER BY created_at""",
             (list_id,)
@@ -1047,6 +1109,39 @@ def can_user_access_list(phone_number: str, list_id: int) -> tuple[bool, bool]:
     except Exception as e:
         logger.error(f"Error checking list access: {e}")
         return False, False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def is_shared_list_read_only(list_id: int) -> tuple[bool, str | None]:
+    """Check if a shared list is read-only because the owner is no longer Premium.
+    Returns (is_read_only, owner_first_name)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get owner phone
+        c.execute('SELECT phone_number FROM lists WHERE id = %s', (list_id,))
+        row = c.fetchone()
+        if not row:
+            return False, None
+        owner_phone = row[0]
+
+        # Check owner's tier
+        from services.tier_service import get_user_tier
+        tier = get_user_tier(owner_phone)
+        if tier != 'premium':
+            from models.user import get_user
+            owner = get_user(owner_phone)
+            owner_name = owner[1] if owner else None
+            return True, owner_name
+
+        return False, None
+    except Exception as e:
+        logger.error(f"Error checking shared list read-only: {e}")
+        return False, None
     finally:
         if conn:
             return_db_connection(conn)

@@ -14,7 +14,7 @@ from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TEMPERATURE, OPENAI_MAX_
 from models.memory import get_memories
 from models.reminder import get_user_reminders
 from models.user import get_user_timezone, get_user_first_name
-from models.list_model import get_lists, get_list_items
+from models.list_model import get_lists, get_list_items, get_shared_lists_for_user
 from utils.timezone import get_user_current_time
 from database import log_api_usage
 
@@ -124,11 +124,14 @@ def process_with_ai(message: str, phone_number: str, context: dict[str, Any]) ->
         else:
             reminders_context = "No reminders set."
 
-        # Get and format lists
-        lists = get_lists(phone_number)
-        if lists:
+        # Get and format lists (owned + accepted shared)
+        owned = [(lid, name, count, False) for (lid, name, count, _done) in get_lists(phone_number)]
+        shared = [(lid, name, count, True) for (lid, name, count, _done, _owner) in get_shared_lists_for_user(phone_number)]
+        all_lists = owned + shared
+        if all_lists:
             formatted_lists = []
-            for list_id, list_name, item_count, completed_count in lists:
+            for list_id, list_name, item_count, is_shared in all_lists:
+                prefix = "[Shared] " if is_shared else ""
                 items = get_list_items(list_id)
                 if items:
                     item_texts = []
@@ -137,9 +140,9 @@ def process_with_ai(message: str, phone_number: str, context: dict[str, Any]) ->
                             item_texts.append(f"  [x] {item_text}")
                         else:
                             item_texts.append(f"  [ ] {item_text}")
-                    formatted_lists.append(f"- {list_name} ({item_count} items):\n" + "\n".join(item_texts))
+                    formatted_lists.append(f"- {prefix}{list_name} ({item_count} items):\n" + "\n".join(item_texts))
                 else:
-                    formatted_lists.append(f"- {list_name} (empty)")
+                    formatted_lists.append(f"- {prefix}{list_name} (empty)")
             lists_context = "\n".join(formatted_lists)
         else:
             lists_context = "No lists created yet."
@@ -175,6 +178,8 @@ USER'S REMINDERS:
 
 USER'S LISTS:
 {lists_context}
+
+Lists prefixed with [Shared] are shared lists the user has accepted from someone else. The user CAN: view, add items, remove items, check/uncheck items. The user CANNOT: delete the list, rename the list, or re-share it — only the list's owner can. When the user names a list in a message, match against all lists above (owned and shared).
 
 IMPORTANT: Each memory shows when it was recorded. Use these dates when answering questions about "when did I..."
 
@@ -232,6 +237,13 @@ IMPORTANT: "before [date]" means SUBTRACT from that date. Do NOT interpret "a we
 For SPECIFIC TIME reminders (use action "reminder"):
 - "tomorrow at 9am" = tomorrow's date at 09:00:00
 - "Saturday at 8am" = next Saturday at 08:00:00
+- "at 8am on May 8" = May 8 of the current year at 08:00:00 (or next year if May 8 is already past)
+- "on October 3rd at 2pm" = October 3 at 14:00:00
+
+CRITICAL DATE RULE for MONTH-NAME dates ("on May 8", "October 3rd", "Dec 15"):
+Use the EXACT month and day the user named. Do NOT substitute tomorrow's date or any nearby date.
+If the named date is already in the past for the current year, roll forward to next year.
+Example: today is April 18, 2026. "Remind me on May 8 at 8am" → reminder_date: "2026-05-08 08:00:00" (NOT "2026-04-19 08:00:00").
 
 For reminder requests with DAYS OF THE WEEK:
 - Use "Today is: {current_day_of_week}" to calculate
@@ -650,13 +662,17 @@ For SHARING A LIST (Premium users only):
 {{
     "action": "share_list",
     "list_name": "the name of the list to share",
-    "phone_number": "the phone number to share with (digits only, with country code)",
-    "confirmation": "Sharing [list name] with [phone number]"
+    "phone_number": "the phone number to share with (optional, E.164 format with +1 country code)",
+    "shared_with_name": "the name of the person to share with (optional, when no phone number given)",
+    "confirmation": "Sharing [list name] with [phone number or name]"
 }}
+Include phone_number when the user provides digits. Include shared_with_name when the user provides a name instead.
 Examples:
 - "Share grocery list with 555-123-4567" → {{"action": "share_list", "list_name": "grocery list", "phone_number": "+15551234567"}}
 - "Share my todo list with 8015551234" → {{"action": "share_list", "list_name": "todo list", "phone_number": "+18015551234"}}
-Note: Normalize the phone number to E.164 format with +1 country code if not provided.
+- "Share vacation list with Sarah" → {{"action": "share_list", "list_name": "vacation list", "shared_with_name": "Sarah"}}
+- "Share grocery list with Mom" → {{"action": "share_list", "list_name": "grocery list", "shared_with_name": "Mom"}}
+Note: Normalize phone numbers to E.164 format with +1 country code if not provided.
 
 For REMOVING A USER FROM A SHARED LIST:
 {{

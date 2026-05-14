@@ -102,6 +102,12 @@ Config in `render.yaml`. Auto-deploys on push to main.
 - Production dependencies: `requirements-prod.txt` (no test frameworks)
 - Development dependencies: `requirements.txt` includes `-r requirements-prod.txt` + pytest
 - If database is recreated, manually update `DATABASE_URL` in all 4 Render services
+- **Render env groups** — shared config is split across these groups; update the group once and all services linked to it pick up the change:
+  - `Beta phone Numbers` — `SHARED_LISTS_BETA_PHONES`, `SMART_SUGGESTIONS_BETA_PHONES` (comma-separated E.164)
+  - `Googlae Analytics and Search API` — Google Analytics + Search Console credentials
+  - `Stripe Payment Processing` — live Stripe keys/webhooks
+  - `Stripe Test Payment Processing` — test-mode Stripe keys/webhooks
+  - `SMTP Sending` — outbound email credentials
 
 **CORS:** Use FastAPI's `CORSMiddleware`. Do NOT use manual `@app.options()` handlers.
 
@@ -184,6 +190,8 @@ Optional AES-256-GCM encryption for PII (names, emails). Enabled via `ENCRYPTION
 
 ### Shared Lists
 Premium-only feature allowing users to share lists with up to 4 non-premium users. Sharing is tracked in `list_shares` table with pending/accepted/declined status. Non-owners can add/remove/complete items but cannot delete, rename, or share the list. Key functions in `models/list_model.py`: `share_list()`, `accept_share()`, `get_accessible_list_by_name()`, `can_user_access_list()`. Handlers in `routes/handlers/lists.py`. Config: `SHARED_LIST_MAX_MEMBERS=4`, `SHARED_LIST_MAX_PER_USER=3`, `SHARED_LIST_MAX_RECEIVED=5`. ACCEPT/DECLINE keywords handled before AI processing. See `docs/shared-lists.md` for full scope.
+
+**Beta gating:** `can_share_list()` in `services/tier_service.py` enforces Premium tier AND (phone in `SHARED_LISTS_BETA_PHONES` env allowlist OR `users.shared_lists_beta_opt_in = TRUE`). Users self-enroll via `JOIN SHARED LISTS` keyword (Premium-only; free-tier users get an upgrade message). `LEAVE SHARED LISTS` clears the flag. Keyword handlers live in `main.py` near the smart nudge block. When the allowlist env var is empty, the gate is a no-op and any Premium user can share.
 
 ### Smart Nudges
 Proactive AI intelligence layer — sends ONE contextual insight per day. 8 nudge types, tier-gated. OFF by default. See `docs/changelog.md` for full implementation details.

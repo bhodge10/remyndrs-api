@@ -245,6 +245,7 @@ def init_db():
                 list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
                 owner_phone TEXT NOT NULL,
                 shared_with_phone TEXT NOT NULL,
+                shared_with_name TEXT,
                 permission TEXT NOT NULL DEFAULT 'edit',
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -650,6 +651,41 @@ def init_db():
             )""",
             "CREATE INDEX IF NOT EXISTS idx_analytics_summaries_date ON analytics_summaries(summary_date DESC)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_summaries_date_period ON analytics_summaries(summary_date, period_days)",
+            # Threaded analytics chat (admin-only): conversations + per-turn messages
+            """CREATE TABLE IF NOT EXISTS analytics_conversations (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT 'New conversation',
+                admin_user TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived BOOLEAN DEFAULT FALSE
+            )""",
+            """CREATE TABLE IF NOT EXISTS analytics_messages (
+                id SERIAL PRIMARY KEY,
+                conversation_id INTEGER NOT NULL REFERENCES analytics_conversations(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                model TEXT,
+                effort TEXT,
+                data_source TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_input_tokens INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_analytics_messages_conv ON analytics_messages(conversation_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_analytics_conversations_active ON analytics_conversations(archived, last_active_at DESC)",
+            # Attachments (images) uploaded to analytics chat messages
+            """CREATE TABLE IF NOT EXISTS analytics_attachments (
+                id SERIAL PRIMARY KEY,
+                message_id INTEGER NOT NULL REFERENCES analytics_messages(id) ON DELETE CASCADE,
+                filename TEXT,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                data BYTEA NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_analytics_attachments_message ON analytics_attachments(message_id)",
             # Nudge tracking for pending onboarding users
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_nudged_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS nudge_count_24h INTEGER DEFAULT 0",
@@ -661,6 +697,13 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_tier_version INTEGER DEFAULT 2",
             # Backfill all existing users to v1 (grandfathered)
             "UPDATE users SET free_tier_version = 1 WHERE free_tier_version = 2 OR free_tier_version IS NULL",
+            # Shared lists: pending name prompt state (JSON with list_id, shared_with_phone, list_name)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_share_name TEXT",
+            # Shared lists: owner-assigned name for the person they shared with
+            "ALTER TABLE list_shares ADD COLUMN IF NOT EXISTS shared_with_name TEXT",
+            # Shared lists beta: user-initiated opt-in (Premium-only feature, but any user can opt in)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS shared_lists_beta_opt_in BOOLEAN DEFAULT FALSE",
+            "UPDATE users SET shared_lists_beta_opt_in = FALSE WHERE shared_lists_beta_opt_in IS NULL",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

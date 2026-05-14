@@ -12,6 +12,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from config import logger, FREE_TRIAL_DAYS, TIER_PREMIUM, API_BASE_URL, PREMIUM_MONTHLY_PRICE
 from models.user import get_user, get_onboarding_step, create_or_update_user
 from models.memory import save_memory
+from models.list_model import get_pending_shares, accept_share, get_share_name
 from utils.timezone import get_timezone_from_zip, get_user_current_time
 from utils.formatting import get_onboarding_prompt
 from services.sms_service import send_sms
@@ -193,8 +194,18 @@ You're on step {step} of 2 - just {remaining} more {question_word}!
             create_or_update_user(phone_number, onboarding_step=1)
             track_onboarding_progress(phone_number, 1)
 
-            # Enhanced welcome message with clearer value proposition
-            resp.message("""Welcome to Remyndrs! 👋
+            # Check if this user was invited via a shared list
+            pending = get_pending_shares(phone_number)
+            if pending:
+                _share_id, _list_id, owner_phone, list_name = pending[0]
+                owner = get_user(owner_phone)
+                owner_name = owner[1] if owner else "Someone"
+                resp.message(f"""{owner_name} shared '{list_name}' with you on Remyndrs!
+
+Let's get you set up in 30 seconds so you can see it. What's your first name?""")
+            else:
+                # Enhanced welcome message with clearer value proposition
+                resp.message("""Welcome to Remyndrs! 👋
 
 I'm your AI-powered reminder assistant. I'll help you remember anything—from daily tasks to important dates.
 
@@ -270,6 +281,24 @@ Last question: ZIP code?
             # Uncomment post-launch when ready to activate for new trial users:
             # create_or_update_user(phone_number, smart_nudges_enabled=True)
 
+            # Auto-accept any pending shared list invitations
+            accepted_lists = []
+            pending = get_pending_shares(phone_number)
+            for share_id, list_id, owner_phone, list_name in pending:
+                success, _ = accept_share(phone_number, list_id)
+                if success:
+                    accepted_lists.append((list_name, owner_phone))
+                    # Notify the owner
+                    display_name = get_share_name(list_id, phone_number)
+                    if not display_name:
+                        new_user = get_user(phone_number)
+                        display_name = new_user[1] if new_user else "Someone"
+                    send_sms(
+                        owner_phone,
+                        f"{display_name} joined Remyndrs and accepted your shared list '{list_name}'!",
+                        message_type="reply"
+                    )
+
             # Get user's name for personalized message
             user = get_user(phone_number)
             first_name = user[1]
@@ -284,12 +313,25 @@ Last question: ZIP code?
             trial_end_local = trial_end_date.replace(tzinfo=pytz.UTC).astimezone(user_tz)
             trial_end_str = trial_end_local.strftime('%B %d')
 
-            # Send completion message - focused on immediate value + trial awareness
-            resp.message(f"""Perfect! You're all set, {first_name}! 🎉
+            # Send completion message — customized if they joined via shared list
+            if accepted_lists:
+                list_name, _ = accepted_lists[0]
+                shared_note = f"\n\nYou now have access to '{list_name}'! Text 'Show {list_name}' to see it."
+                if len(accepted_lists) > 1:
+                    shared_note += f"\n(Plus {len(accepted_lists) - 1} more shared list{'s' if len(accepted_lists) > 2 else ''}!)"
+                resp.message(f"""You're all set, {first_name}! 🎉
+
+You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories. After that, the core service is free forever — no credit card ever needed.{shared_note}
+
+Keep an eye out for a quick morning tip over the next week or so — I'll show you what else I can do.""")
+            else:
+                resp.message(f"""Perfect! You're all set, {first_name}! 🎉
 
 You have full Premium access until {trial_end_str} — unlimited reminders, lists & memories. After that, the core service is free forever — no credit card ever needed.
 
 I just saved your first memory: "{first_memory}"
+
+Keep an eye out for a quick morning tip over the next week or so — I'll show you what else I can do.
 
 Try asking me: "What do I have saved?" """)
 

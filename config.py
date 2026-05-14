@@ -81,6 +81,10 @@ MAX_ITEMS_PER_LIST = 40
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
+# Admin notification phone — receives alerts for high-signal user events
+# (e.g. UPGRADE keyword, shared-list mentions). Empty = notifications disabled.
+ADMIN_NOTIFICATION_PHONE = os.environ.get("ADMIN_NOTIFICATION_PHONE", "+18593935374")
+
 # Customer Service Portal Authentication
 # Falls back to admin credentials if not set
 CS_USERNAME = os.environ.get("CS_USERNAME", ADMIN_USERNAME)
@@ -240,6 +244,12 @@ SHARED_LIST_MAX_RECEIVED = 5      # Max shared lists a non-premium user can be o
 # Empty string = feature available to all Premium users. Set in env to restrict during testing.
 SHARED_LISTS_BETA_PHONES = [
     p.strip() for p in os.environ.get("SHARED_LISTS_BETA_PHONES", "").split(",") if p.strip()
+]
+
+# Beta whitelist for Smart Suggestions: comma-separated phone numbers (E.164 format).
+# Empty string = feature available to all Premium users. Set in env to restrict during testing.
+SMART_SUGGESTIONS_BETA_PHONES = [
+    p.strip() for p in os.environ.get("SMART_SUGGESTIONS_BETA_PHONES", "").split(",") if p.strip()
 ]
 
 # =====================================================

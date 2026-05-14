@@ -47,6 +47,9 @@ ALLOWED_USER_FIELDS = {
     'inactivity_nudge_sent_at',
     # Free tier versioning
     'free_tier_version',
+    # Shared lists
+    'pending_share_name',
+    'shared_lists_beta_opt_in',
 }
 
 
@@ -1066,6 +1069,34 @@ def get_pending_nudge_response(phone_number: str) -> Optional[dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error getting pending nudge response: {e}")
         return None
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def get_shared_lists_beta_opt_in(phone_number: str) -> bool:
+    """Check if user has opted into the shared lists beta."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone
+            phone_hash = hash_phone(phone_number)
+            c.execute('SELECT shared_lists_beta_opt_in FROM users WHERE phone_hash = %s', (phone_hash,))
+            result = c.fetchone()
+            if not result:
+                c.execute('SELECT shared_lists_beta_opt_in FROM users WHERE phone_number = %s', (phone_number,))
+                result = c.fetchone()
+        else:
+            c.execute('SELECT shared_lists_beta_opt_in FROM users WHERE phone_number = %s', (phone_number,))
+            result = c.fetchone()
+
+        return bool(result[0]) if result else False
+    except Exception as e:
+        logger.error(f"Error getting shared lists beta opt-in: {e}")
+        return False
     finally:
         if conn:
             return_db_connection(conn)

@@ -39,12 +39,13 @@ from models.list_model import (
     find_item_in_any_list, get_list_count, get_item_count,
     get_next_available_list_name,
     get_accessible_list_by_name, can_user_access_list,
-    get_shared_lists_for_user, get_pending_shares
+    get_shared_lists_for_user, get_pending_shares,
+    is_shared_list_read_only
 )
 from routes.handlers.lists import (
     handle_share_list, handle_unshare_list, handle_show_list_members,
     handle_leave_shared_list, handle_accept_share, handle_decline_share,
-    format_all_lists_display
+    handle_pending_share_name, format_all_lists_display
 )
 from services.sms_service import send_sms
 from services.ai_service import process_with_ai, parse_list_items
@@ -479,6 +480,27 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         increment_message_count(phone_number)
 
         # ==========================================
+        # ADMIN NOTIFICATIONS (high-signal user events)
+        # ==========================================
+        # Fire-and-forget — never blocks user handling.
+        try:
+            from config import ADMIN_NOTIFICATION_PHONE
+            if ADMIN_NOTIFICATION_PHONE and phone_number != ADMIN_NOTIFICATION_PHONE:
+                msg_stripped_upper = incoming_msg.strip().upper()
+                trigger = None
+                if msg_stripped_upper in ("UPGRADE", "SUBSCRIBE", "PREMIUM", "PRICING"):
+                    trigger = "upgrade"
+                elif "shared list" in incoming_msg.lower():
+                    trigger = "shared list"
+                if trigger:
+                    from services.sms_service import notify_admin
+                    last4 = phone_number[-4:] if phone_number else "?"
+                    preview = incoming_msg.strip()[:120]
+                    notify_admin(f"[Remyndrs] {trigger} trigger from ...{last4}: {preview}")
+        except Exception as e:
+            logger.warning(f"Admin notification hook error: {e}")
+
+        # ==========================================
         # DELETE ACCOUNT COMMAND (two-step confirmation)
         # ==========================================
         if incoming_msg.upper() in ("DELETE ACCOUNT", "CANCEL ACCOUNT", "CANCEL MY ACCOUNT", "DELETE MY ACCOUNT", "REMOVE MY ACCOUNT", "CLOSE MY ACCOUNT"):
@@ -893,6 +915,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             msg_lower = incoming_msg.lower().strip()
             referral_source = REFERRAL_MESSAGES.get(msg_lower)
 
+            # Prefix match for marketing-site CTAs that send "<keyword>! Start my Remyndrs trial →".
+            # Keeps bare "Hello"/"GO" working while tagging the longer body correctly.
+            if not referral_source:
+                if re.match(r'^hello\b', msg_lower):
+                    referral_source = "website-ios"
+                elif re.match(r'^go\b', msg_lower):
+                    referral_source = "facebook"
+
             # Fuzzy fallback: check if message contains key phrases
             if not referral_source:
                 for keyword, source, condition in REFERRAL_FUZZY:
@@ -901,12 +931,37 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             referral_source = source
                             break
 
+            # Check if this user was invited via a shared list
+            if not referral_source:
+                pending = get_pending_shares(phone_number)
+                if pending:
+                    referral_source = "shared-list"
+
             # Default: tag unmatched new users so they don't show as "Unknown"
             if not referral_source:
                 referral_source = "sms-organic"
 
             set_referral_source(phone_number, referral_source)
             logger.info(f"Referral source detected for ...{phone_number[-4:]}: {referral_source}")
+
+        # ==========================================
+        # NON-USER DECLINING A SHARED LIST INVITATION
+        # ==========================================
+        if not is_user_onboarded(phone_number):
+            decline_words = {"no", "no thanks", "no thank you", "nah", "nope", "decline", "stop"}
+            if incoming_msg.strip().lower() in decline_words:
+                pending = get_pending_shares(phone_number)
+                if pending:
+                    from models.list_model import decline_share, get_share_name
+                    from routes.handlers.lists import _format_phone
+                    for share_id, list_id, owner_phone, list_name in pending:
+                        decline_share(phone_number, list_id)
+                        display_name = get_share_name(list_id, phone_number) or _format_phone(phone_number)
+                        send_sms(owner_phone, f"{display_name} declined your shared list '{list_name}'.", message_type="reply")
+                    resp = MessagingResponse()
+                    resp.message("No problem! The invitation has been declined.")
+                    log_interaction(phone_number, incoming_msg, "Non-user declined shared list invitation", "decline_share_non_user", True)
+                    return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
         # ONBOARDING CHECK
@@ -1297,6 +1352,23 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         else:
                             reply_text = "Sorry, I couldn't save that recurring reminder. Please try again."
                             log_interaction(phone_number, incoming_msg, reply_text, "reminder_confirmed", False)
+                    elif pending_confirmation.get('type') == 'smart_suggestion':
+                        # Smart suggestion: user accepted a prep reminder
+                        reminder_text = pending_confirmation.get('reminder_text')
+                        reminder_date_utc = pending_confirmation.get('reminder_date_utc')
+                        local_time = pending_confirmation.get('local_time')
+                        prep_display = pending_confirmation.get('prep_date_display')
+
+                        user_tz_str = get_user_timezone(phone_number)
+                        reminder_id = save_reminder_with_local_time(phone_number, reminder_text, reminder_date_utc, local_time, user_tz_str)
+
+                        if reminder_id:
+                            reply_text = f"Done! I'll remind you on {prep_display} {format_reminder_confirmation(reminder_text)}."
+                            log_interaction(phone_number, incoming_msg, reply_text, "smart_suggestion_accepted", True)
+                        else:
+                            reply_text = "Sorry, I couldn't save that reminder. Please try again."
+                            log_interaction(phone_number, incoming_msg, reply_text, "smart_suggestion_accepted", False)
+
                     else:
                         logger.error(f"Unrecognized pending confirmation action: '{action}'. Keys: {list(pending_confirmation.keys())}")
                         reply_text = "Sorry, something went wrong. Please try again."
@@ -1316,21 +1388,37 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     return Response(content=str(resp), media_type="application/xml")
 
             # User says it's wrong - ask for clarification
-            elif msg_lower in ['no', 'n', 'wrong', 'nope', "that's wrong", 'thats wrong', 'incorrect', 'not right']:
-                # Log rejection for calibration tracking
-                stored_confidence = pending_confirmation.get('confidence')
-                if stored_confidence is not None:
-                    CONFIDENCE_THRESHOLD = int(get_setting('confidence_threshold', 70))
-                    log_confidence(phone_number, pending_confirmation.get('action', 'reminder'), stored_confidence, CONFIDENCE_THRESHOLD, confirmed=False, user_message=None)
+            elif msg_lower in ['no', 'n', 'wrong', 'nope', "that's wrong", 'thats wrong', 'incorrect', 'not right', "no thanks", "no thank you", "nah", "i'm good", "im good"]:
+                # Smart suggestion decline — just clear and move on
+                if pending_confirmation.get('type') == 'smart_suggestion':
+                    create_or_update_user(phone_number, pending_reminder_confirmation=None)
+                    log_interaction(phone_number, incoming_msg, "Smart suggestion declined", "smart_suggestion_declined", True)
+                    # Don't send a response — let the message fall through in case
+                    # it's also a new command (e.g., "no, remind me to...")
+                    # But if it's just "no", we need to respond
+                    if msg_lower in ['no', 'n', 'nope', 'nah', "no thanks", "no thank you", "i'm good", "im good"]:
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix("No problem!"))
+                        return Response(content=str(resp), media_type="application/xml")
+                    # Otherwise fall through to process the rest of the message
+                else:
+                    # Log rejection for calibration tracking
+                    stored_confidence = pending_confirmation.get('confidence')
+                    if stored_confidence is not None:
+                        CONFIDENCE_THRESHOLD = int(get_setting('confidence_threshold', 70))
+                        log_confidence(phone_number, pending_confirmation.get('action', 'reminder'), stored_confidence, CONFIDENCE_THRESHOLD, confirmed=False, user_message=None)
 
-                create_or_update_user(phone_number, pending_reminder_confirmation=None)
-                resp = MessagingResponse()
-                resp.message(staging_prefix("No problem! Please tell me again what you'd like to be reminded about, and when.\n\nTip: Try something like \"remind me Tuesday at 3pm to call the dentist\""))
-                log_interaction(phone_number, incoming_msg, "Reminder confirmation rejected", "reminder_rejected", True)
-                return Response(content=str(resp), media_type="application/xml")
+                    create_or_update_user(phone_number, pending_reminder_confirmation=None)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix("No problem! Please tell me again what you'd like to be reminded about, and when.\n\nTip: Try something like \"remind me Tuesday at 3pm to call the dentist\""))
+                    log_interaction(phone_number, incoming_msg, "Reminder confirmation rejected", "reminder_rejected", True)
+                    return Response(content=str(resp), media_type="application/xml")
 
             # User provides a correction directly - treat as new request
             # (If they say something other than yes/no, assume it's a new/corrected request and let it fall through)
+            # For smart suggestions, silently clear the pending state so it doesn't block the next action
+            if pending_confirmation and pending_confirmation.get('type') == 'smart_suggestion':
+                create_or_update_user(phone_number, pending_reminder_confirmation=None)
 
         # ==========================================
         # UNDO / THAT'S WRONG FALLBACK COMMANDS
@@ -2533,29 +2621,38 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             # UX PRIORITY: If user is viewing a specific list, ONLY delete from that list
             # Don't show options from reminders/memories - that's confusing
             if last_active and last_active not in ("__RECURRING__", "__REMINDERS__", "__LISTS__", "__MEMORIES__"):
-                # User is viewing a specific list - delete directly from it
-                list_info = get_list_by_name(phone_number, last_active)
-                if list_info:
-                    list_id = list_info[0]
-                    list_name = list_info[1]
+                # User is viewing a specific list (owned or shared) - delete directly from it
+                accessible = get_accessible_list_by_name(phone_number, last_active)
+                if accessible:
+                    list_id, list_name, is_shared, _owner_phone = accessible
+                    if is_shared:
+                        read_only, _ = is_shared_list_read_only(list_id)
+                        if read_only:
+                            resp = MessagingResponse()
+                            resp.message(f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired.")
+                            return Response(content=str(resp), media_type="application/xml")
                     items = get_list_items(list_id)
                     if items and 1 <= item_num <= len(items):
                         item_id, item_text, _ = items[item_num - 1]
-                        # Single item from active list - ask for confirmation
+                        # Single item from active list - ask for confirmation.
+                        # Include list_id + is_shared so the YES handler dispatches to the right list.
                         confirm_data = json.dumps({
                             'awaiting_confirmation': True,
                             'type': 'list_item',
                             'list_name': list_name,
-                            'text': item_text
+                            'list_id': list_id,
+                            'is_shared': is_shared,
+                            'text': item_text,
                         })
                         create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+                        display = f"shared list '{list_name}'" if is_shared else list_name
                         resp = MessagingResponse()
-                        resp.message(f"Remove '{item_text}' from {list_name}?\n\nReply YES to confirm or CANCEL to keep it.")
+                        resp.message(f"Remove '{item_text}' from {display}?\n\nReply YES to confirm or CANCEL to keep it.")
                         log_interaction(phone_number, incoming_msg, "Delete from active list", "delete_list_item_confirm", True)
                         return Response(content=str(resp), media_type="application/xml")
                     else:
                         resp = MessagingResponse()
-                        resp.message(f"Your {list_name} doesn't have an item #{item_num}.")
+                        resp.message(f"{list_name} doesn't have an item #{item_num}.")
                         return Response(content=str(resp), media_type="application/xml")
 
             # No active list context - show options from all types
@@ -2576,19 +2673,24 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     'display': f"Reminder: {display_prefix}{reminder[2][:40]}"
                 })
 
-            # Check all lists for items at this position
-            all_lists = get_lists(phone_number)
+            # Check all lists (owned + accepted shared) for items at this position
+            from routes.handlers.lists import get_all_lists_with_shared
+            all_lists = get_all_lists_with_shared(phone_number)
             for lst in all_lists:
-                list_id = lst[0]
-                list_name = lst[1]
+                list_id = lst['list_id']
+                list_name = lst['list_name']
+                is_shared = lst['is_shared']
                 items = get_list_items(list_id)
                 if items and 1 <= item_num <= len(items):
                     item_id, item_text, _ = items[item_num - 1]
+                    display_list = f"shared list '{list_name}'" if is_shared else list_name
                     delete_options.append({
                         'type': 'list_item',
                         'list_name': list_name,
+                        'list_id': list_id,
+                        'is_shared': is_shared,
                         'text': item_text,
-                        'display': f"'{item_text}' from {list_name}"
+                        'display': f"'{item_text}' from {display_list}",
                     })
 
             # Check for memory at this position
@@ -2636,15 +2738,21 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if check_match:
             item_num = int(check_match.group(1))
             last_active = get_last_active_list(phone_number)
-            if last_active:
-                list_info = get_list_by_name(phone_number, last_active)
-                if list_info:
-                    list_id = list_info[0]
-                    list_name = list_info[1]
+            if last_active and last_active not in ("__RECURRING__", "__REMINDERS__", "__LISTS__", "__MEMORIES__"):
+                accessible = get_accessible_list_by_name(phone_number, last_active)
+                if accessible:
+                    list_id, list_name, is_shared, _owner_phone = accessible
+                    if is_shared:
+                        read_only, _ = is_shared_list_read_only(list_id)
+                        if read_only:
+                            resp = MessagingResponse()
+                            resp.message(f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired.")
+                            return Response(content=str(resp), media_type="application/xml")
                     items = get_list_items(list_id)
                     if items and 1 <= item_num <= len(items):
                         item_id, item_text, _ = items[item_num - 1]
-                        if mark_item_complete(phone_number, list_name, item_text):
+                        from models.list_model import mark_item_complete_by_list_id
+                        if mark_item_complete_by_list_id(list_id, item_text):
                             reply_msg = f"Checked off '{item_text}'"
                         else:
                             reply_msg = f"Couldn't check off item #{item_num}"
@@ -2654,7 +2762,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         return Response(content=str(resp), media_type="application/xml")
                     else:
                         resp = MessagingResponse()
-                        resp.message(f"Item #{item_num} not found. Your {list_name} has {len(items)} items.")
+                        resp.message(f"Item #{item_num} not found. {list_name} has {len(items)} items.")
                         return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
@@ -3368,6 +3476,75 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SHARED LISTS BETA OPT-IN
+        # ==========================================
+
+        if msg_upper in [
+            "JOIN SHARED LISTS BETA", "JOIN SHARED LISTS", "SHARED LISTS BETA",
+            "BETA SHARED LISTS", "JOIN BETA", "JOIN SHARED LIST BETA",
+        ]:
+            from services.tier_service import get_user_tier
+            from config import TIER_PREMIUM, TIER_FAMILY, PREMIUM_MONTHLY_PRICE
+            from models.user import get_shared_lists_beta_opt_in
+
+            tier = get_user_tier(phone_number)
+            if tier not in (TIER_PREMIUM, TIER_FAMILY):
+                resp = MessagingResponse()
+                resp.message(staging_prefix(
+                    f"Shared lists are a Premium feature. Text UPGRADE to unlock them ({PREMIUM_MONTHLY_PRICE}/mo), "
+                    "then text JOIN SHARED LISTS to join the beta."
+                ))
+                log_interaction(phone_number, incoming_msg, "Shared lists beta: non-premium", "shared_lists_beta_blocked", False)
+                return Response(content=str(resp), media_type="application/xml")
+
+            if get_shared_lists_beta_opt_in(phone_number):
+                resp = MessagingResponse()
+                resp.message(staging_prefix(
+                    "You're already in the shared lists beta!\n\n"
+                    "Share a list: SHARE [list] WITH [phone]\n"
+                    "Report a bug: BUG [what happened]\n"
+                    "Send feedback: FEEDBACK [thoughts]\n\n"
+                    "Leave beta: LEAVE SHARED LISTS"
+                ))
+                log_interaction(phone_number, incoming_msg, "Already in shared lists beta", "shared_lists_beta_already", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            create_or_update_user(phone_number, shared_lists_beta_opt_in=True)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(
+                "Thanks for joining the shared lists beta!\n\n"
+                "Share a list: SHARE [list] WITH [phone]\n"
+                "(e.g. SHARE groceries WITH 5551234567)\n\n"
+                "Hit a bug? Text BUG [what went wrong]\n"
+                "Got feedback? Text FEEDBACK [your thoughts]\n\n"
+                "We rely on testers like you to tell us what's broken or confusing.\n\n"
+                "Leave beta: LEAVE SHARED LISTS"
+            ))
+            log_interaction(phone_number, incoming_msg, "Joined shared lists beta", "shared_lists_beta_join", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        if msg_upper in [
+            "LEAVE SHARED LISTS BETA", "LEAVE SHARED LISTS", "LEAVE BETA",
+            "EXIT SHARED LISTS BETA", "OPT OUT SHARED LISTS",
+        ]:
+            from models.user import get_shared_lists_beta_opt_in
+
+            if not get_shared_lists_beta_opt_in(phone_number):
+                resp = MessagingResponse()
+                resp.message(staging_prefix("You're not currently in the shared lists beta."))
+                log_interaction(phone_number, incoming_msg, "Not in shared lists beta", "shared_lists_beta_leave_noop", True)
+                return Response(content=str(resp), media_type="application/xml")
+
+            create_or_update_user(phone_number, shared_lists_beta_opt_in=False)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(
+                "You've left the shared lists beta. Existing shared lists still work; you just can't create new ones.\n\n"
+                "To rejoin: JOIN SHARED LISTS"
+            ))
+            log_interaction(phone_number, incoming_msg, "Left shared lists beta", "shared_lists_beta_leave", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # TIMEZONE COMMANDS
         # ==========================================
 
@@ -3896,6 +4073,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # SHARED LIST: PENDING NAME AFTER SHARE
+        # ==========================================
+        share_name_result = handle_pending_share_name(phone_number, incoming_msg)
+        if share_name_result:
+            resp = MessagingResponse()
+            resp.message(staging_prefix(share_name_result))
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # SHARED LIST ACCEPT/DECLINE
         # ==========================================
         if incoming_msg.upper() == "ACCEPT":
@@ -3969,11 +4155,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # If user sends just a number and has lists (but no pending item), show that list
         if incoming_msg.strip().isdigit() and not get_pending_list_item(phone_number):
             list_num = int(incoming_msg.strip())
-            lists = get_lists(phone_number)
-            if lists and 1 <= list_num <= len(lists):
-                selected_list = lists[list_num - 1]
-                list_id = selected_list[0]
-                list_name = selected_list[1]
+            from routes.handlers.lists import get_all_lists_with_shared
+            all_lists = get_all_lists_with_shared(phone_number)
+            if all_lists and 1 <= list_num <= len(all_lists):
+                selected = all_lists[list_num - 1]
+                list_id = selected['list_id']
+                list_name = selected['list_name']
+                is_shared = selected['is_shared']
+                prefix = "[Shared] " if is_shared else ""
                 # Set context so "Delete #" knows we're viewing this specific list
                 create_or_update_user(phone_number, last_active_list=list_name)
                 items = get_list_items(list_id)
@@ -3984,9 +4173,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             item_lines.append(f"{i}. [x] {item_text}")
                         else:
                             item_lines.append(f"{i}. {item_text}")
-                    reply = f"{list_name}:\n\n" + "\n".join(item_lines)
+                    reply = f"{prefix}{list_name}:\n\n" + "\n".join(item_lines)
                 else:
-                    reply = f"Your {list_name} is empty."
+                    reply = f"{prefix}{list_name} is empty." if is_shared else f"Your {list_name} is empty."
 
                 resp = MessagingResponse()
                 resp.message(reply)
@@ -4592,6 +4781,8 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     logger.error(f"Error preparing confirmation: {e}")
                     # Fall through to create reminder anyway
 
+            reminder_date_utc = None
+            user_tz_str = None
             try:
                 user_tz_str = get_user_timezone(phone_number)
                 tz = pytz.timezone(user_tz_str)
@@ -4625,6 +4816,24 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             # Add usage counter for free tier users
             from services.tier_service import add_usage_counter_to_message
             reply_text = add_usage_counter_to_message(phone_number, reply_text, reminder_date)
+
+            # Smart suggestion: offer a prep reminder for high-importance events
+            from services.smart_suggestion_service import get_reminder_suggestion
+            from services.tier_service import get_user_tier
+            from config import SMART_SUGGESTIONS_BETA_PHONES
+            if get_user_tier(phone_number) in ('premium', 'family') and reminder_date_utc and (not SMART_SUGGESTIONS_BETA_PHONES or phone_number in SMART_SUGGESTIONS_BETA_PHONES):
+                suggestion = get_reminder_suggestion(reminder_text, reminder_date_utc, user_tz_str)
+                if suggestion and not get_pending_reminder_confirmation(phone_number):
+                    reply_text += f"\n\n{suggestion['suggestion_text']}"
+                    pending_data = json.dumps({
+                        'type': 'smart_suggestion',
+                        'category': 'prep_reminder',
+                        'reminder_text': suggestion['prep_reminder_text'],
+                        'reminder_date_utc': suggestion['prep_date_utc'],
+                        'local_time': suggestion['prep_local_time'],
+                        'prep_date_display': suggestion['prep_date_display'],
+                    })
+                    create_or_update_user(phone_number, pending_reminder_confirmation=pending_data)
 
             # Check if this is user's first action and prompt for daily summary
             if should_prompt_daily_summary(phone_number):
@@ -4783,6 +4992,24 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 # Add usage counter for free tier users
                 from services.tier_service import add_usage_counter_to_message
                 reply_text = add_usage_counter_to_message(phone_number, reply_text, reminder_date_utc)
+
+                # Smart suggestion: offer a prep reminder for high-importance events
+                from services.smart_suggestion_service import get_reminder_suggestion
+                from services.tier_service import get_user_tier
+                from config import SMART_SUGGESTIONS_BETA_PHONES
+                if get_user_tier(phone_number) in ('premium', 'family') and (not SMART_SUGGESTIONS_BETA_PHONES or phone_number in SMART_SUGGESTIONS_BETA_PHONES):
+                    suggestion = get_reminder_suggestion(reminder_text, reminder_date_utc, user_tz_str)
+                    if suggestion and not get_pending_reminder_confirmation(phone_number):
+                        reply_text += f"\n\n{suggestion['suggestion_text']}"
+                        pending_data = json.dumps({
+                            'type': 'smart_suggestion',
+                            'category': 'prep_reminder',
+                            'reminder_text': suggestion['prep_reminder_text'],
+                            'reminder_date_utc': suggestion['prep_date_utc'],
+                            'local_time': suggestion['prep_local_time'],
+                            'prep_date_display': suggestion['prep_date_display'],
+                        })
+                        create_or_update_user(phone_number, pending_reminder_confirmation=pending_data)
 
                 # Check if this is user's first action and prompt for daily summary
                 if should_prompt_daily_summary(phone_number):
@@ -5051,14 +5278,18 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             if not list_name:
                 item_valid_check, item_result_check = validate_item_text(item_text)
                 if item_valid_check:
-                    lists = get_lists(phone_number)
-                    if len(lists) == 1:
+                    from routes.handlers.lists import get_all_lists_with_shared
+                    all_lists = get_all_lists_with_shared(phone_number)
+                    if len(all_lists) == 1:
                         # Only one list, use it directly
-                        list_name = lists[0][1]
-                    elif len(lists) > 1:
-                        # Multiple lists, ask which one
+                        list_name = all_lists[0]['list_name']
+                    elif len(all_lists) > 1:
+                        # Multiple lists, ask which one — include shared in the menu
                         create_or_update_user(phone_number, pending_list_item=item_result_check, pending_delete=False)
-                        list_options = "\n".join([f"{i+1}. {l[1]}" for i, l in enumerate(lists)])
+                        list_options = "\n".join(
+                            f"{i+1}. {'[Shared] ' if l['is_shared'] else ''}{l['list_name']}"
+                            for i, l in enumerate(all_lists)
+                        )
                         reply_text = f"Which list would you like to add these to?\n\n{list_options}\n\nReply with a number:"
                         log_interaction(phone_number, incoming_msg, reply_text, "add_to_list", True)
                         list_selection_handled = True
@@ -5091,6 +5322,16 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     if shared_list_match and shared_list_match[2]:  # is_shared=True
                         list_id = shared_list_match[0]
                         list_name = shared_list_match[1]
+
+                        # Check if shared list is read-only (owner no longer Premium)
+                        read_only, owner_name = is_shared_list_read_only(list_id)
+                        if read_only:
+                            reply_text = f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired."
+                            log_interaction(phone_number, incoming_msg, reply_text, "add_to_shared_list_readonly", False)
+                            resp = MessagingResponse()
+                            resp.message(staging_prefix(reply_text))
+                            return Response(content=str(resp), media_type="application/xml")
+
                         # Add items to shared list (use owner's item limit, not shared user's)
                         from services.tier_service import get_tier_limits, get_user_tier, add_list_item_counter_to_message
                         tier_limits = get_tier_limits(get_user_tier(shared_list_match[3]))  # owner's tier
@@ -5115,8 +5356,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
                         log_interaction(phone_number, incoming_msg, reply_text, "add_to_shared_list", True)
 
-                # Auto-create list if it doesn't exist (and not a shared list)
-                if not list_info and not shared_list_match:
+                # Three paths: shared list already handled, auto-create, or owned add
+                if shared_list_match:
+                    # Already handled in the shared-list branch above; skip the owned/auto-create logic
+                    pass
+                elif not list_info:
                     from services.tier_service import (
                         can_create_list, get_tier_limits, get_user_tier,
                         format_list_limit_message, format_list_item_limit_message,
@@ -5205,63 +5449,72 @@ def process_single_action(ai_response, phone_number, incoming_msg):
 
         elif ai_response["action"] == "add_item_ask_list":
             item_text = ai_response.get("item_text")
-            lists = get_lists(phone_number)
-            if len(lists) == 1:
-                # Only one list, add directly with multi-item parsing
-                list_id = lists[0][0]
-                list_name = lists[0][1]
+            from routes.handlers.lists import get_all_lists_with_shared
+            all_lists = get_all_lists_with_shared(phone_number)
+            if len(all_lists) == 1:
+                # Only one list total (owned or shared) — add directly
+                only = all_lists[0]
+                list_id = only['list_id']
+                list_name = only['list_name']
+                is_shared = only['is_shared']
+                owner_phone = only['owner_phone']
 
                 # Parse multiple items
                 items_to_add = parse_list_items(item_text, phone_number)
 
-                # Check tier limit for items per list
                 from services.tier_service import (
                     can_add_list_item, get_tier_limits, get_user_tier,
                     format_list_item_limit_message, add_list_item_counter_to_message
                 )
-                allowed, limit_msg = can_add_list_item(phone_number, list_id)
+                if is_shared:
+                    read_only, _ = is_shared_list_read_only(list_id)
+                    if read_only:
+                        reply_text = f"The shared list '{list_name}' is currently read-only because the owner's Premium plan has expired."
+                        log_interaction(phone_number, incoming_msg, reply_text, "add_item_ask_list", False)
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix(reply_text))
+                        return Response(content=str(resp), media_type="application/xml")
+
+                # Tier limits follow the list owner for shared lists
+                limit_phone = owner_phone if is_shared else phone_number
+                allowed, _ = can_add_list_item(limit_phone, list_id)
                 if not allowed:
-                    # List is full - use Level 4 formatter
                     reply_text = format_list_item_limit_message(
-                        phone_number, list_name, items_to_add, 0
+                        limit_phone, list_name, items_to_add, 0
                     )
                 else:
-                    tier_limits = get_tier_limits(get_user_tier(phone_number))
+                    tier_limits = get_tier_limits(get_user_tier(limit_phone))
                     max_items = tier_limits['max_items_per_list']
                     item_count = get_item_count(list_id)
                     available_slots = max_items - item_count
 
-                    # Add items up to the limit
                     added_items = []
                     for item in items_to_add:
                         if len(added_items) < available_slots:
                             add_list_item(list_id, phone_number, item)
                             added_items.append(item)
 
-                    # Track last active list
                     create_or_update_user(phone_number, last_active_list=list_name)
 
-                    # Handle partial or full adds with progressive education
                     if len(added_items) < len(items_to_add):
-                        # Some items skipped - use Level 4 formatter
                         reply_text = format_list_item_limit_message(
-                            phone_number, list_name, items_to_add, len(added_items)
+                            limit_phone, list_name, items_to_add, len(added_items)
                         )
                     else:
-                        # All items added successfully
+                        display = f"shared list '{list_name}'" if is_shared else f"your {list_name}"
                         if len(added_items) == 1:
-                            base_reply = f"Added {added_items[0]} to your {list_name}"
+                            base_reply = f"Added {added_items[0]} to {display}"
                         else:
-                            base_reply = f"Added {len(added_items)} items to your {list_name}: {', '.join(added_items)}"
+                            base_reply = f"Added {len(added_items)} items to {display}: {', '.join(added_items)}"
+                        reply_text = base_reply if is_shared else add_list_item_counter_to_message(phone_number, list_id, base_reply)
 
-                        # Add progressive counter
-                        reply_text = add_list_item_counter_to_message(phone_number, list_id, base_reply)
-
-            elif len(lists) > 1:
-                # Multiple lists, ask which one (store original text for parsing later)
-                # Clear pending_delete flag to avoid blocking the list selection handler
+            elif len(all_lists) > 1:
+                # Multiple lists, ask which one — include shared lists in the menu
                 create_or_update_user(phone_number, pending_list_item=item_text, pending_delete=False)
-                list_options = "\n".join([f"{i+1}. {l[1]}" for i, l in enumerate(lists)])
+                list_options = "\n".join(
+                    f"{i+1}. {'[Shared] ' if l['is_shared'] else ''}{l['list_name']}"
+                    for i, l in enumerate(all_lists)
+                )
                 reply_text = f"Which list would you like to add these to?\n\n{list_options}\n\nReply with a number:"
             else:
                 reply_text = "You don't have any lists yet. Try 'Create a grocery list' first!"
@@ -5421,7 +5674,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 from models.list_model import mark_item_complete_by_list_id
                 accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
                 if accessible and accessible[2]:  # is_shared
-                    if mark_item_complete_by_list_id(accessible[0], item_text):
+                    read_only, owner_name = is_shared_list_read_only(accessible[0])
+                    if read_only:
+                        reply_text = f"The shared list '{accessible[1]}' is currently read-only because the owner's Premium plan has expired."
+                    elif mark_item_complete_by_list_id(accessible[0], item_text):
                         reply_text = f"Checked off {item_text} from shared list '{accessible[1]}'"
                     else:
                         reply_text = f"Couldn't find '{item_text}' in '{accessible[1]}'."
@@ -5450,7 +5706,10 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 from models.list_model import mark_item_incomplete_by_list_id
                 accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
                 if accessible and accessible[2]:  # is_shared
-                    if mark_item_incomplete_by_list_id(accessible[0], item_text):
+                    read_only, owner_name = is_shared_list_read_only(accessible[0])
+                    if read_only:
+                        reply_text = f"The shared list '{accessible[1]}' is currently read-only because the owner's Premium plan has expired."
+                    elif mark_item_incomplete_by_list_id(accessible[0], item_text):
                         reply_text = f"Unmarked {item_text} from shared list '{accessible[1]}'"
                     else:
                         reply_text = f"Couldn't find '{item_text}' to unmark."
@@ -5465,6 +5724,16 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             # Check if this is a shared list the user has access to
             accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
             is_shared_list = accessible and accessible[2]
+
+            # Check if shared list is read-only (owner no longer Premium)
+            if is_shared_list:
+                read_only, owner_name = is_shared_list_read_only(accessible[0])
+                if read_only:
+                    reply_text = f"The shared list '{accessible[1]}' is currently read-only because the owner's Premium plan has expired."
+                    log_interaction(phone_number, incoming_msg, reply_text, "delete_item_readonly", False)
+                    resp = MessagingResponse()
+                    resp.message(staging_prefix(reply_text))
+                    return Response(content=str(resp), media_type="application/xml")
 
             # Ask for confirmation before deleting
             confirm_data = json.dumps({

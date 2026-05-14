@@ -10,8 +10,8 @@ import time
 from datetime import datetime, timedelta
 from html import escape as html_escape
 import pytz
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Form, File, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from typing import Optional
@@ -1191,6 +1191,124 @@ async def debug_inactivity_nudge(admin: str = Depends(verify_admin)):
         })
     except Exception as e:
         logger.error(f"Error in debug inactivity nudge: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/admin/debug/day-1-2-nudges")
+async def debug_day_1_2_nudges(admin: str = Depends(verify_admin)):
+    """Diagnose why Day 1 / Day 2 lifecycle nudges aren't firing for recent signups.
+
+    Returns the state of every signup in the last 21 days alongside the per-user
+    verdict from each nudge's gating rules, so we can see which gate is filtering
+    users out.
+    """
+    from config import FREE_TRIAL_DAYS
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        now_utc = datetime.utcnow()
+
+        c.execute("""
+            SELECT
+                phone_number,
+                created_at,
+                onboarding_complete,
+                trial_end_date,
+                timezone,
+                premium_status,
+                opted_out,
+                COALESCE(post_onboarding_interactions, 0),
+                COALESCE(day_1_nudge_sent, FALSE),
+                COALESCE(day_2_nudge_sent, FALSE),
+                COALESCE(day_3_nudge_sent, FALSE)
+            FROM users
+            WHERE created_at > NOW() - INTERVAL '21 days'
+            ORDER BY created_at DESC
+        """)
+        rows = c.fetchall()
+
+        users_out = []
+        for row in rows:
+            (phone, created_at, onboarded, trial_end, tz_str, premium_status,
+             opted_out, interactions, d1_sent, d2_sent, d3_sent) = row
+
+            try:
+                user_tz = pytz.timezone(tz_str or 'America/New_York')
+            except pytz.exceptions.UnknownTimeZoneError:
+                user_tz = pytz.timezone('America/New_York')
+            local_hour_now = datetime.now(pytz.utc).astimezone(user_tz).hour
+
+            days_in_trial = None
+            if trial_end:
+                signup_date_utc = trial_end - timedelta(days=FREE_TRIAL_DAYS)
+                days_in_trial = (now_utc - signup_date_utc).days
+
+            d1_reasons = []
+            if not onboarded:
+                d1_reasons.append("onboarding_incomplete")
+            if opted_out:
+                d1_reasons.append("opted_out")
+            if trial_end is None or trial_end <= now_utc:
+                d1_reasons.append("trial_ended_or_missing")
+            if d1_sent:
+                d1_reasons.append("already_sent")
+            if interactions > 0:
+                d1_reasons.append(f"interactions>0 (={interactions})")
+            if days_in_trial is not None and not (0 <= days_in_trial <= 1):
+                d1_reasons.append(f"days_in_trial={days_in_trial} outside 0-1")
+            if not (9 <= local_hour_now < 10):
+                d1_reasons.append(f"local_hour={local_hour_now} outside 9-10")
+
+            d2_reasons = []
+            if not onboarded:
+                d2_reasons.append("onboarding_incomplete")
+            if opted_out:
+                d2_reasons.append("opted_out")
+            if trial_end is None or trial_end <= now_utc:
+                d2_reasons.append("trial_ended_or_missing")
+            if d2_sent:
+                d2_reasons.append("already_sent")
+            if interactions >= 3:
+                d2_reasons.append(f"interactions>=3 (={interactions})")
+            if days_in_trial is not None and not (1 <= days_in_trial <= 2):
+                d2_reasons.append(f"days_in_trial={days_in_trial} outside 1-2")
+            if not (9 <= local_hour_now < 10):
+                d2_reasons.append(f"local_hour={local_hour_now} outside 9-10")
+
+            users_out.append({
+                "phone_last4": phone[-4:] if phone else None,
+                "created_at_utc": str(created_at) if created_at else None,
+                "age_hours": round((now_utc - created_at.replace(tzinfo=None)).total_seconds() / 3600, 1) if created_at else None,
+                "onboarding_complete": onboarded,
+                "trial_end_date_utc": str(trial_end) if trial_end else None,
+                "days_in_trial": days_in_trial,
+                "timezone": tz_str,
+                "local_hour_now": local_hour_now,
+                "premium_status": premium_status,
+                "opted_out": opted_out,
+                "post_onboarding_interactions": interactions,
+                "day_1_nudge_sent": d1_sent,
+                "day_2_nudge_sent": d2_sent,
+                "day_3_nudge_sent": d3_sent,
+                "day_1_blocked_by": d1_reasons or ["eligible_right_now"],
+                "day_2_blocked_by": d2_reasons or ["eligible_right_now"],
+            })
+
+        return JSONResponse(content={
+            "now_utc": str(now_utc),
+            "free_trial_days": FREE_TRIAL_DAYS,
+            "total_signups_last_21d": len(users_out),
+            "users": users_out,
+        })
+
+    except Exception as e:
+        logger.error(f"Error in debug_day_1_2_nudges: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if conn:
@@ -3668,6 +3786,163 @@ async def cs_get_customer_memories(phone_number: str, admin: str = Depends(verif
             return_db_connection(conn)
 
 
+@router.get("/admin/cs/customer/{phone_number}/nudges")
+async def cs_get_customer_nudges(phone_number: str, admin: str = Depends(verify_admin)):
+    """Smart-nudge config + recent history for a single user.
+
+    Returns enough info to answer "is this user being nudged correctly?":
+      - config: tier, trial state, nudges-enabled flag, configured nudge time
+      - expected_cadence: what the schedule rules say should happen
+      - daily_counts: last 30 days of actual sends (UTC date)
+      - recent: last 50 nudges with type, text, response
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute('''
+            SELECT premium_status, trial_end_date,
+                   smart_nudges_enabled, smart_nudge_time,
+                   daily_summary_enabled, daily_summary_last_sent,
+                   timezone, COALESCE(opted_out, FALSE)
+            FROM users WHERE phone_number = %s
+        ''', (phone_number,))
+        row = c.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        premium_status = row[0] or 'free'
+        trial_end_date = row[1]
+        nudges_enabled = bool(row[2])
+        nudge_time = str(row[3]) if row[3] else None
+        daily_summary_enabled = bool(row[4])
+        daily_summary_last_sent = row[5]
+        timezone_str = row[6]
+        opted_out = bool(row[7])
+
+        # Expected cadence per services/nudge_service.py:is_nudge_eligible
+        if not nudges_enabled or opted_out:
+            expected_cadence = "disabled"
+        elif premium_status == 'free':
+            expected_cadence = "weekly (Sundays only)"
+        else:
+            expected_cadence = "daily"
+
+        trial_active = False
+        if trial_end_date:
+            from datetime import datetime
+            now = datetime.utcnow()
+            te = trial_end_date if trial_end_date.tzinfo is None else trial_end_date.replace(tzinfo=None)
+            trial_active = te > now
+
+        # Per-day counts, last 30 days
+        c.execute('''
+            SELECT DATE(sent_at AT TIME ZONE 'UTC') AS day, COUNT(*)
+            FROM smart_nudges
+            WHERE phone_number = %s AND sent_at > NOW() - INTERVAL '30 days'
+            GROUP BY day ORDER BY day DESC
+        ''', (phone_number,))
+        daily_counts = [{"date": str(d), "count": n} for d, n in c.fetchall()]
+
+        # Recent nudges
+        c.execute('''
+            SELECT id, nudge_type, nudge_text, sent_at,
+                   user_response, user_responded_at, action_taken
+            FROM smart_nudges
+            WHERE phone_number = %s
+            ORDER BY sent_at DESC LIMIT 50
+        ''', (phone_number,))
+        recent = []
+        for r in c.fetchall():
+            recent.append({
+                "id": r[0],
+                "type": r[1],
+                "text": r[2],
+                "sent_at": str(r[3]) if r[3] else None,
+                "user_response": r[4],
+                "responded_at": str(r[5]) if r[5] else None,
+                "action_taken": r[6],
+            })
+
+        # Total + duplicate-day check
+        c.execute('''
+            SELECT COUNT(*), COUNT(DISTINCT DATE(sent_at AT TIME ZONE 'UTC'))
+            FROM smart_nudges
+            WHERE phone_number = %s AND sent_at > NOW() - INTERVAL '30 days'
+        ''', (phone_number,))
+        total_30d, distinct_days_30d = c.fetchone()
+        days_with_multiple = sum(1 for d in daily_counts if d["count"] > 1)
+
+        # ALL outbound messages (last 30 days) — captures lifecycle, broadcasts,
+        # billing, replies, etc. that wouldn't show in smart_nudges. Critical for
+        # diagnosing "why is this user getting so many messages?" when smart
+        # nudges are OFF but messages are still flowing.
+        c.execute('''
+            SELECT message_type, COUNT(*) AS total,
+                   COUNT(DISTINCT DATE(created_at AT TIME ZONE 'UTC')) AS days,
+                   MAX(created_at) AS last_sent
+            FROM sms_outbound_log
+            WHERE phone_number = %s AND created_at > NOW() - INTERVAL '30 days'
+            GROUP BY message_type ORDER BY total DESC
+        ''', (phone_number,))
+        outbound_by_type = [
+            {
+                "type": r[0],
+                "total": r[1],
+                "distinct_days": r[2],
+                "last_sent": str(r[3]) if r[3] else None,
+            }
+            for r in c.fetchall()
+        ]
+
+        # Per-day outbound history with message types
+        c.execute('''
+            SELECT DATE(created_at AT TIME ZONE 'UTC') AS day,
+                   COUNT(*) AS total,
+                   STRING_AGG(DISTINCT message_type, ', ') AS types
+            FROM sms_outbound_log
+            WHERE phone_number = %s AND created_at > NOW() - INTERVAL '30 days'
+            GROUP BY day ORDER BY day DESC
+        ''', (phone_number,))
+        outbound_by_day = [
+            {"date": str(r[0]), "count": r[1], "types": r[2]}
+            for r in c.fetchall()
+        ]
+
+        return {
+            "config": {
+                "tier": premium_status,
+                "trial_end_date": str(trial_end_date) if trial_end_date else None,
+                "trial_active": trial_active,
+                "smart_nudges_enabled": nudges_enabled,
+                "smart_nudge_time": nudge_time,
+                "daily_summary_enabled": daily_summary_enabled,
+                "daily_summary_last_sent": str(daily_summary_last_sent) if daily_summary_last_sent else None,
+                "timezone": timezone_str,
+                "opted_out": opted_out,
+                "expected_cadence": expected_cadence,
+            },
+            "stats_30d": {
+                "total": total_30d or 0,
+                "distinct_days": distinct_days_30d or 0,
+                "days_with_multiple": days_with_multiple,
+            },
+            "daily_counts": daily_counts,
+            "recent": recent,
+            "outbound_by_type": outbound_by_type,
+            "outbound_by_day": outbound_by_day,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CS get nudges error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 class UpdateTierRequest(BaseModel):
     tier: str
     reason: str = ""
@@ -3932,6 +4207,155 @@ async def generate_ai_analytics_summary(admin: str = Depends(verify_admin)):
     except Exception as e:
         logger.error(f"Error generating AI summary: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@router.post("/admin/analytics/ai-query")
+async def ai_analytics_query(request: Request, admin: str = Depends(verify_admin)):
+    """Answer an ad-hoc question about the analytics data using Claude."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
+
+    question = (body.get("question") or "").strip()
+    if not question:
+        return JSONResponse(content={"error": "Question is required"}, status_code=400)
+    if len(question) > 2000:
+        return JSONResponse(content={"error": "Question too long (max 2000 chars)"}, status_code=400)
+
+    model_choice = body.get("model", "haiku")
+    effort = body.get("effort", "medium")
+
+    try:
+        from services.analytics_summary_service import answer_analytics_question
+        result = answer_analytics_question(
+            question=question,
+            model_choice=model_choice,
+            effort=effort,
+        )
+        if result.get("error"):
+            return JSONResponse(content={"status": "error", "error": result["error"]}, status_code=400)
+        return JSONResponse(content={"status": "success", **result})
+    except Exception as e:
+        logger.error(f"Error answering analytics question: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+# =====================================================
+# THREADED ANALYTICS CHAT
+# =====================================================
+
+@router.get("/admin/analytics/conversations")
+async def list_analytics_conversations(
+    include_archived: bool = False,
+    limit: int = 50,
+    admin: str = Depends(verify_admin),
+):
+    from services.analytics_summary_service import list_conversations
+    items = list_conversations(include_archived=include_archived, limit=min(limit, 200))
+    return JSONResponse(content={"conversations": items, "count": len(items)})
+
+
+@router.post("/admin/analytics/conversations")
+async def create_analytics_conversation(request: Request, admin: str = Depends(verify_admin)):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = (body.get("title") or "").strip() or None
+    from services.analytics_summary_service import create_conversation
+    result = create_conversation(admin_user=admin, title=title)
+    if result.get("error"):
+        return JSONResponse(content={"error": result["error"]}, status_code=500)
+    return JSONResponse(content=result, status_code=201)
+
+
+@router.get("/admin/analytics/conversations/{conv_id}")
+async def get_analytics_conversation(conv_id: int, admin: str = Depends(verify_admin)):
+    from services.analytics_summary_service import get_conversation_with_messages
+    conv = get_conversation_with_messages(conv_id)
+    if not conv:
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    return JSONResponse(content=conv)
+
+
+@router.patch("/admin/analytics/conversations/{conv_id}")
+async def rename_analytics_conversation(
+    conv_id: int, request: Request, admin: str = Depends(verify_admin)
+):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
+    title = (body.get("title") or "").strip()
+    if not title:
+        return JSONResponse(content={"error": "Title is required"}, status_code=400)
+    from services.analytics_summary_service import rename_conversation
+    ok = rename_conversation(conv_id, title)
+    if not ok:
+        return JSONResponse(content={"error": "Not found or rename failed"}, status_code=404)
+    return JSONResponse(content={"status": "success", "id": conv_id, "title": title[:200]})
+
+
+@router.delete("/admin/analytics/conversations/{conv_id}")
+async def delete_analytics_conversation(conv_id: int, admin: str = Depends(verify_admin)):
+    from services.analytics_summary_service import delete_conversation
+    ok = delete_conversation(conv_id)
+    if not ok:
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    return JSONResponse(content={"status": "success", "id": conv_id})
+
+
+@router.post("/admin/analytics/conversations/{conv_id}/messages")
+async def post_analytics_message(
+    conv_id: int,
+    question: str = Form(""),
+    model: str = Form("haiku"),
+    effort: str = Form("medium"),
+    files: list[UploadFile] = File(default=[]),
+    admin: str = Depends(verify_admin),
+):
+    """Multipart endpoint: accepts `question` + optional image `files[]`."""
+    image_files = []
+    for f in files or []:
+        if not f or not getattr(f, "filename", None):
+            continue
+        data = await f.read()
+        image_files.append({
+            "filename": f.filename,
+            "mime_type": f.content_type or "application/octet-stream",
+            "data": data,
+        })
+
+    from services.analytics_summary_service import send_message_in_conversation
+    result = send_message_in_conversation(
+        conv_id=conv_id,
+        question=question,
+        model_choice=model,
+        effort=effort,
+        image_files=image_files,
+    )
+    if result.get("error"):
+        status = 404 if result["error"] == "Conversation not found" else 400
+        return JSONResponse(content={"error": result["error"]}, status_code=status)
+    return JSONResponse(content={"status": "success", **result})
+
+
+@router.get("/admin/analytics/conversations/{conv_id}/attachments/{att_id}")
+async def get_analytics_attachment(conv_id: int, att_id: int, admin: str = Depends(verify_admin)):
+    """Serve an image attachment's raw bytes. Validates that the attachment belongs to the given conversation."""
+    from services.analytics_summary_service import get_attachment_bytes, get_conversation_with_messages
+    data, mime, filename, message_id = get_attachment_bytes(att_id)
+    if not data:
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    # Verify the attachment's message belongs to this conversation
+    conv = get_conversation_with_messages(conv_id)
+    if not conv or not any(m["id"] == message_id for m in conv.get("messages", [])):
+        return JSONResponse(content={"error": "Not found"}, status_code=404)
+    headers = {"Cache-Control": "private, max-age=3600"}
+    if filename:
+        headers["Content-Disposition"] = f'inline; filename="{filename}"'
+    return Response(content=data, media_type=mime, headers=headers)
 
 
 # =====================================================
@@ -4653,6 +5077,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <span class="nav-title">Remyndrs Dashboard</span>
         <button onclick="showRecentMessages()" style="padding: 8px 16px; background: #9b59b6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Recent Messages</button>
         <a href="/admin/monitoring" style="padding: 8px 16px; background: #27ae60; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Monitoring</a>
+        <a href="/admin/investment-health" style="padding: 8px 16px; background: #2c3e50; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Investment Health</a>
         <a href="#overview">Overview</a>
         <a href="#broadcast">Broadcast</a>
         <a href="#support">Support Tickets</a>
@@ -5405,12 +5830,14 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     <button class="btn" onclick="csShowTab('reminders')" id="csTabReminders" style="background: #3498db; color: white;">Reminders</button>
                     <button class="btn btn-secondary" onclick="csShowTab('lists')" id="csTabLists">Lists</button>
                     <button class="btn btn-secondary" onclick="csShowTab('memories')" id="csTabMemories">Memories</button>
+                    <button class="btn btn-secondary" onclick="csShowTab('nudges')" id="csTabNudges">Nudges</button>
                 </div>
 
                 <div id="csTabContent">
                     <div id="csRemindersTab"></div>
                     <div id="csListsTab" style="display: none;"></div>
                     <div id="csMemoriesTab" style="display: none;"></div>
+                    <div id="csNudgesTab" style="display: none;"></div>
                 </div>
             </div>
         </div>
@@ -5765,6 +6192,77 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             <div id="aiSummaryHistory" style="display: none;">
                 <h3 style="color: #2c3e50; margin-bottom: 15px;">Summary History</h3>
                 <div id="aiHistoryList"></div>
+            </div>
+
+            <!-- Threaded Analytics Chat -->
+            <div style="background: white; border-radius: 8px; padding: 0; margin-top: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden;">
+                <div style="padding: 20px 24px 12px 24px; border-bottom: 1px solid #eee;">
+                    <h3 style="color: #2c3e50; margin: 0 0 6px 0;">Planning conversations</h3>
+                    <p style="color: #7f8c8d; font-size: 0.9em; margin: 0;">
+                        Ongoing chats with Claude about this data. Pick up where you left off across days.
+                    </p>
+                </div>
+
+                <div style="display: flex; min-height: 500px;">
+                    <!-- Sidebar: conversation list -->
+                    <div style="width: 260px; border-right: 1px solid #eee; display: flex; flex-direction: column; background: #fafafa;">
+                        <div style="padding: 12px;">
+                            <button class="btn btn-primary" style="width: 100%; padding: 8px;" onclick="newChatConversation()">+ New conversation</button>
+                        </div>
+                        <div id="chatConvList" style="flex: 1; overflow-y: auto; max-height: 520px;">
+                            <div style="padding: 20px; color: #95a5a6; text-align: center; font-size: 0.9em;">Loading...</div>
+                        </div>
+                    </div>
+
+                    <!-- Main: active conversation -->
+                    <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+                        <div id="chatHeader" style="padding: 12px 20px; border-bottom: 1px solid #eee; display: none; align-items: center; gap: 8px;">
+                            <span id="chatTitle" style="font-weight: 600; color: #2c3e50; flex: 1; cursor: text;" onclick="renameActiveChat()" title="Click to rename"></span>
+                            <button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.85em;" onclick="deleteActiveChat()">Delete</button>
+                        </div>
+
+                        <div id="chatMessages" style="flex: 1; overflow-y: auto; max-height: 440px; padding: 20px;">
+                            <div style="color: #95a5a6; text-align: center; padding: 40px 20px;">
+                                Select a conversation on the left, or start a new one.
+                            </div>
+                        </div>
+
+                        <div id="chatInputWrap" style="padding: 12px 20px 20px 20px; border-top: 1px solid #eee; display: none;">
+                            <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 0.85em;">
+                                <label style="color: #7f8c8d;">Model:</label>
+                                <select id="chatModel" onchange="updateChatModelUI()" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="haiku">Haiku 4.5</option>
+                                    <option value="sonnet">Sonnet 4.6</option>
+                                    <option value="opus">Opus 4.7</option>
+                                </select>
+                                <span id="chatEffortWrap" style="display: none;">
+                                    <label style="color: #7f8c8d;">Effort:</label>
+                                    <select id="chatEffort" onchange="updateChatModelUI()" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                        <option value="low">Low</option>
+                                        <option value="medium" selected>Medium</option>
+                                        <option value="high">High</option>
+                                        <option value="xhigh">X-High</option>
+                                        <option value="max">Max</option>
+                                    </select>
+                                </span>
+                                <span id="chatCostHint" style="color: #95a5a6; margin-left: auto;">~$0.007 / msg</span>
+                            </div>
+
+                            <!-- Staged attachments (before send) -->
+                            <div id="chatStagedFiles" style="display: none; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;"></div>
+
+                            <div id="chatDropZone" style="display: flex; gap: 8px; align-items: flex-end; border: 2px dashed transparent; border-radius: 4px; transition: border-color 0.15s;">
+                                <textarea id="chatInput" placeholder="Ask a question, follow up, or drop an image..." rows="2" style="flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit; font-size: 0.95em; resize: vertical;" onkeydown="handleChatKey(event)"></textarea>
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <button type="button" class="btn btn-secondary" style="padding: 8px 14px; font-size: 0.85em;" onclick="document.getElementById('chatFileInput').click()" title="Attach image (max 3, 5MB each)">+ Image</button>
+                                    <button class="btn btn-primary" id="chatSendBtn" style="padding: 8px 14px;" onclick="sendChatMessage()">Send</button>
+                                </div>
+                                <input type="file" id="chatFileInput" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display: none;" onchange="handleChatFilesPicked(event)">
+                            </div>
+                            <div id="chatStatus" style="color: #7f8c8d; font-size: 0.85em; margin-top: 6px; min-height: 1em;"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -8193,7 +8691,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     <td style="font-size: 0.85em;">${{nextStr}}</td>
                     <td>
                         ${{toggleBtn}}
-                        <button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.8em;" onclick="deleteRecurring(${{r.id}}, '${{r.text.replace(/'/g, "\\'").substring(0, 30)}}')">Delete</button>
+                        <button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.8em;" onclick="deleteRecurring(${{r.id}})">Delete</button>
                     </td>
                 `;
             }}
@@ -8229,8 +8727,10 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
-        async function deleteRecurring(id, text) {{
-            if (!confirm(`Delete recurring reminder "${{text}}"? This cannot be undone.`)) return;
+        async function deleteRecurring(id) {{
+            const recurring = allRecurring.find(r => r.id === id);
+            const preview = recurring ? recurring.text.substring(0, 30) : '';
+            if (!confirm(`Delete recurring reminder "${{preview}}"? This cannot be undone.`)) return;
             try {{
                 const response = await fetch(`/admin/recurring/${{id}}`, {{ method: 'DELETE' }});
                 const data = await response.json();
@@ -8570,6 +9070,7 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             document.getElementById('csRemindersTab').style.display = 'none';
             document.getElementById('csListsTab').style.display = 'none';
             document.getElementById('csMemoriesTab').style.display = 'none';
+            document.getElementById('csNudgesTab').style.display = 'none';
 
             // Load and show selected tab
             const tabDiv = document.getElementById('cs' + tab.charAt(0).toUpperCase() + tab.slice(1) + 'Tab');
@@ -8625,6 +9126,132 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
                     }} else {{
                         tabDiv.innerHTML = '<div style="color: #95a5a6; padding: 20px; text-align: center;">No memories</div>';
                     }}
+                }} else if (tab === 'nudges') {{
+                    const cfg = data.config || {{}};
+                    const stats = data.stats_30d || {{}};
+                    const recent = data.recent || [];
+                    const daily = data.daily_counts || [];
+
+                    // Compare actual sends to expected cadence to flag anomalies
+                    let cadenceColor = '#27ae60';
+                    let cadenceNote = 'Matches expected cadence';
+                    if (cfg.expected_cadence === 'disabled' && stats.total > 0) {{
+                        cadenceColor = '#e67e22';
+                        cadenceNote = 'Sends recorded despite nudges being disabled — may be stale history';
+                    }} else if (cfg.expected_cadence === 'weekly (Sundays only)' && stats.distinct_days > 5) {{
+                        cadenceColor = '#e74c3c';
+                        cadenceNote = `Free user receiving on ${{stats.distinct_days}} distinct days in last 30d — should be Sundays only (≤5)`;
+                    }} else if (stats.days_with_multiple > 0) {{
+                        cadenceColor = '#e74c3c';
+                        cadenceNote = `${{stats.days_with_multiple}} day(s) with more than one nudge — possible duplicate sends`;
+                    }} else if (cfg.expected_cadence === 'daily' && stats.distinct_days > 0) {{
+                        cadenceNote = `${{stats.distinct_days}} of last 30 days received a nudge (daily expected)`;
+                    }}
+
+                    const dailyBars = daily.length > 0
+                        ? daily.slice(0, 30).map(d => `
+                            <div style="display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 0.85em;">
+                                <span style="color: #7f8c8d; min-width: 90px;">${{d.date}}</span>
+                                <span style="background: ${{d.count > 1 ? '#e74c3c' : '#3498db'}}; color: white; padding: 2px 10px; border-radius: 10px; min-width: 30px; text-align: center;">${{d.count}}</span>
+                                ${{d.count > 1 ? '<span style="color: #e74c3c; font-size: 0.85em;">⚠ multiple sends</span>' : ''}}
+                            </div>
+                        `).join('')
+                        : '<div style="color: #95a5a6;">No sends in last 30 days</div>';
+
+                    const recentRows = recent.length > 0
+                        ? recent.map(n => {{
+                            const responseCell = n.user_response
+                                ? `<span style="color:#2c3e50;">${{n.user_response}}</span>` + (n.action_taken ? `<br><span style="color:#95a5a6; font-size:0.8em;">${{n.action_taken}}</span>` : '')
+                                : '<span style="color:#bdc3c7;">—</span>';
+                            return `<tr>
+                                <td style="font-size:0.85em; white-space: nowrap;">${{new Date(n.sent_at).toLocaleString()}}</td>
+                                <td><span style="background:#ecf0f1; padding: 2px 8px; border-radius: 10px; font-size: 0.8em;">${{n.type}}</span></td>
+                                <td style="max-width: 400px;">${{n.text}}</td>
+                                <td>${{responseCell}}</td>
+                            </tr>`;
+                          }}).join('')
+                        : '<tr><td colspan="4" style="color:#95a5a6; text-align:center; padding:20px;">No nudges sent yet</td></tr>';
+
+                    const outboundByType = data.outbound_by_type || [];
+                    const outboundByDay = data.outbound_by_day || [];
+
+                    const outboundTypeRows = outboundByType.length > 0
+                        ? outboundByType.map(t => `
+                            <tr>
+                                <td><span style="background:#ecf0f1; padding: 2px 8px; border-radius: 10px; font-size: 0.85em;">${{t.type}}</span></td>
+                                <td><strong>${{t.total}}</strong></td>
+                                <td>${{t.distinct_days}}</td>
+                                <td style="font-size:0.85em;">${{t.last_sent ? new Date(t.last_sent).toLocaleString() : '—'}}</td>
+                            </tr>
+                        `).join('')
+                        : '<tr><td colspan="4" style="color:#95a5a6; text-align:center; padding:15px;">No outbound messages in last 30 days</td></tr>';
+
+                    const outboundDayRows = outboundByDay.length > 0
+                        ? outboundByDay.slice(0, 30).map(d => `
+                            <div style="display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 0.85em; border-bottom: 1px solid #f4f4f4;">
+                                <span style="color: #7f8c8d; min-width: 90px;">${{d.date}}</span>
+                                <span style="background: ${{d.count > 1 ? '#e67e22' : '#3498db'}}; color: white; padding: 2px 10px; border-radius: 10px; min-width: 30px; text-align: center;">${{d.count}}</span>
+                                <span style="color: #2c3e50; font-size: 0.85em;">${{d.types}}</span>
+                            </div>
+                        `).join('')
+                        : '<div style="color: #95a5a6;">No outbound messages in last 30 days</div>';
+
+                    tabDiv.innerHTML = `
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">
+                                <h4 style="margin: 0 0 10px; color: #2c3e50;">Configuration</h4>
+                                <div style="line-height: 1.7; font-size: 0.9em;">
+                                    <div><strong>Tier:</strong> ${{cfg.tier}}${{cfg.trial_active ? ' (trial active)' : ''}}</div>
+                                    <div><strong>Trial ends:</strong> ${{cfg.trial_end_date || '—'}}</div>
+                                    <div><strong>Smart nudges:</strong> ${{cfg.smart_nudges_enabled ? 'ON' : 'OFF'}}</div>
+                                    <div><strong>Nudge time:</strong> ${{cfg.smart_nudge_time || '—'}} (${{cfg.timezone || '—'}})</div>
+                                    <div><strong>Daily summary:</strong> ${{cfg.daily_summary_enabled ? 'ON' : 'OFF'}}</div>
+                                    <div><strong>Opted out:</strong> ${{cfg.opted_out ? 'YES' : 'no'}}</div>
+                                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;"><strong>Expected cadence (smart_nudge):</strong> ${{cfg.expected_cadence}}</div>
+                                </div>
+                            </div>
+                            <div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">
+                                <h4 style="margin: 0 0 10px; color: #2c3e50;">Smart nudges, last 30 days</h4>
+                                <div style="line-height: 1.7; font-size: 0.9em;">
+                                    <div><strong>Total sent:</strong> ${{stats.total || 0}}</div>
+                                    <div><strong>Distinct days:</strong> ${{stats.distinct_days || 0}}</div>
+                                    <div><strong>Days with >1 send:</strong> ${{stats.days_with_multiple || 0}}</div>
+                                </div>
+                                <div style="margin-top: 12px; padding: 10px; background: ${{cadenceColor}}; color: white; border-radius: 4px; font-size: 0.85em;">
+                                    ${{cadenceNote}}
+                                </div>
+                            </div>
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">All outbound messages by type (last 30d)</h4>
+                        <div style="background: #fff8e1; border-left: 3px solid #f39c12; padding: 8px 12px; margin-bottom: 10px; font-size: 0.85em; color: #555;">
+                            Includes lifecycle, broadcast, billing, replies, etc. — not just smart nudges. Use this to find which message type is firing.
+                        </div>
+                        <div style="overflow-x: auto; margin-bottom: 20px;">
+                            <table class="history-table">
+                                <thead><tr><th>Message type</th><th>Total sends</th><th>Distinct days</th><th>Last sent</th></tr></thead>
+                                <tbody>${{outboundTypeRows}}</tbody>
+                            </table>
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">All outbound messages by day (last 30d)</h4>
+                        <div style="background: white; padding: 10px 15px; border-radius: 4px; max-height: 280px; overflow-y: auto; border: 1px solid #ecf0f1; margin-bottom: 20px;">
+                            ${{outboundDayRows}}
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Smart nudge daily counts</h4>
+                        <div style="background: white; padding: 10px 15px; border-radius: 4px; max-height: 240px; overflow-y: auto; border: 1px solid #ecf0f1; margin-bottom: 20px;">
+                            ${{dailyBars}}
+                        </div>
+
+                        <h4 style="margin: 20px 0 10px; color: #2c3e50;">Recent smart nudges</h4>
+                        <div style="overflow-x: auto;">
+                            <table class="history-table">
+                                <thead><tr><th>Sent</th><th>Type</th><th>Text</th><th>User response</th></tr></thead>
+                                <tbody>${{recentRows}}</tbody>
+                            </table>
+                        </div>
+                    `;
                 }}
             }} catch (e) {{
                 tabDiv.innerHTML = `<div style="color: #e74c3c;">Error loading ${{tab}}: ${{e.message}}</div>`;
@@ -9335,6 +9962,380 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
             }}
         }}
 
+        // =============================================
+        // Threaded analytics chat
+        // =============================================
+        const CHAT_COST_HINTS = {{
+            haiku: '~$0.007 / msg',
+            sonnet: '~$0.02 / msg',
+            'opus-low': '~$0.03 / msg',
+            'opus-medium': '~$0.08 / msg',
+            'opus-high': '~$0.15 / msg',
+            'opus-xhigh': '~$0.25 / msg',
+            'opus-max': '~$0.40+ / msg',
+        }};
+
+        let chatActiveConvId = null;
+        let chatConversations = [];
+        let chatStagedFiles = [];
+        const CHAT_MAX_IMAGES = 3;
+        const CHAT_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+        const CHAT_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+        function updateChatModelUI() {{
+            const model = document.getElementById('chatModel').value;
+            const effortWrap = document.getElementById('chatEffortWrap');
+            const hint = document.getElementById('chatCostHint');
+            if (model === 'opus') {{
+                effortWrap.style.display = 'inline';
+                const effort = document.getElementById('chatEffort').value;
+                hint.textContent = CHAT_COST_HINTS['opus-' + effort] || '';
+            }} else {{
+                effortWrap.style.display = 'none';
+                hint.textContent = CHAT_COST_HINTS[model] || '';
+            }}
+        }}
+
+        function escapeHtmlChat(s) {{
+            const div = document.createElement('div');
+            div.textContent = s == null ? '' : String(s);
+            return div.innerHTML;
+        }}
+
+        function fmtChatRelative(iso) {{
+            if (!iso) return '';
+            const d = new Date(iso);
+            const diff = (Date.now() - d.getTime()) / 1000;
+            if (diff < 60) return 'just now';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            return Math.floor(diff / 86400) + 'd ago';
+        }}
+
+        async function loadChatConversations() {{
+            const list = document.getElementById('chatConvList');
+            try {{
+                const r = await fetch('/admin/analytics/conversations');
+                const data = await r.json();
+                chatConversations = data.conversations || [];
+                if (chatConversations.length === 0) {{
+                    list.innerHTML = '<div style="padding: 20px; color: #95a5a6; text-align: center; font-size: 0.9em;">No conversations yet. Start one above.</div>';
+                    return;
+                }}
+                list.innerHTML = chatConversations.map(c => {{
+                    const active = c.id === chatActiveConvId;
+                    const bg = active ? '#e3f2fd' : 'transparent';
+                    const border = active ? '3px solid #3498db' : '3px solid transparent';
+                    return `
+                        <div onclick="openChatConversation(${{c.id}})" style="padding: 10px 12px; cursor: pointer; border-left: ${{border}}; background: ${{bg}}; border-bottom: 1px solid #eee;">
+                            <div style="font-size: 0.9em; color: #2c3e50; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${{escapeHtmlChat(c.title)}}">${{escapeHtmlChat(c.title)}}</div>
+                            <div style="font-size: 0.75em; color: #95a5a6; margin-top: 2px;">${{c.message_count}} msgs · ${{fmtChatRelative(c.last_active_at)}}</div>
+                        </div>`;
+                }}).join('');
+            }} catch (e) {{
+                list.innerHTML = '<div style="padding: 20px; color: #e74c3c; text-align: center; font-size: 0.9em;">Failed to load</div>';
+            }}
+        }}
+
+        async function newChatConversation() {{
+            try {{
+                const r = await fetch('/admin/analytics/conversations', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{}}),
+                }});
+                const data = await r.json();
+                if (data.error) {{ alert('Could not create conversation: ' + data.error); return; }}
+                chatActiveConvId = data.id;
+                await loadChatConversations();
+                await openChatConversation(data.id);
+                document.getElementById('chatInput').focus();
+            }} catch (e) {{
+                alert('Failed to create conversation: ' + e.message);
+            }}
+        }}
+
+        async function openChatConversation(convId) {{
+            chatActiveConvId = convId;
+            const messagesEl = document.getElementById('chatMessages');
+            const header = document.getElementById('chatHeader');
+            const inputWrap = document.getElementById('chatInputWrap');
+            messagesEl.innerHTML = '<div style="color: #95a5a6; text-align: center;">Loading...</div>';
+            header.style.display = 'flex';
+            inputWrap.style.display = 'block';
+
+            try {{
+                const r = await fetch('/admin/analytics/conversations/' + convId);
+                if (r.status === 404) {{
+                    messagesEl.innerHTML = '<div style="color: #e74c3c;">Conversation not found</div>';
+                    return;
+                }}
+                const conv = await r.json();
+                document.getElementById('chatTitle').textContent = conv.title || 'Untitled';
+                renderChatMessages(conv.messages || []);
+                // Refresh list to update highlight
+                loadChatConversations();
+            }} catch (e) {{
+                messagesEl.innerHTML = '<div style="color: #e74c3c;">Failed to load: ' + escapeHtmlChat(e.message) + '</div>';
+            }}
+        }}
+
+        function renderChatMessages(messages) {{
+            const messagesEl = document.getElementById('chatMessages');
+            if (messages.length === 0) {{
+                messagesEl.innerHTML = '<div style="color: #95a5a6; text-align: center; padding: 30px 20px;">Ask your first question below.</div>';
+                return;
+            }}
+            messagesEl.innerHTML = messages.map(m => {{
+                const isUser = m.role === 'user';
+                const align = isUser ? 'flex-end' : 'flex-start';
+                const bg = isUser ? '#3498db' : '#ecf0f1';
+                const color = isUser ? 'white' : '#2c3e50';
+                const meta = [];
+                if (m.model) meta.push(m.model);
+                if (m.effort) meta.push('effort: ' + m.effort);
+                if (m.input_tokens != null || m.output_tokens != null) {{
+                    meta.push((m.input_tokens || 0) + ' in / ' + (m.output_tokens || 0) + ' out');
+                }}
+                if (m.cache_read_input_tokens) meta.push(m.cache_read_input_tokens + ' cached');
+
+                let attachmentsHtml = '';
+                if (m.attachments && m.attachments.length) {{
+                    attachmentsHtml = '<div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;">' +
+                        m.attachments.map(att => {{
+                            const url = '/admin/analytics/conversations/' + chatActiveConvId + '/attachments/' + att.id;
+                            return `<a href="${{url}}" target="_blank" title="${{escapeHtmlChat(att.filename || '')}}"><img src="${{url}}" style="max-width: 180px; max-height: 140px; border-radius: 6px; border: 1px solid #ddd;"></a>`;
+                        }}).join('') +
+                        '</div>';
+                }}
+
+                return `
+                    <div style="display: flex; justify-content: ${{align}}; margin-bottom: 14px;">
+                        <div style="max-width: 85%;">
+                            ${{attachmentsHtml}}
+                            ${{m.content ? `<div style="background: ${{bg}}; color: ${{color}}; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; line-height: 1.5;">${{escapeHtmlChat(m.content)}}</div>` : ''}}
+                            ${{!isUser && meta.length ? `<div style="font-size: 0.75em; color: #95a5a6; margin-top: 4px;">${{escapeHtmlChat(meta.join(' · '))}}</div>` : ''}}
+                        </div>
+                    </div>`;
+            }}).join('');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }}
+
+        // ---- File staging + drag-and-drop ----
+        function fmtChatBytes(n) {{
+            if (n < 1024) return n + ' B';
+            if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+            return (n / (1024 * 1024)).toFixed(1) + ' MB';
+        }}
+
+        function renderStagedFiles() {{
+            const el = document.getElementById('chatStagedFiles');
+            if (chatStagedFiles.length === 0) {{
+                el.style.display = 'none';
+                el.innerHTML = '';
+                return;
+            }}
+            el.style.display = 'flex';
+            el.innerHTML = chatStagedFiles.map((f, idx) => {{
+                const url = URL.createObjectURL(f.file);
+                return `
+                    <div style="position: relative; width: 80px; height: 80px; border-radius: 6px; overflow: hidden; border: 1px solid #ddd; background: #f0f0f0;">
+                        <img src="${{url}}" style="width: 100%; height: 100%; object-fit: cover;">
+                        <button type="button" onclick="removeStagedFile(${{idx}})" title="Remove" style="position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 50%; width: 22px; height: 22px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">×</button>
+                        <div style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.6); color: white; font-size: 0.7em; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${{escapeHtmlChat(fmtChatBytes(f.file.size))}}</div>
+                    </div>`;
+            }}).join('');
+        }}
+
+        function removeStagedFile(idx) {{
+            chatStagedFiles.splice(idx, 1);
+            renderStagedFiles();
+        }}
+
+        function addStagedFiles(fileList) {{
+            const status = document.getElementById('chatStatus');
+            const incoming = Array.from(fileList || []);
+            const errors = [];
+            for (const f of incoming) {{
+                if (chatStagedFiles.length >= CHAT_MAX_IMAGES) {{
+                    errors.push('Max ' + CHAT_MAX_IMAGES + ' images per message');
+                    break;
+                }}
+                if (!CHAT_ALLOWED_MIME.includes(f.type)) {{
+                    errors.push(f.name + ': unsupported type (' + (f.type || 'unknown') + ')');
+                    continue;
+                }}
+                if (f.size > CHAT_MAX_IMAGE_BYTES) {{
+                    errors.push(f.name + ': too large (' + fmtChatBytes(f.size) + ')');
+                    continue;
+                }}
+                chatStagedFiles.push({{ file: f }});
+            }}
+            renderStagedFiles();
+            status.textContent = errors.length ? errors.join(' · ') : '';
+        }}
+
+        function handleChatFilesPicked(ev) {{
+            addStagedFiles(ev.target.files);
+            // Allow picking the same file twice in a row
+            ev.target.value = '';
+        }}
+
+        function setupChatDropZone() {{
+            const zone = document.getElementById('chatDropZone');
+            if (!zone || zone.dataset.dropWired === '1') return;
+            zone.dataset.dropWired = '1';
+            ['dragenter', 'dragover'].forEach(evt => {{
+                zone.addEventListener(evt, (e) => {{
+                    e.preventDefault();
+                    zone.style.borderColor = '#3498db';
+                }});
+            }});
+            ['dragleave', 'drop'].forEach(evt => {{
+                zone.addEventListener(evt, (e) => {{
+                    e.preventDefault();
+                    zone.style.borderColor = 'transparent';
+                }});
+            }});
+            zone.addEventListener('drop', (e) => {{
+                const files = e.dataTransfer && e.dataTransfer.files;
+                if (files && files.length) addStagedFiles(files);
+            }});
+            // Paste-to-attach from clipboard
+            document.getElementById('chatInput').addEventListener('paste', (e) => {{
+                const items = (e.clipboardData && e.clipboardData.items) || [];
+                const imgs = [];
+                for (const it of items) {{
+                    if (it.type && it.type.startsWith('image/')) {{
+                        const f = it.getAsFile();
+                        if (f) imgs.push(f);
+                    }}
+                }}
+                if (imgs.length) addStagedFiles(imgs);
+            }});
+        }}
+
+        function handleChatKey(e) {{
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {{
+                e.preventDefault();
+                sendChatMessage();
+            }}
+        }}
+
+        async function sendChatMessage() {{
+            if (!chatActiveConvId) {{
+                alert('No conversation selected. Click "+ New conversation" first.');
+                return;
+            }}
+            const inputEl = document.getElementById('chatInput');
+            const question = (inputEl.value || '').trim();
+            if (!question && chatStagedFiles.length === 0) return;
+
+            const model = document.getElementById('chatModel').value;
+            const effort = document.getElementById('chatEffort').value;
+            const btn = document.getElementById('chatSendBtn');
+            const status = document.getElementById('chatStatus');
+
+            btn.disabled = true;
+            btn.textContent = 'Thinking...';
+            status.textContent = '';
+
+            // Optimistically append the user message (no thumbnails for staged files yet — keep it simple)
+            const r0 = await fetch('/admin/analytics/conversations/' + chatActiveConvId);
+            let existing = [];
+            if (r0.ok) {{
+                const c = await r0.json();
+                existing = c.messages || [];
+            }}
+            const optimisticAttachments = chatStagedFiles.map(s => ({{
+                filename: s.file.name,
+                mime_type: s.file.type,
+            }}));
+            renderChatMessages([...existing, {{ role: 'user', content: question, attachments: [] }}]);
+
+            try {{
+                const fd = new FormData();
+                fd.append('question', question);
+                fd.append('model', model);
+                fd.append('effort', effort);
+                for (const s of chatStagedFiles) fd.append('files', s.file, s.file.name);
+
+                const r = await fetch('/admin/analytics/conversations/' + chatActiveConvId + '/messages', {{
+                    method: 'POST',
+                    body: fd,
+                }});
+                const data = await r.json();
+
+                if (!r.ok || data.error) {{
+                    status.textContent = 'Error: ' + (data.error || r.statusText);
+                    renderChatMessages(existing);
+                    return;
+                }}
+
+                inputEl.value = '';
+                chatStagedFiles = [];
+                renderStagedFiles();
+                await openChatConversation(chatActiveConvId);
+            }} catch (e) {{
+                status.textContent = 'Failed: ' + e.message;
+                renderChatMessages(existing);
+            }} finally {{
+                btn.disabled = false;
+                btn.textContent = 'Send';
+            }}
+        }}
+
+        async function renameActiveChat() {{
+            if (!chatActiveConvId) return;
+            const current = document.getElementById('chatTitle').textContent;
+            const next = prompt('Rename conversation:', current);
+            if (next == null) return;
+            const title = next.trim();
+            if (!title || title === current) return;
+            try {{
+                const r = await fetch('/admin/analytics/conversations/' + chatActiveConvId, {{
+                    method: 'PATCH',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ title }}),
+                }});
+                if (!r.ok) {{
+                    const data = await r.json();
+                    alert('Rename failed: ' + (data.error || r.statusText));
+                    return;
+                }}
+                document.getElementById('chatTitle').textContent = title;
+                loadChatConversations();
+            }} catch (e) {{
+                alert('Rename failed: ' + e.message);
+            }}
+        }}
+
+        async function deleteActiveChat() {{
+            if (!chatActiveConvId) return;
+            if (!confirm('Delete this conversation and all its messages? This cannot be undone.')) return;
+            try {{
+                const r = await fetch('/admin/analytics/conversations/' + chatActiveConvId, {{ method: 'DELETE' }});
+                if (!r.ok) {{
+                    const data = await r.json();
+                    alert('Delete failed: ' + (data.error || r.statusText));
+                    return;
+                }}
+                chatActiveConvId = null;
+                document.getElementById('chatHeader').style.display = 'none';
+                document.getElementById('chatInputWrap').style.display = 'none';
+                document.getElementById('chatMessages').innerHTML = '<div style="color: #95a5a6; text-align: center; padding: 40px 20px;">Select a conversation on the left, or start a new one.</div>';
+                loadChatConversations();
+            }} catch (e) {{
+                alert('Delete failed: ' + e.message);
+            }}
+        }}
+
+        document.addEventListener('DOMContentLoaded', function() {{
+            updateChatModelUI();
+            loadChatConversations();
+            setupChatDropZone();
+        }});
+
         async function loadAISummaryHistory() {{
             const history = document.getElementById('aiSummaryHistory');
             const historyList = document.getElementById('aiHistoryList');
@@ -9398,6 +10399,454 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         // Load AI summary on page load
         loadAISummary();
 
+    </script>
+</body>
+</html>
+    """
+
+    return HTMLResponse(content=html)
+
+
+# =====================================================
+# INVESTMENT HEALTH DASHBOARD
+# =====================================================
+
+@router.get("/admin/investment-health/data")
+async def admin_investment_health_data(admin: str = Depends(verify_admin)):
+    """Live Stripe-derived inputs for the Investment Health page."""
+    from services.stripe_service import get_investment_health_metrics
+    from services.investment_health import DEFAULT_INPUTS
+
+    live = get_investment_health_metrics()
+    return JSONResponse({
+        "live": live,
+        "manual_defaults": {
+            "cac": DEFAULT_INPUTS["cac"],
+            "monthly_burn": DEFAULT_INPUTS["monthly_burn"],
+        },
+    })
+
+
+@router.get("/admin/investment-health", response_class=HTMLResponse)
+async def admin_investment_health(admin: str = Depends(verify_admin)):
+    """Interactive investment-health decision tool — live Stripe metrics with
+    manual override per input, reactive verdict card, and 6 health checks."""
+    html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Investment Health · Remyndrs Admin</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            color: #333;
+        }
+        h1 { margin-bottom: 8px; color: #2c3e50; }
+        h2 { margin: 24px 0 12px; color: #34495e; font-size: 1.2em; }
+        .subhead { color: #7f8c8d; margin-bottom: 20px; font-size: 0.95em; }
+
+        .nav-menu {
+            position: sticky; top: 0; background: white;
+            padding: 12px 20px; margin: -20px -20px 20px -20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 100; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+        }
+        .nav-menu a {
+            padding: 8px 16px; background: #f8f9fa; border-radius: 4px;
+            text-decoration: none; color: #2c3e50; font-size: 0.9em;
+            font-weight: 500; transition: all 0.2s; border: 1px solid #e0e0e0;
+        }
+        .nav-menu a:hover { background: #3498db; color: white; border-color: #3498db; }
+        .nav-menu .nav-title { font-weight: bold; color: #2c3e50; margin-right: 10px; }
+
+        .header-row {
+            display: flex; justify-content: space-between; align-items: center;
+            flex-wrap: wrap; gap: 12px; margin-bottom: 20px;
+        }
+        .reset-btn {
+            padding: 10px 20px; background: #3498db; color: white;
+            border: none; border-radius: 4px; cursor: pointer;
+            font-size: 0.95em; font-weight: 500;
+        }
+        .reset-btn:hover { background: #2980b9; }
+        .reset-btn:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .last-synced { color: #95a5a6; font-size: 0.85em; }
+
+        .inputs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px; margin-bottom: 30px;
+        }
+        .input-card {
+            background: white; padding: 18px; border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .input-label {
+            font-size: 0.9em; color: #7f8c8d; margin-bottom: 8px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .badge {
+            font-size: 0.7em; padding: 2px 8px; border-radius: 10px;
+            font-weight: 600; cursor: pointer; user-select: none;
+        }
+        .badge.live { background: #d5f5e3; color: #27ae60; }
+        .badge.manual { background: #fdebd0; color: #e67e22; }
+        .badge.manual-only { background: #ecf0f1; color: #7f8c8d; cursor: default; }
+        .input-row { display: flex; align-items: center; gap: 10px; }
+        .input-row input[type="number"] {
+            flex: 1; padding: 8px 10px; font-size: 1.3em;
+            border: 1px solid #e0e0e0; border-radius: 4px; font-weight: 600;
+            color: #2c3e50; background: white;
+        }
+        .input-row input[type="number"]:focus { outline: none; border-color: #3498db; }
+        .input-prefix { font-size: 1.3em; color: #95a5a6; font-weight: 600; }
+        .input-suffix { font-size: 1.1em; color: #95a5a6; font-weight: 500; }
+
+        .verdict-card {
+            padding: 24px 28px; border-radius: 8px; color: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15); margin-bottom: 30px;
+        }
+        .verdict-card.green { background: linear-gradient(135deg, #27ae60, #229954); }
+        .verdict-card.yellow { background: linear-gradient(135deg, #f39c12, #d68910); }
+        .verdict-card.red { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+        .verdict-title { font-size: 1.6em; font-weight: 700; margin-bottom: 8px; }
+        .verdict-message { font-size: 1em; line-height: 1.5; opacity: 0.95; }
+
+        .checks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+        }
+        .check-card {
+            background: white; padding: 18px; border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .check-header {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+        }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+        .status-dot.green { background: #27ae60; }
+        .status-dot.yellow { background: #f39c12; }
+        .status-dot.red { background: #e74c3c; }
+        .check-label { color: #7f8c8d; font-size: 0.9em; font-weight: 500; }
+        .check-value {
+            font-size: 1.8em; font-weight: bold; color: #2c3e50; margin-bottom: 4px;
+        }
+        .check-context { font-size: 0.8em; color: #95a5a6; }
+
+        .loading-overlay {
+            position: fixed; inset: 0; background: rgba(255,255,255,0.85);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.1em; color: #7f8c8d; z-index: 200;
+        }
+    </style>
+</head>
+<body>
+    <div class="nav-menu">
+        <span class="nav-title">Remyndrs Dashboard</span>
+        <a href="/admin/dashboard">Back to Dashboard</a>
+        <a href="/admin/monitoring" style="background: #27ae60; color: white; border-color: #27ae60;">Monitoring</a>
+    </div>
+
+    <h1>Investment Health</h1>
+    <p class="subhead">Decision-support tool: should we keep investing? Pulls live Stripe metrics; click any "live" badge to switch to manual entry for "what if" scenarios.</p>
+
+    <div class="header-row">
+        <button class="reset-btn" id="resetBtn" onclick="resetToLive()">Reset to live data</button>
+        <span class="last-synced" id="lastSynced">Loading…</span>
+    </div>
+
+    <div id="loadingOverlay" class="loading-overlay">Loading live Stripe data…</div>
+
+    <h2>Inputs</h2>
+    <div class="inputs-grid" id="inputsGrid"></div>
+
+    <div class="verdict-card yellow" id="verdictCard">
+        <div class="verdict-title" id="verdictTitle">—</div>
+        <div class="verdict-message" id="verdictMessage">Computing…</div>
+    </div>
+
+    <h2>Health checks</h2>
+    <div class="checks-grid" id="checksGrid"></div>
+
+    <script>
+        // ------- input definitions -------
+        const INPUTS = [
+            {key: 'current_users', label: 'Current paid users', live: true, type: 'int'},
+            {key: 'net_now',       label: 'Net new paid this month', live: true, type: 'int'},
+            {key: 'net_3mo',       label: 'Net new paid 3 months ago', live: true, type: 'int'},
+            {key: 'churn_rate',    label: 'Monthly churn rate', live: true, type: 'percent', min: 1, step: 0.1},
+            {key: 'cac',           label: 'Blended CAC', live: false, type: 'currency', min: 0},
+            {key: 'arpu',          label: 'Net revenue per user', live: true, type: 'currency', min: 0, step: 0.5},
+            {key: 'monthly_burn',  label: 'Monthly burn', live: false, type: 'currency', min: 0},
+        ];
+
+        // state.values holds the *current* shown value (live or manual)
+        // state.live holds the most recent live data
+        // state.mode[key] is 'live' or 'manual'
+        const state = { values: {}, live: {}, mode: {} };
+
+        // ------- math (mirrors services/investment_health.py) -------
+        function clampChurn(p) { return Math.max(p, 1.0); }
+
+        function computeDerived(v) {
+            const churn_d = clampChurn(v.churn_rate) / 100.0;
+            let ltv, ltv_cac, payback, breakeven_users;
+            if (v.arpu <= 0) {
+                ltv = 0; ltv_cac = 0; payback = Infinity; breakeven_users = Infinity;
+            } else {
+                ltv = v.arpu / churn_d;
+                ltv_cac = v.cac > 0 ? ltv / v.cac : Infinity;
+                payback = v.cac / v.arpu;
+                breakeven_users = v.monthly_burn / v.arpu;
+            }
+            const gross_adds = Math.max(0, v.net_now + v.current_users * churn_d);
+            const steady_state = churn_d > 0 ? gross_adds / churn_d : Infinity;
+            const can_reach = steady_state >= breakeven_users;
+
+            let months_to_breakeven = null;
+            if (v.current_users >= breakeven_users) {
+                months_to_breakeven = 0;
+            } else if (can_reach && v.net_now > 0) {
+                let u = v.current_users, m = 0;
+                while (u < breakeven_users && m < 240) {
+                    u = u * (1 - churn_d) + gross_adds;
+                    m += 1;
+                }
+                months_to_breakeven = m < 240 ? m : null;
+            }
+
+            return {
+                ltv, ltv_cac, payback, breakeven_users,
+                gross_adds, steady_state, can_reach, months_to_breakeven,
+                growth_delta: v.net_now - v.net_3mo,
+            };
+        }
+
+        function statusOf(metric, v, d) {
+            if (metric === 'churn') {
+                if (v.churn_rate < 7) return 'green';
+                if (v.churn_rate <= 10) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'growth') {
+                if (v.net_now <= 0) return 'red';
+                return d.growth_delta >= -3 ? 'green' : 'yellow';
+            }
+            if (metric === 'ltv_cac') {
+                if (d.ltv_cac >= 3.0) return 'green';
+                if (d.ltv_cac >= 1.5) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'payback') {
+                if (d.payback < 12) return 'green';
+                if (d.payback <= 24) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'breakeven') {
+                if (d.months_to_breakeven === null) return 'red';
+                if (d.months_to_breakeven <= 12) return 'green';
+                if (d.months_to_breakeven <= 24) return 'yellow';
+                return 'red';
+            }
+            if (metric === 'steady_state') {
+                if (d.breakeven_users <= 0 || !isFinite(d.breakeven_users)) return 'red';
+                const r = d.steady_state / d.breakeven_users;
+                if (r >= 1.3) return 'green';
+                if (r >= 1.0) return 'yellow';
+                return 'red';
+            }
+        }
+
+        function verdictFor(checks) {
+            const primary = ['churn', 'growth', 'ltv_cac', 'breakeven'].map(k => checks[k]);
+            const red_count = primary.filter(s => s === 'red').length;
+            const green_count = primary.filter(s => s === 'green').length;
+            const critical_red = checks.churn === 'red' || checks.ltv_cac === 'red';
+
+            if (critical_red || red_count >= 2) {
+                return {
+                    color: 'red', title: 'Stop or restructure',
+                    message: red_count + " critical fail(s). Unit economics or product stickiness won't fix themselves with more ad spend. Cut burn, fix retention or pricing, or wind down before adding more capital.",
+                };
+            }
+            if (green_count >= 3) {
+                return {
+                    color: 'green', title: 'Continue investing',
+                    message: green_count + " of 4 health checks pass. Slower ramp than original target is fine — the underlying business works. Keep optimizing creative, conversion, and the upgrade flow.",
+                };
+            }
+            return {
+                color: 'yellow', title: 'Pivot before reinvesting',
+                message: green_count + " of 4 pass, " + red_count + " fail. Fixable problem in one dimension. Address the weak metric before adding more spend — don't double down on a leak.",
+            };
+        }
+
+        // ------- formatting -------
+        const fmtCurrency = n => '$' + Math.round(n).toLocaleString();
+        const fmtCount = n => Math.round(n).toLocaleString();
+        const fmtPercent = n => n.toFixed(1) + '%';
+        const fmtRatio = n => isFinite(n) ? n.toFixed(1) + 'x' : '∞';
+        const fmtMonths = m => m === null ? 'Never' : (m >= 240 ? '>20 yr' : m + ' mo');
+
+        // ------- rendering -------
+        function renderInputs() {
+            const grid = document.getElementById('inputsGrid');
+            grid.innerHTML = '';
+            INPUTS.forEach(inp => {
+                const card = document.createElement('div');
+                card.className = 'input-card';
+
+                let badge;
+                if (!inp.live) {
+                    badge = '<span class="badge manual-only">manual</span>';
+                } else {
+                    const m = state.mode[inp.key] || 'live';
+                    badge = `<span class="badge ${m}" onclick="toggleMode('${inp.key}')" title="Click to ${m === 'live' ? 'override manually' : 'restore live value'}">${m}</span>`;
+                }
+
+                let prefix = '', suffix = '', step = inp.step || 1, min = inp.min;
+                if (inp.type === 'currency') prefix = '$';
+                if (inp.type === 'percent') suffix = '%';
+
+                card.innerHTML = `
+                    <div class="input-label">
+                        <span>${inp.label}</span>
+                        ${badge}
+                    </div>
+                    <div class="input-row">
+                        ${prefix ? '<span class="input-prefix">' + prefix + '</span>' : ''}
+                        <input type="number" id="input_${inp.key}" value="${state.values[inp.key]}" step="${step}" ${min !== undefined ? 'min="' + min + '"' : ''} oninput="onInput('${inp.key}', this.value)">
+                        ${suffix ? '<span class="input-suffix">' + suffix + '</span>' : ''}
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function renderResults() {
+            const v = state.values;
+            const d = computeDerived(v);
+            const checks = {
+                churn: statusOf('churn', v, d),
+                growth: statusOf('growth', v, d),
+                ltv_cac: statusOf('ltv_cac', v, d),
+                payback: statusOf('payback', v, d),
+                breakeven: statusOf('breakeven', v, d),
+                steady_state: statusOf('steady_state', v, d),
+            };
+            const verdict = verdictFor(checks);
+
+            const card = document.getElementById('verdictCard');
+            card.className = 'verdict-card ' + verdict.color;
+            document.getElementById('verdictTitle').textContent = verdict.title;
+            document.getElementById('verdictMessage').textContent = verdict.message;
+
+            const cardDefs = [
+                {k: 'churn',        label: 'Monthly churn',     value: fmtPercent(v.churn_rate), context: 'trailing 90 days'},
+                {k: 'growth',       label: 'Growth trend',      value: (d.growth_delta >= 0 ? '+' : '') + Math.round(d.growth_delta), context: Math.round(v.net_now) + ' now vs ' + Math.round(v.net_3mo) + ' three months ago'},
+                {k: 'ltv_cac',      label: 'LTV / CAC',         value: fmtRatio(d.ltv_cac), context: 'LTV ' + fmtCurrency(d.ltv) + ' / CAC ' + fmtCurrency(v.cac)},
+                {k: 'payback',      label: 'CAC payback',       value: isFinite(d.payback) ? d.payback.toFixed(1) + ' mo' : '∞', context: 'months to recover acquisition cost'},
+                {k: 'breakeven',    label: 'Months to breakeven', value: fmtMonths(d.months_to_breakeven), context: 'need ' + fmtCount(d.breakeven_users) + ' paid users'},
+                {k: 'steady_state', label: 'Steady-state ceiling', value: fmtCount(d.steady_state), context: 'breakeven needs ' + fmtCount(d.breakeven_users)},
+            ];
+
+            const grid = document.getElementById('checksGrid');
+            grid.innerHTML = cardDefs.map(c => `
+                <div class="check-card">
+                    <div class="check-header">
+                        <span class="status-dot ${checks[c.k]}"></span>
+                        <span class="check-label">${c.label}</span>
+                    </div>
+                    <div class="check-value">${c.value}</div>
+                    <div class="check-context">${c.context}</div>
+                </div>
+            `).join('');
+        }
+
+        // ------- event handlers -------
+        function onInput(key, raw) {
+            const inp = INPUTS.find(i => i.key === key);
+            let val = parseFloat(raw);
+            if (isNaN(val)) val = 0;
+            if (inp.min !== undefined && val < inp.min) val = inp.min;
+            state.values[key] = val;
+            if (inp.live) state.mode[key] = 'manual';
+            renderInputs();
+            // re-focus the changed input so the user can keep typing
+            const el = document.getElementById('input_' + key);
+            if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+            renderResults();
+        }
+
+        function toggleMode(key) {
+            const inp = INPUTS.find(i => i.key === key);
+            if (!inp.live) return;
+            if (state.mode[key] === 'manual') {
+                // restore live
+                state.mode[key] = 'live';
+                state.values[key] = state.live[key];
+            } else {
+                // switch to manual (keeps current value)
+                state.mode[key] = 'manual';
+            }
+            renderInputs();
+            renderResults();
+        }
+
+        function resetToLive() {
+            INPUTS.forEach(inp => {
+                if (inp.live) {
+                    state.mode[inp.key] = 'live';
+                    state.values[inp.key] = state.live[inp.key];
+                }
+            });
+            renderInputs();
+            renderResults();
+        }
+
+        async function loadLive() {
+            try {
+                const res = await fetch('/admin/investment-health/data', {credentials: 'same-origin'});
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const live = data.live || {};
+                const manual_defaults = data.manual_defaults || {};
+
+                state.live = {
+                    current_users: live.current_users ?? 0,
+                    net_now: live.net_now ?? 0,
+                    net_3mo: live.net_3mo ?? 0,
+                    churn_rate: live.churn_rate ?? 7,
+                    arpu: live.arpu ?? 8,
+                };
+                state.values = {
+                    ...state.live,
+                    cac: manual_defaults.cac ?? 60,
+                    monthly_burn: manual_defaults.monthly_burn ?? 4167,
+                };
+                INPUTS.forEach(i => { if (i.live) state.mode[i.key] = 'live'; });
+
+                const ts = live.fetched_at ? new Date(live.fetched_at).toLocaleString() : 'unknown';
+                let label = 'Live data synced ' + ts;
+                if (live.error) label += ' · ' + live.error + ' (using fallback values)';
+                document.getElementById('lastSynced').textContent = label;
+            } catch (e) {
+                document.getElementById('lastSynced').textContent = 'Could not load live data: ' + e.message + ' (using defaults)';
+                state.live = { current_users: 0, net_now: 0, net_3mo: 0, churn_rate: 7, arpu: 8 };
+                state.values = { ...state.live, cac: 60, monthly_burn: 4167 };
+                INPUTS.forEach(i => { if (i.live) state.mode[i.key] = 'live'; });
+            } finally {
+                document.getElementById('loadingOverlay').style.display = 'none';
+                renderInputs();
+                renderResults();
+            }
+        }
+
+        loadLive();
     </script>
 </body>
 </html>

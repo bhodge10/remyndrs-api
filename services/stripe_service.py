@@ -4,7 +4,7 @@ Handles all Stripe payment and subscription operations
 """
 
 import stripe
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import get_db_connection, return_db_connection
 from config import (
     logger, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
@@ -618,3 +618,192 @@ def get_upgrade_message(phone_number: str) -> str:
 - Cancel anytime
 
 Text PREMIUM to get your upgrade link."""
+
+
+# =====================================================
+# INVESTMENT HEALTH METRICS
+# =====================================================
+# One fetch of all subscriptions powers five metrics. Cached briefly so the
+# admin page can be opened repeatedly without re-paginating Stripe.
+
+_INVESTMENT_METRICS_CACHE: dict = {"data": None, "fetched_at": 0.0}
+_INVESTMENT_METRICS_TTL = 300  # 5 minutes
+
+
+def _normalized_monthly_amount(subscription) -> float:
+    """Return the monthly USD amount for a subscription, normalizing yearly to /12."""
+    try:
+        items = subscription.get('items', {}).get('data', [])
+        if not items:
+            return 0.0
+        price = items[0].get('price', {}) or {}
+        amount_cents = price.get('unit_amount') or 0
+        recurring = price.get('recurring', {}) or {}
+        interval = recurring.get('interval', 'month')
+        interval_count = recurring.get('interval_count') or 1
+        amount = amount_cents / 100.0
+        if interval == 'year':
+            return amount / (12 * interval_count)
+        if interval == 'month':
+            return amount / interval_count
+        if interval == 'week':
+            return amount * (52 / 12) / interval_count
+        if interval == 'day':
+            return amount * (365 / 12) / interval_count
+        return amount
+    except Exception:
+        return 0.0
+
+
+def get_investment_health_metrics(force_refresh: bool = False) -> dict:
+    """
+    Fetch and compute the live inputs for the Investment Health dashboard.
+
+    Returns a dict with:
+      - current_users: count of active subscriptions
+      - net_now: new subs minus cancellations, this calendar month to date (UTC)
+      - net_3mo: same metric, full calendar month from 3 months ago
+      - churn_rate: trailing 90-day avg monthly churn (%)
+      - arpu: avg MRR per active sub minus $1 SMS cost
+      - fetched_at: ISO timestamp
+      - error: optional error message (other fields still set to defaults)
+
+    Falls back to defaults from services.investment_health.DEFAULT_INPUTS if
+    Stripe is unavailable or returns no data.
+    """
+    import time
+    from services.investment_health import DEFAULT_INPUTS, SMS_COST_PER_USER
+
+    now_ts = time.time()
+    if (
+        not force_refresh
+        and _INVESTMENT_METRICS_CACHE["data"] is not None
+        and now_ts - _INVESTMENT_METRICS_CACHE["fetched_at"] < _INVESTMENT_METRICS_TTL
+    ):
+        return _INVESTMENT_METRICS_CACHE["data"]
+
+    fallback = {
+        "current_users": DEFAULT_INPUTS["current_users"],
+        "net_now": DEFAULT_INPUTS["net_now"],
+        "net_3mo": DEFAULT_INPUTS["net_3mo"],
+        "churn_rate": DEFAULT_INPUTS["churn_rate"],
+        "arpu": DEFAULT_INPUTS["arpu"],
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    if not STRIPE_ENABLED:
+        fallback["error"] = "Stripe not configured"
+        return fallback
+
+    try:
+        # Pull all subscriptions ever created (active + canceled). For an
+        # account with hundreds of subs this is a few paginated calls.
+        subs = list(stripe.Subscription.list(status='all', limit=100).auto_paging_iter())
+    except stripe.error.StripeError as e:
+        logger.error(f"Investment Health: Stripe fetch failed: {e}")
+        fallback["error"] = str(e)
+        return fallback
+    except Exception as e:
+        logger.error(f"Investment Health: unexpected error fetching subs: {e}")
+        fallback["error"] = str(e)
+        return fallback
+
+    now = datetime.utcnow()
+    start_of_this_month = datetime(now.year, now.month, 1)
+
+    # 3 months ago: full calendar month
+    three_months_ago_year = now.year
+    three_months_ago_month = now.month - 3
+    while three_months_ago_month <= 0:
+        three_months_ago_month += 12
+        three_months_ago_year -= 1
+    start_of_3mo = datetime(three_months_ago_year, three_months_ago_month, 1)
+    # Start of the month after the 3-months-ago month
+    next_month = three_months_ago_month + 1
+    next_year = three_months_ago_year
+    if next_month > 12:
+        next_month = 1
+        next_year += 1
+    end_of_3mo = datetime(next_year, next_month, 1)
+
+    # Active count + ARPU
+    active_subs = [s for s in subs if s.get('status') in ('active', 'trialing')]
+    current_users = len(active_subs)
+    if active_subs:
+        total_monthly = sum(_normalized_monthly_amount(s) for s in active_subs)
+        arpu_gross = total_monthly / len(active_subs)
+        arpu = max(0.0, arpu_gross - SMS_COST_PER_USER)
+    else:
+        arpu = DEFAULT_INPUTS["arpu"]
+
+    def _ts_to_dt(ts):
+        return datetime.utcfromtimestamp(ts) if ts else None
+
+    def _net_new_in_range(start_dt: datetime, end_dt: datetime) -> int:
+        """New subs in [start, end) minus cancellations in [start, end)."""
+        new_count = 0
+        cancelled_count = 0
+        for s in subs:
+            created = _ts_to_dt(s.get('created'))
+            if created and start_dt <= created < end_dt:
+                new_count += 1
+            cancelled_at = _ts_to_dt(s.get('canceled_at'))
+            if cancelled_at and start_dt <= cancelled_at < end_dt:
+                cancelled_count += 1
+        return new_count - cancelled_count
+
+    net_now = _net_new_in_range(start_of_this_month, now + timedelta(seconds=1))
+    net_3mo = _net_new_in_range(start_of_3mo, end_of_3mo)
+
+    # Trailing 90-day average monthly churn rate
+    # For each of the 3 prior full calendar months, churn = cancellations
+    # during the month / active subs at start of the month.
+    churn_samples = []
+    cursor_year = now.year
+    cursor_month = now.month
+    for _ in range(3):
+        cursor_month -= 1
+        if cursor_month <= 0:
+            cursor_month += 12
+            cursor_year -= 1
+        month_start = datetime(cursor_year, cursor_month, 1)
+        nm = cursor_month + 1
+        ny = cursor_year
+        if nm > 12:
+            nm = 1
+            ny += 1
+        month_end = datetime(ny, nm, 1)
+
+        # Subs active at month_start: created before month_start AND
+        # (not canceled OR canceled on/after month_start)
+        active_at_start = 0
+        cancelled_in_month = 0
+        for s in subs:
+            created = _ts_to_dt(s.get('created'))
+            cancelled_at = _ts_to_dt(s.get('canceled_at'))
+            if created and created < month_start and (cancelled_at is None or cancelled_at >= month_start):
+                active_at_start += 1
+            if cancelled_at and month_start <= cancelled_at < month_end:
+                cancelled_in_month += 1
+
+        if active_at_start > 0:
+            churn_samples.append(100.0 * cancelled_in_month / active_at_start)
+
+    if churn_samples:
+        churn_rate = sum(churn_samples) / len(churn_samples)
+    else:
+        churn_rate = DEFAULT_INPUTS["churn_rate"]
+
+    result = {
+        "current_users": current_users,
+        "net_now": net_now,
+        "net_3mo": net_3mo,
+        "churn_rate": round(churn_rate, 2),
+        "arpu": round(arpu, 2),
+        "fetched_at": now.isoformat() + "Z",
+    }
+
+    _INVESTMENT_METRICS_CACHE["data"] = result
+    _INVESTMENT_METRICS_CACHE["fetched_at"] = now_ts
+
+    return result
