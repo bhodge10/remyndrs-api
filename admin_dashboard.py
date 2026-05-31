@@ -911,7 +911,7 @@ def _founder_survey_recipients(c):
     numbers. Returns list of dicts with decrypted name + already-surveyed flag."""
     from config import FOUNDER_SURVEY_EXCLUDE_PHONES
     c.execute('''
-        SELECT u.phone_number, u.first_name, u.last_active_at,
+        SELECT u.phone_number, u.first_name, u.last_active_at, u.timezone,
                EXISTS(
                    SELECT 1 FROM smart_nudges sn
                    WHERE sn.phone_number = u.phone_number
@@ -925,12 +925,21 @@ def _founder_survey_recipients(c):
         ORDER BY u.last_active_at DESC
     ''', (FOUNDER_SURVEY_EXCLUDE_PHONES,))
     recipients = []
-    for phone, first_name, last_active, already in c.fetchall():
+    for phone, first_name, last_active, timezone_str, already in c.fetchall():
+        try:
+            tz = pytz.timezone(timezone_str or DEFAULT_TIMEZONE)
+        except pytz.UnknownTimezoneError:
+            tz = pytz.timezone(DEFAULT_TIMEZONE)
+        local_time = datetime.now(tz).strftime("%I:%M %p").lstrip("0")
         recipients.append({
             "phone_full": phone,
             "phone": mask_phone_number(phone),
             "name": (safe_decrypt(first_name, "") if first_name else "") or None,
             "last_active": last_active.strftime("%Y-%m-%d") if last_active else None,
+            "timezone": timezone_str or DEFAULT_TIMEZONE,
+            "local_time": local_time,
+            # Only send during daytime (8am-8pm local), matching broadcast policy
+            "in_window": is_within_broadcast_window(timezone_str),
             "already_surveyed": bool(already),
         })
     return recipients
@@ -944,12 +953,15 @@ async def founder_survey_preview(admin: str = Depends(verify_admin)):
         conn = get_db_connection()
         recipients = _founder_survey_recipients(conn.cursor())
         not_yet = [r for r in recipients if not r["already_surveyed"]]
+        sendable_now = [r for r in not_yet if r["in_window"]]
         return JSONResponse(content={
             "recipients": recipients,
             "summary": {
                 "total": len(recipients),
                 "not_yet_surveyed": len(not_yet),
                 "already_surveyed": len(recipients) - len(not_yet),
+                "sendable_now": len(sendable_now),
+                "waiting_for_window": len(not_yet) - len(sendable_now),
             },
         })
     except Exception as e:
@@ -988,13 +1000,24 @@ async def founder_survey_send(
         recipients = _founder_survey_recipients(conn.cursor())
         if skip_surveyed:
             recipients = [r for r in recipients if not r["already_surveyed"]]
+        # Only text users currently in their 8am-8pm local window; the rest can
+        # be reached by sending again later (skip_surveyed avoids double-texts).
+        held = [r for r in recipients if not r["in_window"]]
+        recipients = [r for r in recipients if r["in_window"]]
         if not recipients:
-            return JSONResponse(content={"queued": 0, "message": "No eligible recipients."})
+            msg = "No recipients are within their 8am-8pm local window right now."
+            if held:
+                msg += f" {len(held)} waiting for daytime — try again later."
+            return JSONResponse(content={"queued": 0, "held_out_of_window": len(held), "message": msg})
         background_tasks.add_task(_send_founder_surveys, recipients)
-        logger.info(f"Founder survey queued by {admin}: {len(recipients)} recipients")
+        logger.info(f"Founder survey queued by {admin}: {len(recipients)} recipients ({len(held)} held - outside window)")
+        message = f"Sending the survey to {len(recipients)} user(s)..."
+        if held:
+            message += f" ({len(held)} held until daytime — re-send later to reach them.)"
         return JSONResponse(content={
             "queued": len(recipients),
-            "message": f"Sending the survey to {len(recipients)} user(s)...",
+            "held_out_of_window": len(held),
+            "message": message,
         })
     except Exception as e:
         logger.error(f"Error sending founder survey: {e}")
@@ -1091,17 +1114,22 @@ async function loadPreview() {
   const r = await fetch('/admin/founder-survey/recipients-preview');
   const d = await r.json();
   const s = d.summary;
-  let html = `<p class="sub">${s.total} active recipient(s) · ${s.not_yet_surveyed} not yet surveyed · ${s.already_surveyed} already surveyed</p>`;
-  html += '<table><tr><th>Name</th><th>Phone</th><th>Last active</th><th>Status</th></tr>';
+  let html = `<p class="sub">${s.total} active recipient(s) · ${s.not_yet_surveyed} not yet surveyed · ${s.already_surveyed} already surveyed`
+           + ` · <strong>${s.sendable_now} sendable now</strong> (8am-8pm local), ${s.waiting_for_window} waiting for daytime</p>`;
+  html += '<table><tr><th>Name</th><th>Phone</th><th>Last active</th><th>Local time</th><th>Status</th></tr>';
   for (const u of d.recipients) {
+    let status;
+    if (u.already_surveyed) status = '<span class="pill done">surveyed</span>';
+    else if (u.in_window) status = '<span class="pill pending">new</span>';
+    else status = '<span class="pill" style="background:#e5e7eb;color:#555">waiting for daytime</span>';
     html += `<tr><td>${u.name || '<span class=muted>(no name)</span>'}</td><td>${u.phone}</td><td>${u.last_active || ''}</td>`
-         + `<td>${u.already_surveyed ? '<span class="pill done">surveyed</span>' : '<span class="pill pending">new</span>'}</td></tr>`;
+         + `<td class="muted">${u.local_time || ''}</td><td>${status}</td></tr>`;
   }
   html += '</table>';
   el.innerHTML = html;
   const btn = document.getElementById('sendBtn');
-  btn.style.display = s.not_yet_surveyed > 0 ? 'inline-block' : 'none';
-  btn.textContent = `Send survey to ${s.not_yet_surveyed} new user(s)`;
+  btn.style.display = s.sendable_now > 0 ? 'inline-block' : 'none';
+  btn.textContent = `Send survey to ${s.sendable_now} user(s) in daytime now`;
 }
 async function sendSurvey() {
   if (!confirm('Send the founder survey now? This texts real users.')) return;
