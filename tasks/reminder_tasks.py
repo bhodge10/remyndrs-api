@@ -1378,6 +1378,11 @@ def send_day_1_morning_nudge(self):
             if not (0 <= days_in_trial <= 1):
                 continue
 
+            # Anti-bunching: skip if another proactive message went out in last 48h
+            if recently_pushed_message(phone_number):
+                logger.info(f"Skipping Day 1 nudge for ...{phone_number[-4:]} — another lifecycle message sent recently")
+                continue
+
             try:
                 greeting = f"Good morning {first_name}!" if first_name else "Good morning!"
 
@@ -1720,6 +1725,11 @@ def send_day_4_email_collection(self):
 
             # Only send on Day 3-4 (range check to handle signup time-of-day)
             if not (3 <= days_in_trial <= 4):
+                continue
+
+            # Anti-bunching: skip if another proactive message went out in last 48h
+            if recently_pushed_message(phone_number):
+                logger.info(f"Skipping Day 4 email ask for ...{phone_number[-4:]} — another lifecycle message sent recently")
                 continue
 
             try:
