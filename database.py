@@ -588,6 +588,9 @@ def init_db():
             # Inactivity re-engagement nudge
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS inactivity_nudge_sent_at TIMESTAMP",
             "UPDATE users SET inactivity_nudge_sent_at = NULL WHERE inactivity_nudge_sent_at IS NULL",
+            # Cap how many inactivity nudges a single user receives (was weekly-forever)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS inactivity_nudge_count INTEGER DEFAULT 0",
+            "UPDATE users SET inactivity_nudge_count = 0 WHERE inactivity_nudge_count IS NULL",
             # Smart Nudges: proactive AI intelligence layer
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS smart_nudges_enabled BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS smart_nudge_time TIME DEFAULT '09:00'",
