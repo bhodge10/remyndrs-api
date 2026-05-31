@@ -1213,7 +1213,7 @@ def send_smart_nudges(self):
     from datetime import datetime
     from models.user import (
         get_users_due_for_smart_nudge, claim_user_for_smart_nudge,
-        get_daily_summary_settings, mark_daily_summary_sent,
+        get_daily_summary_settings, mark_daily_summary_sent, is_lifecycle_paused,
     )
     from models.reminder import get_reminders_for_date
     from services.nudge_service import generate_nudge, send_nudge_to_user, is_nudge_eligible
@@ -1244,6 +1244,11 @@ def send_smart_nudges(self):
                 user_now = utc_now.astimezone(user_tz)
                 user_today = user_now.date()
                 current_day = user_now.strftime('%A')
+
+                # Respect soft opt-out of proactive messages
+                if is_lifecycle_paused(phone_number):
+                    logger.debug(f"Skipping nudge for {phone_number[-4:]}: lifecycle messages paused")
+                    continue
 
                 # Check tier eligibility
                 if not is_nudge_eligible(premium_status, current_day):
