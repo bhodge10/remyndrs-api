@@ -85,6 +85,14 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 # (e.g. UPGRADE keyword, shared-list mentions). Empty = notifications disabled.
 ADMIN_NOTIFICATION_PHONE = os.environ.get("ADMIN_NOTIFICATION_PHONE", "+18593935374")
 
+# Founder survey: phone numbers to always exclude from the survey (founder's
+# own / household test lines). Comma-separated E.164; env-overridable.
+FOUNDER_SURVEY_EXCLUDE_PHONES = [
+    p.strip() for p in os.environ.get(
+        "FOUNDER_SURVEY_EXCLUDE_PHONES", "+18593935374,+18593935373"
+    ).split(",") if p.strip()
+]
+
 # Customer Service Portal Authentication
 # Falls back to admin credentials if not set
 CS_USERNAME = os.environ.get("CS_USERNAME", ADMIN_USERNAME)

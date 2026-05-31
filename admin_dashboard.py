@@ -903,6 +903,266 @@ def start_broadcast_checker():
 
 
 # =====================================================
+# FOUNDER SURVEY (one-off: ask active users what they use Remyndrs for)
+# =====================================================
+
+def _founder_survey_recipients(c):
+    """Active-in-last-14-days users, excluding opted-out and the founder's own
+    numbers. Returns list of dicts with decrypted name + already-surveyed flag."""
+    from config import FOUNDER_SURVEY_EXCLUDE_PHONES
+    c.execute('''
+        SELECT u.phone_number, u.first_name, u.last_active_at, u.timezone,
+               EXISTS(
+                   SELECT 1 FROM smart_nudges sn
+                   WHERE sn.phone_number = u.phone_number
+                     AND sn.nudge_type = 'founder_survey'
+               ) AS already_surveyed
+        FROM users u
+        WHERE u.onboarding_complete = TRUE
+          AND u.last_active_at >= NOW() - INTERVAL '14 days'
+          AND (u.opted_out = FALSE OR u.opted_out IS NULL)
+          AND u.phone_number <> ALL(%s)
+        ORDER BY u.last_active_at DESC
+    ''', (FOUNDER_SURVEY_EXCLUDE_PHONES,))
+    recipients = []
+    for phone, first_name, last_active, timezone_str, already in c.fetchall():
+        try:
+            tz = pytz.timezone(timezone_str or DEFAULT_TIMEZONE)
+        except pytz.UnknownTimezoneError:
+            tz = pytz.timezone(DEFAULT_TIMEZONE)
+        local_time = datetime.now(tz).strftime("%I:%M %p").lstrip("0")
+        recipients.append({
+            "phone_full": phone,
+            "phone": mask_phone_number(phone),
+            "name": (safe_decrypt(first_name, "") if first_name else "") or None,
+            "last_active": last_active.strftime("%Y-%m-%d") if last_active else None,
+            "timezone": timezone_str or DEFAULT_TIMEZONE,
+            "local_time": local_time,
+            # Only send during daytime (8am-8pm local), matching broadcast policy
+            "in_window": is_within_broadcast_window(timezone_str),
+            "already_surveyed": bool(already),
+        })
+    return recipients
+
+
+@router.get("/admin/founder-survey/recipients-preview")
+async def founder_survey_preview(admin: str = Depends(verify_admin)):
+    """Preview who would receive the founder survey (no sends)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        recipients = _founder_survey_recipients(conn.cursor())
+        not_yet = [r for r in recipients if not r["already_surveyed"]]
+        sendable_now = [r for r in not_yet if r["in_window"]]
+        return JSONResponse(content={
+            "recipients": recipients,
+            "summary": {
+                "total": len(recipients),
+                "not_yet_surveyed": len(not_yet),
+                "already_surveyed": len(recipients) - len(not_yet),
+                "sendable_now": len(sendable_now),
+                "waiting_for_window": len(not_yet) - len(sendable_now),
+            },
+        })
+    except Exception as e:
+        logger.error(f"Error previewing founder survey: {e}")
+        raise HTTPException(status_code=500, detail="Error previewing founder survey")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def _send_founder_surveys(recipients: list):
+    """Background task: send the survey + arm capture for each recipient."""
+    import time
+    from services.nudge_service import send_founder_survey
+    sent = 0
+    for r in recipients:
+        try:
+            if send_founder_survey(r["phone_full"], r.get("name")):
+                sent += 1
+        except Exception as e:
+            logger.error(f"Founder survey send failed for {r['phone_full'][-4:]}: {e}")
+        time.sleep(0.1)  # gentle pacing for Twilio
+    logger.info(f"Founder survey batch complete: {sent}/{len(recipients)} sent")
+
+
+@router.post("/admin/founder-survey/send")
+async def founder_survey_send(
+    background_tasks: BackgroundTasks,
+    skip_surveyed: bool = True,
+    admin: str = Depends(verify_admin),
+):
+    """Send the founder survey to active users (skips already-surveyed by default)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        recipients = _founder_survey_recipients(conn.cursor())
+        if skip_surveyed:
+            recipients = [r for r in recipients if not r["already_surveyed"]]
+        # Only text users currently in their 8am-8pm local window; the rest can
+        # be reached by sending again later (skip_surveyed avoids double-texts).
+        held = [r for r in recipients if not r["in_window"]]
+        recipients = [r for r in recipients if r["in_window"]]
+        if not recipients:
+            msg = "No recipients are within their 8am-8pm local window right now."
+            if held:
+                msg += f" {len(held)} waiting for daytime — try again later."
+            return JSONResponse(content={"queued": 0, "held_out_of_window": len(held), "message": msg})
+        background_tasks.add_task(_send_founder_surveys, recipients)
+        logger.info(f"Founder survey queued by {admin}: {len(recipients)} recipients ({len(held)} held - outside window)")
+        message = f"Sending the survey to {len(recipients)} user(s)..."
+        if held:
+            message += f" ({len(held)} held until daytime — re-send later to reach them.)"
+        return JSONResponse(content={
+            "queued": len(recipients),
+            "held_out_of_window": len(held),
+            "message": message,
+        })
+    except Exception as e:
+        logger.error(f"Error sending founder survey: {e}")
+        raise HTTPException(status_code=500, detail="Error sending founder survey")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/admin/founder-survey/responses")
+async def founder_survey_responses(admin: str = Depends(verify_admin)):
+    """List every founder-survey send and its response (if any)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT sn.phone_number, u.first_name, sn.sent_at,
+                   sn.user_response, sn.user_responded_at
+            FROM smart_nudges sn
+            LEFT JOIN users u ON u.phone_number = sn.phone_number
+            WHERE sn.nudge_type = 'founder_survey'
+            ORDER BY (sn.user_response IS NOT NULL) DESC, sn.sent_at DESC
+        ''')
+        rows = []
+        responded = 0
+        for phone, first_name, sent_at, response, responded_at in c.fetchall():
+            if response:
+                responded += 1
+            rows.append({
+                "phone": mask_phone_number(phone),
+                "name": (safe_decrypt(first_name, "") if first_name else "") or None,
+                "sent_at": sent_at.strftime("%Y-%m-%d %H:%M") if sent_at else None,
+                "response": response,
+                "responded_at": responded_at.strftime("%Y-%m-%d %H:%M") if responded_at else None,
+            })
+        return JSONResponse(content={
+            "responses": rows,
+            "summary": {"sent": len(rows), "responded": responded},
+        })
+    except Exception as e:
+        logger.error(f"Error loading founder survey responses: {e}")
+        raise HTTPException(status_code=500, detail="Error loading founder survey responses")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/admin/founder-survey", response_class=HTMLResponse)
+async def founder_survey_page(admin: str = Depends(verify_admin)):
+    """Self-contained admin page to preview, send, and read founder survey answers."""
+    return HTMLResponse(content=FOUNDER_SURVEY_HTML)
+
+
+FOUNDER_SURVEY_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Founder Survey · Remyndrs Admin</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 880px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; }
+  h1 { font-size: 22px; } h2 { font-size: 16px; margin-top: 28px; }
+  p.sub { color: #666; font-size: 14px; }
+  button { background: #2563eb; color: #fff; border: 0; padding: 9px 14px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  button.secondary { background: #e5e7eb; color: #111; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { color: #555; font-weight: 600; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+  .pending { background: #fef3c7; color: #92400e; } .done { background: #dcfce7; color: #166534; }
+  .muted { color: #999; } .answer { white-space: pre-wrap; }
+  #status { margin-left: 10px; font-size: 14px; color: #166534; }
+</style>
+</head>
+<body>
+  <h1>Founder Survey</h1>
+  <p class="sub">Asks active users what they use Remyndrs for. Each reply is captured verbatim (not processed as a reminder/memory) and shown below. Your own numbers are excluded automatically.</p>
+
+  <h2>1 · Recipients</h2>
+  <button class="secondary" onclick="loadPreview()">Preview recipients</button>
+  <button id="sendBtn" onclick="sendSurvey()" style="display:none">Send survey</button>
+  <span id="status"></span>
+  <div id="preview"></div>
+
+  <h2>2 · Responses</h2>
+  <button class="secondary" onclick="loadResponses()">Refresh responses</button>
+  <div id="responses"></div>
+
+<script>
+async function loadPreview() {
+  const el = document.getElementById('preview');
+  el.innerHTML = 'Loading...';
+  const r = await fetch('/admin/founder-survey/recipients-preview');
+  const d = await r.json();
+  const s = d.summary;
+  let html = `<p class="sub">${s.total} active recipient(s) · ${s.not_yet_surveyed} not yet surveyed · ${s.already_surveyed} already surveyed`
+           + ` · <strong>${s.sendable_now} sendable now</strong> (8am-8pm local), ${s.waiting_for_window} waiting for daytime</p>`;
+  html += '<table><tr><th>Name</th><th>Phone</th><th>Last active</th><th>Local time</th><th>Status</th></tr>';
+  for (const u of d.recipients) {
+    let status;
+    if (u.already_surveyed) status = '<span class="pill done">surveyed</span>';
+    else if (u.in_window) status = '<span class="pill pending">new</span>';
+    else status = '<span class="pill" style="background:#e5e7eb;color:#555">waiting for daytime</span>';
+    html += `<tr><td>${u.name || '<span class=muted>(no name)</span>'}</td><td>${u.phone}</td><td>${u.last_active || ''}</td>`
+         + `<td class="muted">${u.local_time || ''}</td><td>${status}</td></tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = html;
+  const btn = document.getElementById('sendBtn');
+  btn.style.display = s.sendable_now > 0 ? 'inline-block' : 'none';
+  btn.textContent = `Send survey to ${s.sendable_now} user(s) in daytime now`;
+}
+async function sendSurvey() {
+  if (!confirm('Send the founder survey now? This texts real users.')) return;
+  const btn = document.getElementById('sendBtn'); btn.disabled = true;
+  const r = await fetch('/admin/founder-survey/send?skip_surveyed=true', { method: 'POST' });
+  const d = await r.json();
+  document.getElementById('status').textContent = d.message || 'Done.';
+  btn.disabled = false;
+  setTimeout(loadResponses, 1500);
+}
+async function loadResponses() {
+  const el = document.getElementById('responses');
+  el.innerHTML = 'Loading...';
+  const r = await fetch('/admin/founder-survey/responses');
+  const d = await r.json();
+  let html = `<p class="sub">${d.summary.responded} of ${d.summary.sent} sent have replied</p>`;
+  html += '<table><tr><th>Name</th><th>Phone</th><th>Sent</th><th>Answer</th></tr>';
+  for (const x of d.responses) {
+    const ans = x.response
+      ? `<span class="answer">${(x.response||'').replace(/</g,'&lt;')}</span><br><span class="muted">${x.responded_at||''}</span>`
+      : '<span class="pill pending">waiting</span>';
+    html += `<tr><td>${x.name || '<span class=muted>(no name)</span>'}</td><td>${x.phone}</td><td class="muted">${x.sent_at||''}</td><td>${ans}</td></tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = d.responses.length ? html : '<p class="sub">No surveys sent yet.</p>';
+}
+loadResponses();
+</script>
+</body>
+</html>"""
+
+
+# =====================================================
 # FEEDBACK API ENDPOINTS
 # =====================================================
 
