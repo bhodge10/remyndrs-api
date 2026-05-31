@@ -1095,6 +1095,7 @@ FOUNDER_SURVEY_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+  <p><a href="/admin/dashboard" style="color:#2563eb;text-decoration:none;font-size:13px">&larr; Back to Dashboard</a></p>
   <h1>Founder Survey</h1>
   <p class="sub">Asks active users what they use Remyndrs for. Each reply is captured verbatim (not processed as a reminder/memory) and shown below. Your own numbers are excluded automatically.</p>
 
@@ -1158,6 +1159,151 @@ async function loadResponses() {
   el.innerHTML = d.responses.length ? html : '<p class="sub">No surveys sent yet.</p>';
 }
 loadResponses();
+</script>
+</body>
+</html>"""
+
+
+# =====================================================
+# CONVERSION FUNNEL
+# =====================================================
+
+@router.get("/admin/funnel/data")
+async def funnel_data(admin: str = Depends(verify_admin)):
+    """Current-state conversion funnel counts.
+
+    'Paying' counts REAL Stripe subscriptions only — comped/beta premium is
+    reported separately so the funnel doesn't overstate revenue.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        def scalar(sql):
+            c.execute(sql)
+            return c.fetchone()[0]
+
+        try:
+            signed_up = scalar("""
+                SELECT COUNT(*) FROM (
+                    SELECT phone_number FROM onboarding_progress
+                    UNION SELECT phone_number FROM users
+                ) s
+            """)
+        except Exception:
+            signed_up = scalar("SELECT COUNT(*) FROM users")  # fallback if no onboarding_progress
+
+        onboarded = scalar("SELECT COUNT(*) FROM users WHERE onboarding_complete = TRUE")
+        activated = scalar("""
+            SELECT COUNT(*) FROM users u
+            WHERE u.onboarding_complete = TRUE AND (
+                EXISTS(SELECT 1 FROM reminders r WHERE r.phone_number = u.phone_number) OR
+                EXISTS(SELECT 1 FROM memories m WHERE m.phone_number = u.phone_number) OR
+                EXISTS(SELECT 1 FROM lists l WHERE l.phone_number = u.phone_number)
+            )
+        """)
+        engaged_30d = scalar("SELECT COUNT(*) FROM users WHERE onboarding_complete AND last_active_at >= NOW() - INTERVAL '30 days'")
+        habit_7d = scalar("SELECT COUNT(*) FROM users WHERE onboarding_complete AND last_active_at >= NOW() - INTERVAL '7 days'")
+        paying = scalar("""
+            SELECT COUNT(*) FROM users
+            WHERE stripe_subscription_id IS NOT NULL AND stripe_subscription_id <> ''
+              AND subscription_status = 'active'
+        """)
+        comped = scalar("""
+            SELECT COUNT(*) FROM users
+            WHERE premium_status = 'premium'
+              AND (stripe_subscription_id IS NULL OR stripe_subscription_id = '')
+        """)
+
+        stages = [
+            {"label": "Signed up", "count": signed_up, "hint": "started onboarding"},
+            {"label": "Onboarded", "count": onboarded, "hint": "completed onboarding"},
+            {"label": "Activated", "count": activated, "hint": "created a reminder, list, or memory"},
+            {"label": "Engaged (30d)", "count": engaged_30d, "hint": "active in the last 30 days"},
+            {"label": "Habit (7d)", "count": habit_7d, "hint": "active in the last 7 days"},
+            {"label": "Paying", "count": paying, "hint": "active Stripe subscription (real revenue)"},
+        ]
+        return JSONResponse(content={"stages": stages, "comped_premium": comped})
+    except Exception as e:
+        logger.error(f"Error building funnel data: {e}")
+        raise HTTPException(status_code=500, detail="Error building funnel data")
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+@router.get("/admin/funnel", response_class=HTMLResponse)
+async def funnel_page(admin: str = Depends(verify_admin)):
+    return HTMLResponse(content=FUNNEL_HTML)
+
+
+FUNNEL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conversion Funnel · Remyndrs Admin</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; }
+  h1 { font-size: 22px; margin-bottom: 2px; }
+  p.sub { color: #666; font-size: 13px; margin-top: 0; }
+  button { background: #e5e7eb; color: #111; border: 0; padding: 8px 13px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  #funnel { margin-top: 18px; text-align: center; }
+  .stage { margin: 0 auto; color: #fff; border-radius: 8px; padding: 12px 16px; display: flex;
+           align-items: center; justify-content: space-between; box-sizing: border-box; transition: width .3s; }
+  .stage .label { font-weight: 600; font-size: 15px; }
+  .stage .hint { font-weight: 400; font-size: 11px; opacity: .85; display: block; }
+  .stage .count { font-size: 22px; font-weight: 700; }
+  .conv { font-size: 12px; color: #555; margin: 5px 0; }
+  .conv.drop-big { color: #b91c1c; font-weight: 700; }
+  .note { margin-top: 22px; padding: 12px 14px; background: #fef3c7; border-radius: 8px; font-size: 13px; color: #92400e; }
+  .pct { font-size: 12px; opacity: .9; }
+</style>
+</head>
+<body>
+  <p><a href="/admin/dashboard" style="color:#2563eb;text-decoration:none;font-size:13px">&larr; Back to Dashboard</a></p>
+  <h1>Conversion Funnel</h1>
+  <p class="sub">Current snapshot. "Paying" = real Stripe revenue only. <button onclick="load()">Refresh</button></p>
+  <div id="funnel">Loading...</div>
+  <div id="note"></div>
+
+<script>
+const COLORS = ['#1d4ed8','#2563eb','#3b82f6','#60a5fa','#93c5fd','#16a34a'];
+async function load() {
+  const r = await fetch('/admin/funnel/data');
+  const d = await r.json();
+  const stages = d.stages, top = stages[0].count || 1;
+  // find biggest drop for highlight
+  let maxDropIdx = -1, maxDrop = -1;
+  for (let i = 1; i < stages.length; i++) {
+    const prev = stages[i-1].count || 0, cur = stages[i].count || 0;
+    const drop = prev ? (prev - cur) / prev : 0;
+    if (drop > maxDrop) { maxDrop = drop; maxDropIdx = i; }
+  }
+  let html = '';
+  stages.forEach((s, i) => {
+    if (i > 0) {
+      const prev = stages[i-1].count || 0, cur = s.count || 0;
+      const contPct = prev ? Math.round(cur / prev * 100) : 0;
+      const dropPct = 100 - contPct;
+      const big = (i === maxDropIdx && dropPct > 0) ? ' drop-big' : '';
+      html += `<div class="conv${big}">▼ ${contPct}% continue${dropPct>0?` · −${dropPct}% drop`:''}${big?'  ⟵ biggest leak':''}</div>`;
+    }
+    const widthPct = Math.max((s.count / top) * 100, 16);
+    const ofTop = Math.round((s.count / top) * 100);
+    html += `<div class="stage" style="width:${widthPct}%;background:${COLORS[i]}">`
+          + `<span class="label">${s.label}<span class="hint">${s.hint}</span></span>`
+          + `<span><span class="count">${s.count}</span> <span class="pct">${ofTop}%</span></span>`
+          + `</div>`;
+  });
+  document.getElementById('funnel').innerHTML = html;
+  const paying = stages[stages.length-1].count;
+  document.getElementById('note').innerHTML =
+    `<div class="note"><strong>Revenue reality:</strong> ${paying} paying subscriber(s). `
+    + `${d.comped_premium} user(s) are on comped/beta premium — engaged, but <strong>not revenue</strong>. `
+    + `The funnel deliberately does not count them as conversions.</div>`;
+}
+load();
 </script>
 </body>
 </html>"""
@@ -5339,6 +5485,8 @@ async def admin_dashboard(admin: str = Depends(verify_admin)):
         <button onclick="showRecentMessages()" style="padding: 8px 16px; background: #9b59b6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Recent Messages</button>
         <a href="/admin/monitoring" style="padding: 8px 16px; background: #27ae60; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Monitoring</a>
         <a href="/admin/investment-health" style="padding: 8px 16px; background: #2c3e50; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Investment Health</a>
+        <a href="/admin/funnel" style="padding: 8px 16px; background: #2563eb; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Funnel</a>
+        <a href="/admin/founder-survey" style="padding: 8px 16px; background: #e67e22; color: white; border: none; border-radius: 4px; text-decoration: none; font-size: 0.9em; font-weight: 500;">Founder Survey</a>
         <a href="#overview">Overview</a>
         <a href="#broadcast">Broadcast</a>
         <a href="#support">Support Tickets</a>
