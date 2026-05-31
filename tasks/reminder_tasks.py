@@ -783,6 +783,12 @@ def send_engagement_nudge(self, phone_number: str):
             create_or_update_user(phone_number, five_minute_nudge_sent=True)
             return {"status": "skipped", "reason": "opted_out"}
 
+        # Check: User has soft-paused lifecycle messages
+        if status.get('lifecycle_paused'):
+            logger.info(f"User ...{phone_number[-4:]} paused lifecycle messages, skipping engagement nudge")
+            create_or_update_user(phone_number, five_minute_nudge_sent=True)
+            return {"status": "skipped", "reason": "lifecycle_paused"}
+
         # Check: User has sent 2+ messages since onboarding
         if status['interactions'] >= 2:
             logger.info(f"User ...{phone_number[-4:]} has {status['interactions']} interactions, "
@@ -876,6 +882,7 @@ def check_trial_expirations(self):
               AND trial_end_date > %s - INTERVAL '8 days'
               AND onboarding_complete = TRUE
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
               AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
         """, (now_utc,))
 
@@ -1073,6 +1080,7 @@ def send_mid_trial_value_reminders(self):
               AND (mid_trial_reminder_sent IS NULL OR mid_trial_reminder_sent = FALSE)
               AND (trial_warning_7d_sent IS NULL OR trial_warning_7d_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
         """, (now_utc, now_utc))
 
         users = c.fetchall()
@@ -1205,7 +1213,7 @@ def send_smart_nudges(self):
     from datetime import datetime
     from models.user import (
         get_users_due_for_smart_nudge, claim_user_for_smart_nudge,
-        get_daily_summary_settings, mark_daily_summary_sent,
+        get_daily_summary_settings, mark_daily_summary_sent, is_lifecycle_paused,
     )
     from models.reminder import get_reminders_for_date
     from services.nudge_service import generate_nudge, send_nudge_to_user, is_nudge_eligible
@@ -1236,6 +1244,11 @@ def send_smart_nudges(self):
                 user_now = utc_now.astimezone(user_tz)
                 user_today = user_now.date()
                 current_day = user_now.strftime('%A')
+
+                # Respect soft opt-out of proactive messages
+                if is_lifecycle_paused(phone_number):
+                    logger.debug(f"Skipping nudge for {phone_number[-4:]}: lifecycle messages paused")
+                    continue
 
                 # Check tier eligibility
                 if not is_nudge_eligible(premium_status, current_day):
@@ -1333,6 +1346,7 @@ def send_day_1_morning_nudge(self):
               AND onboarding_complete = TRUE
               AND (day_1_nudge_sent IS NULL OR day_1_nudge_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
         """, (now_utc,))
 
         users = c.fetchall()
@@ -1441,6 +1455,7 @@ def send_day_2_feature_prompt(self):
               AND onboarding_complete = TRUE
               AND (day_2_nudge_sent IS NULL OR day_2_nudge_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
         """, (now_utc,))
 
         users = c.fetchall()
@@ -1562,6 +1577,7 @@ def send_day_3_engagement_nudges(self):
               AND onboarding_complete = TRUE
               AND (day_3_nudge_sent IS NULL OR day_3_nudge_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
         """, (now_utc,))
 
         users = c.fetchall()
@@ -1673,6 +1689,7 @@ def send_day_4_email_collection(self):
               AND onboarding_complete = TRUE
               AND (day_4_email_sent IS NULL OR day_4_email_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
               AND (email IS NULL OR email = '')
         """, (now_utc,))
 
@@ -1786,6 +1803,7 @@ def send_post_trial_reengagement(self):
               AND premium_status = 'free'
               AND (post_trial_reengagement_sent IS NULL OR post_trial_reengagement_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
               AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
         """, (now_utc,))
 
@@ -1901,6 +1919,7 @@ def send_14d_post_trial_touchpoint(self):
               AND premium_status = 'free'
               AND (post_trial_14d_sent IS NULL OR post_trial_14d_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
               AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
         """, (now_utc,))
 
@@ -2034,6 +2053,7 @@ def send_30d_winback(self):
               AND premium_status = 'free'
               AND (winback_30d_sent IS NULL OR winback_30d_sent = FALSE)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
               AND (stripe_subscription_id IS NULL OR subscription_status != 'active')
         """, (window_start, target_date))
 
@@ -2149,6 +2169,7 @@ def send_inactivity_nudge(self):
               AND (inactivity_nudge_sent_at IS NULL OR inactivity_nudge_sent_at < %s)
               AND (%s <= 0 OR COALESCE(inactivity_nudge_count, 0) < %s)
               AND (opted_out IS NULL OR opted_out = FALSE)
+              AND (lifecycle_messages_opted_out IS NULL OR lifecycle_messages_opted_out = FALSE)
         """, (inactive_threshold, cooldown_threshold,
               INACTIVITY_NUDGE_MAX_ATTEMPTS, INACTIVITY_NUDGE_MAX_ATTEMPTS))
 

@@ -921,6 +921,7 @@ def _founder_survey_recipients(c):
         WHERE u.onboarding_complete = TRUE
           AND u.last_active_at >= NOW() - INTERVAL '14 days'
           AND (u.opted_out = FALSE OR u.opted_out IS NULL)
+          AND (u.lifecycle_messages_opted_out = FALSE OR u.lifecycle_messages_opted_out IS NULL)
           AND u.phone_number <> ALL(%s)
         ORDER BY u.last_active_at DESC
     ''', (FOUNDER_SURVEY_EXCLUDE_PHONES,))

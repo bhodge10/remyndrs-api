@@ -344,11 +344,11 @@ WHEN TO USE update_reminder:
 IMPORTANT: Use update_reminder when user wants to CHANGE/MODIFY/RESCHEDULE/MOVE an existing reminder to a new time. Do NOT delete the reminder.
 IMPORTANT: Do NOT use update_reminder for changing the daily summary time or other settings. Use update_settings instead.
 
-For UPDATING SETTINGS/PREFERENCES (daily summary time, enable/disable summary):
+For UPDATING SETTINGS/PREFERENCES (daily summary time, enable/disable summary, pause/resume lifecycle messages):
 {{
     "action": "update_settings",
-    "setting": "daily_summary_time" | "daily_summary_enabled",
-    "value": "the new value (e.g., '8:00 AM' for time, 'true'/'false' for enabled)",
+    "setting": "daily_summary_time" | "daily_summary_enabled" | "lifecycle_messages",
+    "value": "the new value (e.g., '8:00 AM' for time, 'true'/'false' for enabled, 'paused'/'resumed' for lifecycle_messages)",
     "confirmation": "Updated your daily summary time to [time]"
 }}
 WHEN TO USE update_settings:
@@ -358,7 +358,14 @@ WHEN TO USE update_settings:
 - "turn off my daily summary" → setting: "daily_summary_enabled", value: "false"
 - "turn on my daily summary" → setting: "daily_summary_enabled", value: "true"
 - "I want my summary at 9am" → setting: "daily_summary_time", value: "9:00 AM"
+- "don't text me unless it's about a reminder I asked for" → setting: "lifecycle_messages", value: "paused"
+- "stop sending me check-ins" → setting: "lifecycle_messages", value: "paused"
+- "only text me about my reminders" → setting: "lifecycle_messages", value: "paused"
+- "I don't want any marketing texts" → setting: "lifecycle_messages", value: "paused"
+- "you can text me again" → setting: "lifecycle_messages", value: "resumed"
+- "resume normal messages" → setting: "lifecycle_messages", value: "resumed"
 IMPORTANT: "daily summary" refers to the daily summary SETTING, NOT a reminder. Any request to change/update/modify the daily summary time or enable/disable it should use update_settings, NOT update_reminder or delete_reminder.
+IMPORTANT: "lifecycle_messages" controls proactive check-ins/trial nudges/marketing only — it does NOT silence reminders the user has asked for. Use it when the user expresses they don't want unsolicited texts but still want their reminders.
 
 For DELETING/FORGETTING A MEMORY:
 {{

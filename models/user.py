@@ -50,6 +50,8 @@ ALLOWED_USER_FIELDS = {
     # Shared lists
     'pending_share_name',
     'shared_lists_beta_opt_in',
+    # Soft opt-out for proactive lifecycle messages
+    'lifecycle_messages_opted_out', 'lifecycle_messages_opted_out_at',
 }
 
 
@@ -497,6 +499,84 @@ def is_user_opted_out(phone_number: str) -> bool:
             return_db_connection(conn)
 
 
+def is_lifecycle_paused(phone_number: str) -> bool:
+    """Check if a user has soft-opted-out of proactive lifecycle messages.
+
+    Distinct from `is_user_opted_out`: a paused user still receives the
+    reminders they explicitly scheduled, just not trial/winback/inactivity sends.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone
+            phone_hash = hash_phone(phone_number)
+            c.execute('SELECT lifecycle_messages_opted_out FROM users WHERE phone_hash = %s', (phone_hash,))
+            result = c.fetchone()
+            if not result:
+                c.execute('SELECT lifecycle_messages_opted_out FROM users WHERE phone_number = %s', (phone_number,))
+                result = c.fetchone()
+        else:
+            c.execute('SELECT lifecycle_messages_opted_out FROM users WHERE phone_number = %s', (phone_number,))
+            result = c.fetchone()
+
+        return bool(result and result[0])
+    except Exception as e:
+        logger.error(f"Error checking lifecycle pause status: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def pause_lifecycle_messages(phone_number: str) -> bool:
+    """Soft-opt-out: silence proactive lifecycle messages."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            'UPDATE users SET lifecycle_messages_opted_out = TRUE, '
+            'lifecycle_messages_opted_out_at = CURRENT_TIMESTAMP '
+            'WHERE phone_number = %s',
+            (phone_number,)
+        )
+        conn.commit()
+        logger.info(f"Lifecycle messages paused: ...{phone_number[-4:]}")
+        return True
+    except Exception as e:
+        logger.error(f"Error pausing lifecycle messages: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def resume_lifecycle_messages(phone_number: str) -> bool:
+    """Reverse a soft opt-out."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            'UPDATE users SET lifecycle_messages_opted_out = FALSE, '
+            'lifecycle_messages_opted_out_at = NULL '
+            'WHERE phone_number = %s',
+            (phone_number,)
+        )
+        conn.commit()
+        logger.info(f"Lifecycle messages resumed: ...{phone_number[-4:]}")
+        return True
+    except Exception as e:
+        logger.error(f"Error resuming lifecycle messages: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_daily_summary_settings(phone_number: str) -> Optional[dict[str, Any]]:
     """Get user's daily summary settings.
 
@@ -842,7 +922,8 @@ def get_user_nudge_status(phone_number: str) -> dict:
 
         query = '''
             SELECT five_minute_nudge_scheduled_at, five_minute_nudge_sent,
-                   post_onboarding_interactions, opted_out
+                   post_onboarding_interactions, opted_out,
+                   COALESCE(lifecycle_messages_opted_out, FALSE)
             FROM users WHERE {phone_condition}
         '''
 
@@ -863,12 +944,15 @@ def get_user_nudge_status(phone_number: str) -> dict:
                 'scheduled_at': result[0],
                 'sent': result[1] or False,
                 'interactions': result[2] or 0,
-                'opted_out': result[3] or False
+                'opted_out': result[3] or False,
+                'lifecycle_paused': result[4] or False,
             }
-        return {'scheduled_at': None, 'sent': False, 'interactions': 0, 'opted_out': False}
+        return {'scheduled_at': None, 'sent': False, 'interactions': 0,
+                'opted_out': False, 'lifecycle_paused': False}
     except Exception as e:
         logger.error(f"Error getting nudge status: {e}")
-        return {'scheduled_at': None, 'sent': False, 'interactions': 0, 'opted_out': False}
+        return {'scheduled_at': None, 'sent': False, 'interactions': 0,
+                'opted_out': False, 'lifecycle_paused': False}
     finally:
         if conn:
             return_db_connection(conn)
