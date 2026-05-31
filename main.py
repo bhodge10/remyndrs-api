@@ -1082,7 +1082,10 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # Check if user is responding to a smart nudge
         pending_nudge = get_pending_nudge_response(phone_number)
-        if pending_nudge and not is_undo_command and not is_new_reminder_request:
+        # A founder-survey reply is open-ended free text and must be captured
+        # verbatim even if it looks like a reminder request ("remind me about X").
+        is_survey_response = bool(pending_nudge and pending_nudge.get('nudge_type') == 'founder_survey')
+        if pending_nudge and (is_survey_response or (not is_undo_command and not is_new_reminder_request)):
             from services.nudge_service import handle_nudge_response
             nudge_reply = handle_nudge_response(phone_number, incoming_msg, pending_nudge)
             if nudge_reply:

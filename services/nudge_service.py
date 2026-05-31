@@ -377,6 +377,41 @@ def send_nudge_to_user(phone_number: str, nudge_data: dict[str, Any]) -> bool:
         return False
 
 
+FOUNDER_SURVEY_QUESTION = (
+    "Hi {name}! Quick favor from the Remyndrs team: what's the one thing you "
+    "use Remyndrs for most, and what would make it a must-have for you? "
+    "Your reply comes straight to us. Thanks so much!"
+)
+
+
+def send_founder_survey(phone_number: str, first_name: str = None) -> Optional[int]:
+    """Send the one-off founder survey question and arm free-text capture.
+
+    Stores a smart_nudges row (nudge_type='founder_survey') and sets the pending
+    nudge response so the user's NEXT reply is captured verbatim by
+    handle_nudge_response (rather than being processed as a memory/reminder).
+
+    Returns the nudge id, or None on failure.
+    """
+    from services.sms_service import send_sms
+
+    greeting_name = (first_name or "").strip() or "there"
+    message = FOUNDER_SURVEY_QUESTION.format(name=greeting_name)
+
+    nudge_data = {'nudge_type': 'founder_survey', 'nudge_text': message}
+    try:
+        nudge_id = save_nudge(phone_number, nudge_data)
+        if not nudge_id:
+            return None
+        send_sms(phone_number, message, message_type="smart_nudge")
+        set_pending_nudge_response(phone_number, nudge_id, nudge_data)
+        logger.info(f"Sent founder survey to {phone_number[-4:]} (nudge {nudge_id})")
+        return nudge_id
+    except Exception as e:
+        logger.error(f"Error sending founder survey to {phone_number[-4:]}: {e}")
+        return None
+
+
 def is_nudge_eligible(premium_status: str, current_day: str) -> bool:
     """Check if user is eligible for a nudge based on tier.
 
@@ -427,6 +462,14 @@ def handle_nudge_response(phone_number: str, message: str, pending_nudge: dict[s
     nudge_type = pending_nudge.get('nudge_type')
     suggested_reminder = pending_nudge.get('suggested_reminder_text')
     related_reminder_id = pending_nudge.get('related_reminder_id')
+
+    # Founder survey: capture the entire free-text reply verbatim. This is an
+    # open-ended question, not a YES/NO keyword flow, so it must run before any
+    # keyword handling below.
+    if nudge_type == 'founder_survey':
+        create_or_update_user(phone_number, pending_nudge_response=None)
+        record_nudge_response(phone_number, nudge_id, message.strip(), 'survey_response')
+        return "Thank you — this genuinely helps us make Remyndrs better for you!"
 
     msg = message.strip().upper()
 
