@@ -68,13 +68,17 @@ beat_schedule = {
         "schedule": timedelta(hours=1),
     },
     # Check trial expirations hourly — sends when user's local time is 9-10 AM
-    "check-trial-expirations": {
-        "task": "tasks.reminder_tasks.check_trial_expirations",
-        "schedule": crontab(minute=0),  # Every hour, on the hour
-        "options": {
-            "expires": 3500,  # Just under 1 hour
-        },
-    },
+    # DISABLED 2026-05-30: there is no real trial->paywall in production, so these
+    # "your trial is expiring" warnings were crying wolf to ~46 users (a top STOP
+    # driver). The task function is kept intact; re-add this schedule entry only
+    # once a genuine trial/paywall exists. See docs/changelog.md.
+    # "check-trial-expirations": {
+    #     "task": "tasks.reminder_tasks.check_trial_expirations",
+    #     "schedule": crontab(minute=0),  # Every hour, on the hour
+    #     "options": {
+    #         "expires": 3500,  # Just under 1 hour
+    #     },
+    # },
     # Send mid-trial value reminders hourly — timezone-aware (9-10 AM local)
     "send-mid-trial-value-reminders": {
         "task": "tasks.reminder_tasks.send_mid_trial_value_reminders",

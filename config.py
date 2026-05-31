@@ -262,6 +262,10 @@ NUDGE_CONFIDENCE_THRESHOLD = 50    # Minimum confidence to send a nudge (0-100)
 NUDGE_MAX_CHARS = 280              # Max characters per nudge (2 SMS segments)
 COMBINED_NUDGE_MAX_CHARS = 1500    # Max total length for combined summary + nudge message
 
+# Re-engagement: stop nudging a chronically inactive user after this many
+# attempts (was previously weekly-forever, a top STOP driver). 0 = unlimited.
+INACTIVITY_NUDGE_MAX_ATTEMPTS = 2
+
 # Anthropic API Key (for future Agent 4 AI file identification)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 

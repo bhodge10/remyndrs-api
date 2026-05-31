@@ -2118,13 +2118,16 @@ def send_inactivity_nudge(self):
 
     Runs hourly via Celery Beat. Timezone-aware: only sends at 9-10 AM local.
     Uses inactivity_nudge_sent_at timestamp with 7-day cooldown for repeat nudging.
-    First nudge: after 7 days inactive. Repeats weekly while user remains inactive.
+    First nudge: after 7 days inactive. Repeats weekly while user remains inactive,
+    up to INACTIVITY_NUDGE_MAX_ATTEMPTS total (0 = unlimited) so chronically dormant
+    users aren't nudged forever.
     """
     import pytz
     from datetime import datetime, timedelta
     from database import get_db_connection, return_db_connection
     from models.list_model import get_list_count
     from services.tier_service import get_memory_count, get_recurring_reminder_count
+    from config import INACTIVITY_NUDGE_MAX_ATTEMPTS
 
     logger.info("Starting inactivity re-engagement nudge check")
 
@@ -2144,8 +2147,10 @@ def send_inactivity_nudge(self):
               AND last_active_at < %s
               AND onboarding_complete = TRUE
               AND (inactivity_nudge_sent_at IS NULL OR inactivity_nudge_sent_at < %s)
+              AND (%s <= 0 OR COALESCE(inactivity_nudge_count, 0) < %s)
               AND (opted_out IS NULL OR opted_out = FALSE)
-        """, (inactive_threshold, cooldown_threshold))
+        """, (inactive_threshold, cooldown_threshold,
+              INACTIVITY_NUDGE_MAX_ATTEMPTS, INACTIVITY_NUDGE_MAX_ATTEMPTS))
 
         users = c.fetchall()
 
@@ -2222,7 +2227,9 @@ Reply STOP to opt out."""
 
                 send_sms(phone_number, message, message_type="trial_lifecycle")
                 c.execute(
-                    "UPDATE users SET inactivity_nudge_sent_at = %s WHERE phone_number = %s",
+                    "UPDATE users SET inactivity_nudge_sent_at = %s, "
+                    "inactivity_nudge_count = COALESCE(inactivity_nudge_count, 0) + 1 "
+                    "WHERE phone_number = %s",
                     (now_utc, phone_number)
                 )
                 conn.commit()
