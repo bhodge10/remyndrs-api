@@ -95,22 +95,24 @@ beat_schedule = {
             "expires": 3500,
         },
     },
-    # Send Day 2 feature prompt hourly — timezone-aware (9-10 AM local)
-    "send-day-2-feature-prompt": {
-        "task": "tasks.reminder_tasks.send_day_2_feature_prompt",
-        "schedule": crontab(minute=7),  # Every hour, at :07
-        "options": {
-            "expires": 3500,
-        },
-    },
-    # Send Day 3 engagement nudges hourly — timezone-aware (9-10 AM local)
-    "send-day-3-engagement-nudges": {
-        "task": "tasks.reminder_tasks.send_day_3_engagement_nudges",
-        "schedule": crontab(minute=10),  # Every hour, at :10
-        "options": {
-            "expires": 3500,
-        },
-    },
+    # Week-1 consolidation 2026-05-30: Day 2 (feature prompt) and Day 3
+    # (engagement nudge) unscheduled to cut the new-user barrage from 5 first-week
+    # proactive messages to 3 (Day 1 welcome + Day 4 email ask + Day 7 value recap).
+    # Task functions kept intact; re-add these entries to restore the full sequence.
+    # "send-day-2-feature-prompt": {
+    #     "task": "tasks.reminder_tasks.send_day_2_feature_prompt",
+    #     "schedule": crontab(minute=7),  # Every hour, at :07
+    #     "options": {
+    #         "expires": 3500,
+    #     },
+    # },
+    # "send-day-3-engagement-nudges": {
+    #     "task": "tasks.reminder_tasks.send_day_3_engagement_nudges",
+    #     "schedule": crontab(minute=10),  # Every hour, at :10
+    #     "options": {
+    #         "expires": 3500,
+    #     },
+    # },
     # Send Day 4 email collection hourly — timezone-aware (9-10 AM local)
     "send-day-4-email-collection": {
         "task": "tasks.reminder_tasks.send_day_4_email_collection",
