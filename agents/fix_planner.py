@@ -392,7 +392,7 @@ Intent: {issue.get('intent', details.get('intent', 'N/A'))}
             all_files.append(str(rel_path))
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=500,
         messages=[{
             "role": "user",
