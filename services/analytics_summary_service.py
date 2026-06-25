@@ -288,7 +288,7 @@ Format your response as:
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -341,7 +341,7 @@ def _parse_claude_response(response_text: str) -> tuple:
 _MODEL_ID_BY_CHOICE = {
     "haiku": "claude-haiku-4-5",
     "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-7",
+    "opus": "claude-opus-4-8",
 }
 
 _VALID_OPUS_EFFORTS = ("low", "medium", "high", "xhigh", "max")
