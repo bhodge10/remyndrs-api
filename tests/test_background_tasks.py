@@ -98,7 +98,11 @@ class TestRecurringReminderGeneration:
         phone = onboarded_user["phone"]
 
         from models.reminder import save_recurring_reminder
+        from models.user import create_or_update_user
         from database import get_db_connection, return_db_connection
+
+        # Recurring generation is Premium-only, so grant Premium first
+        create_or_update_user(phone, premium_status='premium')
 
         # Create a daily recurring reminder
         recurring_id = save_recurring_reminder(
@@ -133,6 +137,10 @@ class TestRecurringReminderGeneration:
         phone = onboarded_user["phone"]
 
         from models.reminder import save_recurring_reminder
+        from models.user import create_or_update_user
+
+        # Recurring generation is Premium-only, so grant Premium first
+        create_or_update_user(phone, premium_status='premium')
 
         # Create Monday recurring
         recurring_id = save_recurring_reminder(
@@ -156,7 +164,11 @@ class TestRecurringReminderGeneration:
         phone = onboarded_user["phone"]
 
         from models.reminder import save_recurring_reminder, pause_recurring_reminder
+        from models.user import create_or_update_user
         from database import get_db_connection, return_db_connection
+
+        # Premium so generation is gated only by the pause, not by tier
+        create_or_update_user(phone, premium_status='premium')
 
         recurring_id = save_recurring_reminder(
             phone,

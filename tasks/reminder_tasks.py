@@ -311,11 +311,21 @@ def generate_first_occurrence(recurring_id):
     """
     import pytz
     from datetime import datetime, timedelta
+    from services.tier_service import recurring_reminders_allowed
 
     try:
         recurring = get_recurring_reminder_by_id(recurring_id)
         if not recurring:
             logger.error(f"Recurring reminder {recurring_id} not found")
+            return None
+
+        # Recurring reminders are Premium-only. Skip generation if the user's
+        # tier doesn't allow them (keeps the invariant airtight regardless of
+        # which creation path got here).
+        if not recurring_reminders_allowed(recurring['phone_number']):
+            logger.info(
+                f"Skipping first occurrence for recurring {recurring_id} — non-Premium tier"
+            )
             return None
 
         # Parse time
@@ -394,6 +404,7 @@ def generate_recurring_reminders():
     """
     import pytz
     from datetime import datetime, timedelta
+    from services.tier_service import recurring_reminders_allowed
 
     try:
         recurring_list = get_all_active_recurring_reminders()
@@ -405,11 +416,26 @@ def generate_recurring_reminders():
         logger.info(f"Processing {len(recurring_list)} active recurring reminders")
 
         generated_count = 0
+        skipped_count = 0
         hours_ahead = 24  # Generate reminders for next 24 hours
+
+        # Cache the per-user recurring entitlement so we query tier at most once
+        # per phone number within a single run.
+        allowed_cache = {}
 
         for recurring in recurring_list:
             try:
                 recurring_id = recurring['id']
+                phone_number = recurring['phone_number']
+
+                # Pause generation for users whose tier no longer allows recurring
+                # reminders (e.g. after a Premium trial ends). The recurring row
+                # stays active=TRUE and auto-resumes if the user upgrades again.
+                if phone_number not in allowed_cache:
+                    allowed_cache[phone_number] = recurring_reminders_allowed(phone_number)
+                if not allowed_cache[phone_number]:
+                    skipped_count += 1
+                    continue
 
                 # Parse time
                 time_str = recurring['reminder_time']
@@ -464,8 +490,11 @@ def generate_recurring_reminders():
                 logger.error(f"Error processing recurring {recurring['id']}: {e}")
                 continue
 
-        logger.info(f"Generated {generated_count} reminders from recurring patterns")
-        return {"generated": generated_count}
+        logger.info(
+            f"Generated {generated_count} reminders from recurring patterns "
+            f"({skipped_count} skipped — non-Premium tier)"
+        )
+        return {"generated": generated_count, "skipped": skipped_count}
 
     except Exception as exc:
         logger.exception("Error in generate_recurring_reminders")
@@ -982,7 +1011,7 @@ Text UPGRADE now — {PREMIUM_MONTHLY_PRICE}/mo or {PREMIUM_ANNUAL_PRICE}/yr ($7
                 warning_to_send = f"""Your Premium trial has ended. You're now on the free plan:
 • 2 reminders/day
 • 5 lists, 5 memories
-• Existing recurring reminders keep working, but you can't create new ones
+• Recurring reminders are paused (text UPGRADE to resume them)
 
 All your data is safe!
 

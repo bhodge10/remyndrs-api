@@ -464,23 +464,32 @@ def can_save_memory(phone_number: str) -> tuple[bool, str | None]:
     return (True, None)
 
 
-def can_create_recurring_reminder(phone_number: str) -> tuple[bool, str | None]:
-    """Check if user can create recurring reminders."""
+def recurring_reminders_allowed(phone_number: str) -> bool:
+    """Return True if the user's current tier permits recurring reminders.
+
+    Used both to gate creation and to gate ongoing generation, so a user's
+    recurring reminders automatically pause when they are no longer Premium
+    (e.g. after a trial ends) and resume if they upgrade again.
+    """
     if BETA_MODE:
-        return (True, None)
+        return True
 
     tier = get_user_tier(phone_number)
     limits = get_tier_limits(tier)
+    return bool(limits['recurring_reminders'])
 
-    if not limits['recurring_reminders']:
-        from config import PREMIUM_MONTHLY_PRICE
-        return (
-            False,
-            "Recurring reminders are a Premium feature. "
-            f"Text UPGRADE for daily, weekly & monthly reminders ({PREMIUM_MONTHLY_PRICE}/mo)."
-        )
 
-    return (True, None)
+def can_create_recurring_reminder(phone_number: str) -> tuple[bool, str | None]:
+    """Check if user can create recurring reminders."""
+    if recurring_reminders_allowed(phone_number):
+        return (True, None)
+
+    from config import PREMIUM_MONTHLY_PRICE
+    return (
+        False,
+        "Recurring reminders are a Premium feature. "
+        f"Text UPGRADE for daily, weekly & monthly reminders ({PREMIUM_MONTHLY_PRICE}/mo)."
+    )
 
 
 def can_access_support(phone_number: str) -> tuple[bool, str | None]:
