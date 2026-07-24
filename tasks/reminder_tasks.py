@@ -711,6 +711,10 @@ def send_abandoned_onboarding_followups(self):
                 mark_followup_sent(user['phone_number'], '24h')
                 sent_count += 1
                 logger.info(f"Sent 24h onboarding followup to ...{user['phone_number'][-4:]}")
+            except UserOptedOutError:
+                # Expected: user replied STOP. Mark as sent so we don't retry every hour.
+                logger.info(f"24h followup skipped: user ...{user['phone_number'][-4:]} opted out")
+                mark_followup_sent(user['phone_number'], '24h')
             except Exception as e:
                 logger.error(f"Error sending 24h followup: {e}")
 
@@ -723,6 +727,10 @@ def send_abandoned_onboarding_followups(self):
                 mark_followup_sent(user['phone_number'], '7d')
                 sent_count += 1
                 logger.info(f"Sent 7d onboarding followup to ...{user['phone_number'][-4:]}")
+            except UserOptedOutError:
+                # Expected: user replied STOP. Mark as sent so we don't retry every hour.
+                logger.info(f"7d followup skipped: user ...{user['phone_number'][-4:]} opted out")
+                mark_followup_sent(user['phone_number'], '7d')
             except Exception as e:
                 logger.error(f"Error sending 7d followup: {e}")
 
