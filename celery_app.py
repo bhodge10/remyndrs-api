@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from sentry_setup import init_sentry
+init_sentry()
+
 # Get Redis URL from environment (Upstash format: rediss://:<password>@<host>:<port>)
 REDIS_URL = os.environ.get("UPSTASH_REDIS_URL", "redis://localhost:6379/0")
 
