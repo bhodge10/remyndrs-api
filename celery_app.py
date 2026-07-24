@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from sentry_setup import init_sentry
+init_sentry()
+
 # Get Redis URL from environment (Upstash format: rediss://:<password>@<host>:<port>)
 REDIS_URL = os.environ.get("UPSTASH_REDIS_URL", "redis://localhost:6379/0")
 
@@ -51,6 +54,32 @@ celery_app.conf.update(
 
     # Broker connection settings
     broker_connection_retry_on_startup=True,
+
+    # Upstash closes idle/long-lived connections ("Connection closed by server").
+    # Without socket timeouts, a half-open socket makes Beat hang forever without
+    # an error (outage of 2026-07-16: beat froze for a week while Render showed
+    # the service as live). Timeouts turn the hang into an exception that
+    # Celery's retry machinery recovers from; health_check_interval proactively
+    # PINGs so dead connections are replaced before they're used.
+    broker_transport_options={
+        "socket_timeout": 30,
+        "socket_connect_timeout": 15,
+        "socket_keepalive": True,
+        "retry_on_timeout": True,
+        "health_check_interval": 25,
+    },
+
+    # Same protection for the Redis result backend connections.
+    redis_socket_timeout=30,
+    redis_socket_connect_timeout=15,
+    redis_socket_keepalive=True,
+    redis_retry_on_timeout=True,
+    redis_backend_health_check_interval=25,
+
+    # On connection loss, cancel acks_late tasks so they're redelivered cleanly
+    # (send_single_reminder already guards against duplicate sends via the
+    # `sent` flag + row lock). This is also the Celery 6.0 default.
+    worker_cancel_long_running_tasks_on_connection_loss=True,
 
     # Beat scheduler settings
     beat_scheduler="celery.beat:PersistentScheduler",

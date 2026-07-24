@@ -206,7 +206,7 @@ Proactive AI intelligence layer — sends ONE contextual insight per day. 8 nudg
 
 **Required:** `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `DATABASE_URL`
 
-**Optional:** `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, `HASH_KEY`, `STRIPE_*` keys, `SMTP_*` for email, `ANTHROPIC_API_KEY` (Agent 4 AI file identification)
+**Optional:** `UPSTASH_REDIS_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, `HASH_KEY`, `STRIPE_*` keys, `SMTP_*` for email, `ANTHROPIC_API_KEY` (Agent 4 AI file identification), `SENTRY_DSN` (error tracking + reminder-pipeline heartbeat via Sentry Crons; no-op when unset)
 
 ## Rate Limiting
 

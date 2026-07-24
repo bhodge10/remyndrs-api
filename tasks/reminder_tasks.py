@@ -26,6 +26,27 @@ from services.metrics_service import track_reminder_delivery
 
 logger = get_task_logger(__name__)
 
+try:
+    from sentry_sdk import monitor as _sentry_monitor
+except ImportError:  # sentry-sdk not installed; heartbeat becomes a no-op
+    def _sentry_monitor(monitor_slug=None, monitor_config=None):
+        def _deco(f):
+            return f
+        return _deco
+
+# Sentry Crons heartbeat: the task runs every 30s, so a single missed minute
+# (plus margin) means the beat/worker pipeline is down — this is the alert that
+# catches silent hangs like the 2026-07-16 outage, which no exception tracker
+# can see. No-ops when SENTRY_DSN is unset.
+_REMINDER_MONITOR_CONFIG = {
+    "schedule": {"type": "interval", "value": 1, "unit": "minute"},
+    "checkin_margin": 3,       # minutes late before a check-in counts as missed
+    "max_runtime": 5,          # minutes before an in-progress run counts as failed
+    "failure_issue_threshold": 2,
+    "recovery_threshold": 1,
+    "timezone": "UTC",
+}
+
 
 @celery_app.task(
     bind=True,
@@ -35,6 +56,7 @@ logger = get_task_logger(__name__)
     time_limit=120,
     soft_time_limit=100,
 )
+@_sentry_monitor(monitor_slug="check-and-send-reminders", monitor_config=_REMINDER_MONITOR_CONFIG)
 def check_and_send_reminders(self):
     """
     Periodic task to check for due reminders and dispatch them.

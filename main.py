@@ -18,6 +18,8 @@ from twilio.request_validator import RequestValidator
 # Local imports
 import secrets
 from config import logger, ENVIRONMENT, MAX_LISTS_PER_USER, MAX_ITEMS_PER_LIST, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, PUBLIC_PHONE_NUMBER, ADMIN_USERNAME, ADMIN_PASSWORD, RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW, REQUEST_TIMEOUT, TWILIO_WEBHOOK_TIMEOUT
+from sentry_setup import init_sentry
+init_sentry()
 from collections import defaultdict
 import time
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
