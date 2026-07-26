@@ -901,6 +901,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             "hello": "website-ios",
             "hey, sign me up!": "facebook",
             "go": "facebook",
+            "work": "linkedin",
             "hi, i'd like to sign up!": "reddit",
             "try": "reddit",
             "hey, i'd like to sign up!": "google",
@@ -917,6 +918,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             ("reddit", "reddit", None),
             ("tiktok", "tiktok", None),
             ("google", "google", None),
+            ("linkedin", "linkedin", None),
         ]
         if not is_user_onboarded(phone_number):
             msg_lower = incoming_msg.lower().strip()
@@ -929,6 +931,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     referral_source = "website-ios"
                 elif re.match(r'^go\b', msg_lower):
                     referral_source = "facebook"
+                elif re.match(r'^work\b', msg_lower):
+                    referral_source = "linkedin"
 
             # Fuzzy fallback: check if message contains key phrases
             if not referral_source:
