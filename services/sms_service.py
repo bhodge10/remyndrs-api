@@ -46,6 +46,37 @@ def _log_outbound(phone_number, message_type):
         logger.warning(f"Failed to log outbound SMS: {e}")
 
 
+def log_inbound_sms(phone_number, body, message_sid=None):
+    """Log a validated inbound SMS webhook hit to sms_inbound_log.
+
+    Called at the top of the /sms webhook before any processing, so
+    top-of-funnel texts leave a trace even when handling fails later.
+    is_new_user records whether the sender was unknown at receipt time —
+    joining users after the fact undercounts, because signups land in the
+    users table and stop looking new. Never raises.
+    """
+    try:
+        from database import get_db_connection, return_db_connection
+        conn = get_db_connection()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT EXISTS(SELECT 1 FROM users WHERE phone_number = %s)',
+                (phone_number,)
+            )
+            is_new_user = not c.fetchone()[0]
+            c.execute(
+                'INSERT INTO sms_inbound_log (phone_number, body_preview, message_sid, is_new_user) '
+                'VALUES (%s, %s, %s, %s)',
+                (phone_number, (body or '')[:160], message_sid or None, is_new_user)
+            )
+            conn.commit()
+        finally:
+            return_db_connection(conn)
+    except Exception as e:
+        logger.warning(f"Failed to log inbound SMS: {e}")
+
+
 # System-pushed message types — included in the "recently messaged?" check
 # so two different lifecycle systems don't fire back-to-back. User-pulled
 # replies (reminder, reply, billing, support, signup, alert) are excluded.

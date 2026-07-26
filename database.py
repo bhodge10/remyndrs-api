@@ -630,6 +630,18 @@ def init_db():
             )""",
             "CREATE INDEX IF NOT EXISTS idx_sms_outbound_log_created ON sms_outbound_log(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_sms_outbound_log_phone ON sms_outbound_log(phone_number)",
+            # Inbound SMS log: every validated /sms webhook hit, recorded before
+            # any processing so texts that fail later still leave a trace
+            """CREATE TABLE IF NOT EXISTS sms_inbound_log (
+                id SERIAL PRIMARY KEY,
+                phone_number TEXT NOT NULL,
+                body_preview TEXT,
+                message_sid TEXT,
+                is_new_user BOOLEAN,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_sms_inbound_log_created ON sms_inbound_log(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_sms_inbound_log_phone ON sms_inbound_log(phone_number)",
             # Twilio costs: track failed messages separately
             "ALTER TABLE twilio_costs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0",
             "ALTER TABLE twilio_costs ADD COLUMN IF NOT EXISTS failed_cost NUMERIC(10,4) DEFAULT 0",

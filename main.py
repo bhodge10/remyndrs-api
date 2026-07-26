@@ -49,7 +49,7 @@ from routes.handlers.lists import (
     handle_leave_shared_list, handle_accept_share, handle_decline_share,
     handle_pending_share_name, format_all_lists_display
 )
-from services.sms_service import send_sms
+from services.sms_service import send_sms, log_inbound_sms
 from services.ai_service import process_with_ai, parse_list_items
 from services.onboarding_service import handle_onboarding
 from services.first_action_service import should_prompt_daily_summary, mark_daily_summary_prompted, get_daily_summary_prompt_message
@@ -468,6 +468,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 resp.message(maintenance_msg)
                 logger.info(f"Staging: Blocked non-test number {mask_phone_number(phone_number)}")
                 return Response(content=str(resp), media_type="application/xml")
+
+        # Ground truth for "did someone text us": every message that passed
+        # signature validation and dedup gets a row, before any handling that
+        # could fail. Rate-limited messages are still real inbound attempts.
+        log_inbound_sms(phone_number, incoming_msg, message_sid)
 
         # Check rate limit
         if not check_rate_limit(phone_number):
