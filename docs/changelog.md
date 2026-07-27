@@ -1,5 +1,32 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## Auto-Detected Issue Reports (Jul 2026)
+Reminders silently stopped going out for roughly a week, affecting 4-6 users. Reviewing those conversations afterward showed the users had *told us* — in plain language, in the normal SMS thread — that something was broken. Nobody typed `SUPPORT` or `BUG`, so nothing reached the support inbox and the outage ran for days.
+
+New side-channel observer in `services/issue_detector.py`, hooked into `/sms` right after the SUPPORT MODE CHECK. It never changes routing or the user's reply — it only records and notifies.
+
+**Three stages, cheapest first:**
+1. `looks_like_issue_report()` — regex prefilter, free. Generous on purpose, with `NOT_AN_ISSUE` guards so "remind me to fix the broken sink" and "add bug spray to my grocery list" don't match.
+2. `classify_issue_report()` — one `gpt-4o-mini` call (6s timeout, JSON mode) with the last 4 exchanges as context. Returns category (`service_outage`/`reminder_delivery`/`billing`/`confusion`/`other`), severity, and a one-line summary. Any error returns `None` — silence is the safe failure mode.
+3. `record_and_notify()` — writes to `contact_messages` (`source='sms_auto'`, `category='auto_{category}'`), emails, escalates.
+
+**Notification behavior:**
+- Per-flag email, rate-limited to one per user per 6h — a frustrated user texting six times produces six rows but one email.
+- **Outage escalation:** 3+ distinct users flagged inside 24h sends an urgent email plus an admin SMS, once per day. Independent users complaining simultaneously is what an outage looks like from the inbox — this is the alert that should have fired on day one.
+- Daily digest at 13:00 UTC (~9 AM Eastern), grouped by category. Sends nothing when there were no flags.
+
+**Deliberately silent to the user** — the reply is byte-identical whether or not a message was flagged, so a misclassification produces no visible weirdness. Revisit after reviewing real-world accuracy.
+
+**Runs as a FastAPI background task** — it makes its own AI call on top of the main `process_with_ai()` call, and the webhook must fit inside Twilio's 15s timeout. `background_tasks` is `None` when `sms_reply` is called directly (tests), where it falls back to inline.
+
+**Settings (DB, flippable without a deploy):** `auto_issue_detection_enabled` (kill switch), `auto_issue_email_cooldown_hours` (default 6), `auto_issue_outage_threshold` (default 3).
+
+**No schema migration** — `contact_messages` already had every column needed.
+
+**Files:** `services/issue_detector.py` (new), `services/email_service.py` (3 new senders), `main.py`, `tasks/monitoring_tasks.py`, `celery_config.py`, `tests/test_issue_detection.py` (new), `CLAUDE.md`.
+
+Also fixed a stale entry in `CLAUDE.md`: the table list named `conversation_flags`, which does not exist. The real table is `conversation_analysis`.
+
 ## Day 1 & Day 2 Lifecycle Messages (Mar 2026)
 Added two new lifecycle messages to fill the 48-hour gap between onboarding (Day 0) and the Day 3 feature discovery nudge, targeting the 62% of users who don't return after Day 1.
 

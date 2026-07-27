@@ -393,3 +393,65 @@ def check_critical_issues(self):
     except Exception as exc:
         logger.exception("Error checking critical issues")
         raise
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=300,
+    acks_late=True,
+    time_limit=300,
+    soft_time_limit=240,
+)
+def send_issue_flag_digest(self, hours: int = 24):
+    """
+    Daily rollup of auto-detected issue reports.
+
+    Individual flags already email as they happen (rate-limited per user), so
+    this exists to make a slow-burning pattern visible - a handful of users
+    complaining across a day reads very differently in one message than as
+    scattered emails.
+
+    Sends nothing when there were no flags.
+    """
+    try:
+        from datetime import timedelta
+        from database import get_db_connection, return_db_connection
+        from services.issue_detector import AUTO_SOURCE
+        from services.email_service import send_issue_digest_notification
+
+        conn = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute(
+                """SELECT phone_number, message, category, created_at
+                   FROM contact_messages
+                   WHERE source = %s AND created_at > %s
+                   ORDER BY created_at DESC""",
+                (AUTO_SOURCE, datetime.utcnow() - timedelta(hours=hours))
+            )
+            flags = [
+                {
+                    'phone_number': row[0],
+                    'message': row[1],
+                    'category': row[2],
+                    'created_at': row[3],
+                }
+                for row in c.fetchall()
+            ]
+        finally:
+            if conn:
+                return_db_connection(conn)
+
+        if not flags:
+            logger.info("Issue digest: no flags in the last %sh, skipping", hours)
+            return {'flags': 0, 'sent': False}
+
+        sent = send_issue_digest_notification(flags, hours=hours)
+        logger.info(f"Issue digest: {len(flags)} flag(s), sent={sent}")
+        return {'flags': len(flags), 'sent': bool(sent)}
+
+    except Exception as exc:
+        logger.exception("Error sending issue flag digest")
+        raise

@@ -87,7 +87,7 @@ SMS -> Twilio webhook (/sms) -> main.py validates -> ai_service.py processes wit
 | `utils/db_helpers.py` | Encryption-aware database query helpers |
 
 ### Database Tables
-`users`, `reminders`, `recurring_reminders`, `memories`, `lists`, `list_items`, `list_shares`, `interactions`, `support_tickets`, `contact_messages`, `broadcast_messages`, `conversation_flags`, `smart_nudges`, `monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
+`users`, `reminders`, `recurring_reminders`, `memories`, `lists`, `list_items`, `list_shares`, `interactions`, `support_tickets`, `contact_messages`, `broadcast_messages`, `conversation_analysis`, `smart_nudges`, `monitoring_issues`, `monitoring_runs`, `issue_patterns`, `issue_pattern_links`, `validation_runs`, `issue_resolutions`, `pattern_resolutions`, `health_snapshots`, `fix_proposals`, `fix_proposal_runs`
 
 ## Deployment
 
@@ -178,6 +178,19 @@ When users view a numbered list (memories, lists, reminders, recurring reminders
 **YES confirmation handler** supports all types: `reminder`, `recurring`, `list_item`, `memory`, `list`.
 
 **When adding new viewable lists:** set `last_active_list` to a `__MARKER__` when displaying, add a handler in the delete-by-number section, add the marker to the exclusion list, and add the type to the YES confirmation handler.
+
+### Auto-Detected Issue Reports
+Users report outages in plain language ("my reminders haven't come through in days") instead of texting `SUPPORT`/`BUG`, so those reports never reached the support inbox. `services/issue_detector.py` is a side-channel observer on the `/sms` path that notices them.
+
+Three stages, cheapest first: a regex prefilter (`looks_like_issue_report()`), a small confirmation AI call (`classify_issue_report()`), then `record_and_notify()`. Hooked into `main.py` right after the SUPPORT MODE CHECK — users with an open ticket have already returned, so they can't be double-reported.
+
+- **Silent to the user.** The reply is unchanged; only the support inbox learns about it.
+- **Runs as a FastAPI background task** (`background_tasks` param on `sms_reply`). It makes its own AI call, and the webhook must still fit inside Twilio's 15s timeout. The param is `None` when the handler is called directly (tests), in which case detection runs inline.
+- Flags are stored in `contact_messages` with `source='sms_auto'` and `category='auto_{category}'`, so they appear in the existing CS portal with the resolved/reply workflow. No new table.
+- Email per flag is rate-limited per user; **3+ distinct users inside 24h escalates** with an urgent email + admin SMS (the outage signature). A daily digest runs at 13:00 UTC.
+- Settings (DB, no deploy needed): `auto_issue_detection_enabled` (kill switch), `auto_issue_email_cooldown_hours` (6), `auto_issue_outage_threshold` (3).
+
+When editing the prefilter, keep the `NOT_AN_ISSUE` guards in sync — they're what stops "remind me to fix the broken sink" from being treated as a complaint.
 
 ### Keyword Handlers vs AI Processing
 `main.py` has keyword-based handlers that run **before** AI processing. When adding new commands:
