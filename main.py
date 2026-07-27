@@ -8,7 +8,7 @@ import json
 import pytz
 import asyncio
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Form, Request, HTTPException
+from fastapi import FastAPI, Form, Request, HTTPException, BackgroundTasks
 from fastapi.responses import Response, HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -390,8 +390,14 @@ logger.info(f"✅ Application initialized in {ENVIRONMENT} mode")
 # =====================================================
 
 @app.post("/sms")
-async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(...)):
-    """Handle incoming SMS from Twilio"""
+async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(...),
+                    background_tasks: BackgroundTasks = None):
+    """Handle incoming SMS from Twilio
+
+    background_tasks is injected by FastAPI from the type annotation; it stays
+    None when the handler is called directly (tests), in which case background
+    work runs inline.
+    """
     request_start_time = time.time()
     try:
         # Validate Twilio signature (skip in development and staging)
@@ -892,6 +898,26 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     resp.message(staging_prefix(f"[Support Ticket #{ticket_id}]\n\nMessage received. We'll respond shortly.\n\n(You're now in support mode - replies will continue to go to support. Text EXIT to leave support or CLOSE to close ticket)"))
                     log_interaction(phone_number, incoming_msg, f"Support message (ticket #{ticket_id})", "support", True)
                 return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # AUTO-DETECTED ISSUE REPORTS
+        # ==========================================
+        # Users report outages in plain language instead of texting SUPPORT/BUG,
+        # so those reports never reach the support inbox. This observer notices
+        # them and notifies. It is placed after the support mode check so users
+        # who already have an open ticket aren't double-reported.
+        #
+        # Runs as a background task: it makes its own AI call, and the webhook
+        # still has to fit inside Twilio's 15s timeout. Never affects the reply.
+        try:
+            from services.issue_detector import maybe_flag_issue_report
+            if background_tasks is not None:
+                background_tasks.add_task(maybe_flag_issue_report, phone_number, incoming_msg)
+            else:
+                # Direct invocation (tests) - no background task runner available
+                maybe_flag_issue_report(phone_number, incoming_msg)
+        except Exception as e:
+            logger.warning(f"Issue detector hook error: {e}")
 
         # ==========================================
         # REFERRAL SOURCE DETECTION

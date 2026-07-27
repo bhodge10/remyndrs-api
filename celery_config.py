@@ -215,6 +215,19 @@ beat_schedule = {
         },
     },
 
+    # Daily rollup of auto-detected issue reports at 1 PM UTC (~9 AM Eastern)
+    # Individual flags email as they happen; this makes a slow-burning
+    # pattern across the day visible in one place. No email when there
+    # were no flags.
+    "issue-flag-digest-daily": {
+        "task": "tasks.monitoring_tasks.send_issue_flag_digest",
+        "schedule": crontab(hour=13, minute=0),  # 1:00 PM UTC
+        "kwargs": {"hours": 24},
+        "options": {
+            "expires": 3600,  # 1 hour expiry
+        },
+    },
+
     # Run code analyzer (Agent 4) every 8 hours
     # Generates root cause analyses and Claude Code prompts for open issues
     "monitoring-agent4-analyze": {
