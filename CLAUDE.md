@@ -9,6 +9,15 @@ For detailed docs, see:
 - `docs/ux-roadmap.md` - SMS app UX improvement plan
 - `docs/website-roadmap.md` - Website (remyndrs.com) improvement plan
 - `docs/family-plan.md` - Family plan feature analysis and implementation plan (not yet implemented)
+- `docs/ms365-calendar.md` - Microsoft 365 calendar integration implementation plan (not yet implemented)
+
+## Active Plan — Remind Brad at Session Start
+
+**MS 365 calendar integration (Premium feature).** Full implementation plan is in `docs/ms365-calendar.md` — plan is complete (2026-08-13), implementation NOT started. At the start of a session, briefly remind Brad this is queued. Next actions, in order:
+1. **Phase 0 (external, calendar time — start first):** Entra ID app registration in the simple-it.us tenant + Partner Center publisher verification kickoff. Dev/dogfood can proceed before verification lands.
+2. **Phase 1 (code):** schema + config + tier gate + OAuth connect flow (`CONNECT CALENDAR` keyword → magic link → tokens stored encrypted).
+
+Remove this section once the feature ships (the docs link above stays).
 
 ## Project Overview
 
