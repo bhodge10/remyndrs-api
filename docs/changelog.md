@@ -1,5 +1,19 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## Email Reminder Fallback (Aug 2026)
+Built during the Aug 2026 Twilio account suspension (suspicious-activity flag; every outbound SMS API call failed while inbound stopped reaching the webhook entirely). Reminders were never at risk of being lost — `send_single_reminder` only marks `sent = TRUE` after a successful send, so they queue and retry — but users with due reminders heard nothing.
+
+When an SMS send fails inside `send_single_reminder`, the task now attempts email delivery before scheduling a retry:
+- `_try_reminder_email_fallback()` in `tasks/reminder_tasks.py` — checks the kill switch, looks up the user's email (encryption-aware via new `get_user_email()` in `models/user.py`), and sends via new `send_reminder_email()` in `services/email_service.py`.
+- On successful email handoff the code falls through to the existing mark-as-sent block (same transaction, same fresh-connection fallback), so delivery accounting is unchanged.
+- On any failure (switch off, no email, SMTP error) behavior is identical to before: rollback, `track_reminder_delivery("failed")`, Celery retry, stale-claim release.
+
+**Setting (DB, flippable without a deploy):** `reminder_email_fallback_enabled` (default `false`). Flip to `"true"` in the `settings` table during an SMS provider outage; flip back after restoration so email never masks a real delivery problem.
+
+**Scope:** one-off reminder delivery only. Recurring reminders funnel through the same send task, so they're covered; trial lifecycle messages, nudges, and daily summaries just retry as before. The email tells the user why they're getting it by email and that replies aren't monitored (SNOOZE is omitted — inbound is down during an outage anyway).
+
+**Files:** `tasks/reminder_tasks.py`, `services/email_service.py`, `models/user.py`, `tests/test_email_fallback.py` (new), `CLAUDE.md`.
+
 ## Auto-Detected Issue Reports (Jul 2026)
 Reminders silently stopped going out for roughly a week, affecting 4-6 users. Reviewing those conversations afterward showed the users had *told us* — in plain language, in the normal SMS thread — that something was broken. Nobody typed `SUPPORT` or `BUG`, so nothing reached the support inbox and the outage ran for days.
 

@@ -488,3 +488,87 @@ def send_issue_digest_notification(flags: list, hours: int = 24):
     except Exception as e:
         logger.error(f"Failed to send issue digest: {e}")
         return False
+
+
+def send_reminder_email(to_email: str, reminder_text: str, first_name: str = None):
+    """Send a reminder to the user by email.
+
+    Fallback channel used when SMS delivery is unavailable (e.g. Twilio outage).
+    Returns True only on successful SMTP handoff — callers use the return value
+    to decide whether the reminder can be marked as sent.
+    """
+    if not SMTP_ENABLED:
+        logger.warning("SMTP not configured - cannot send reminder email")
+        return False
+
+    if not to_email or '@' not in to_email:
+        return False
+
+    try:
+        greeting = f"Hi {first_name}," if first_name else "Hi,"
+
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = "Reminder from Remyndrs"
+        msg['From'] = SMTP_FROM_EMAIL
+        msg['To'] = to_email
+
+        text_content = f"""{greeting}
+
+Here's your reminder:
+
+{reminder_text}
+
+---
+You're receiving this by email because text message delivery is temporarily
+unavailable. Your reminders are safe and texting will resume automatically.
+Replies to this email are not monitored.
+"""
+
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: #3498db; color: white; padding: 15px; border-radius: 8px 8px 0 0; }}
+        .content {{ background: #f9f9f9; padding: 20px; border: 1px solid #ddd; }}
+        .message {{ background: white; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #3498db; font-size: 16px; }}
+        .footer {{ padding: 15px; font-size: 12px; color: #666; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2 style="margin: 0;">&#9200; Your Remyndr</h2>
+        </div>
+        <div class="content">
+            <p>{greeting}</p>
+            <div class="message">
+                {reminder_text}
+            </div>
+        </div>
+        <div class="footer">
+            <p>You're receiving this by email because text message delivery is temporarily
+            unavailable. Your reminders are safe and texting will resume automatically.
+            Replies to this email are not monitored.</p>
+        </div>
+    </div>
+</body>
+</html>
+        """
+
+        msg.attach(MIMEText(text_content, 'plain'))
+        msg.attach(MIMEText(html_content, 'html'))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_string())
+
+        logger.info(f"Reminder email sent to {to_email.split('@')[0][:2]}***@{to_email.split('@')[1]}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send reminder email: {e}")
+        return False

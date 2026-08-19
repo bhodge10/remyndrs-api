@@ -153,6 +153,9 @@ All timestamps stored in UTC, converted to user timezone on display. Timezone de
 ### Reminder Atomicity
 Uses `SELECT FOR UPDATE SKIP LOCKED` for distributed reminder claiming. Stale tasks released every 15 minutes.
 
+### Email Reminder Fallback
+When an SMS send fails in `send_single_reminder`, the task tries email delivery for users with an email on file (`_try_reminder_email_fallback()` in `tasks/reminder_tasks.py` → `send_reminder_email()` in `services/email_service.py`), then marks the reminder sent. Gated by the `reminder_email_fallback_enabled` DB setting (default `false`) — flip it in the `settings` table during an SMS provider outage, no deploy needed, and flip it back after. Covers reminder delivery only; lifecycle messages just retry.
+
 ### Subscription Tiers
 - **Free (v1 - grandfathered existing users):** 2 reminders/day, 2 lists, 5 items/list, 5 memories
 - **Free (v2 - new users):** 3 reminders/week (counted by scheduled date), 1 list, 3 items/list, 3 memories
