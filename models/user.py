@@ -260,6 +260,40 @@ def get_user_first_name(phone_number: str) -> Optional[str]:
             return_db_connection(conn)
 
 
+def get_user_email(phone_number: str) -> Optional[str]:
+    """Get user's email address (decrypted if encryption is enabled)"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if ENCRYPTION_ENABLED:
+            from utils.encryption import hash_phone, decrypt_field
+            phone_hash = hash_phone(phone_number)
+            c.execute('SELECT email, email_encrypted FROM users WHERE phone_hash = %s', (phone_hash,))
+            result = c.fetchone()
+            if not result:
+                c.execute('SELECT email, email_encrypted FROM users WHERE phone_number = %s', (phone_number,))
+                result = c.fetchone()
+            if result:
+                # Prefer encrypted field if available
+                if result[1]:
+                    return decrypt_field(result[1])
+                return result[0]
+        else:
+            c.execute('SELECT email FROM users WHERE phone_number = %s', (phone_number,))
+            result = c.fetchone()
+            if result:
+                return result[0]
+        return None
+    except Exception as e:
+        logger.error(f"Error getting user email: {e}")
+        return None
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def get_last_active_list(phone_number: str) -> Optional[str]:
     """Get user's last active list name"""
     conn = None

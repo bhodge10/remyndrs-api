@@ -95,6 +95,28 @@ def check_and_send_reminders(self):
         raise self.retry(exc=exc)
 
 
+def _try_reminder_email_fallback(phone_number: str, reminder_text: str) -> bool:
+    """Attempt email delivery of a reminder when SMS fails.
+
+    Gated by the 'reminder_email_fallback_enabled' DB setting (default off)
+    so it can be flipped on during an SMS provider outage without a deploy.
+    Returns True only if the email was actually handed to SMTP.
+    """
+    try:
+        from database import get_setting
+        if get_setting("reminder_email_fallback_enabled", "false").lower() != "true":
+            return False
+        from models.user import get_user_email, get_user_first_name
+        from services.email_service import send_reminder_email
+        email = get_user_email(phone_number)
+        if not email:
+            return False
+        return send_reminder_email(email, reminder_text, get_user_first_name(phone_number))
+    except Exception:
+        logger.exception("Email fallback attempt failed")
+        return False
+
+
 @celery_app.task(
     bind=True,
     max_retries=3,
@@ -184,11 +206,16 @@ def send_single_reminder(self, reminder_id: int, phone_number: str, reminder_tex
             return {"status": "skipped", "reason": "user_opted_out"}
 
         except Exception as exc:
-            # SMS failed - rollback to release lock, then retry
-            conn.rollback()
-            logger.exception(f"Error sending SMS for reminder {reminder_id}")
-            track_reminder_delivery(reminder_id, "failed", str(exc))
-            raise self.retry(exc=exc)
+            # SMS failed - try email fallback while the lock is still held.
+            # On success we fall through to the shared mark-as-sent block below.
+            if _try_reminder_email_fallback(phone_number, reminder_text):
+                logger.warning(f"Reminder {reminder_id}: SMS failed, delivered via email fallback")
+            else:
+                # No email delivery - rollback to release lock, then retry
+                conn.rollback()
+                logger.exception(f"Error sending SMS for reminder {reminder_id}")
+                track_reminder_delivery(reminder_id, "failed", str(exc))
+                raise self.retry(exc=exc)
 
         # SMS sent successfully - mark as sent in the SAME transaction
         # This keeps the FOR UPDATE lock held until both SMS send and flag update
