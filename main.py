@@ -5661,6 +5661,34 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                             last_active_list="__LISTS__",
                             pending_reminder_delete=None,
                         )
+                    else:
+                        reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
+            else:
+                # No last active list, show all lists (or single list directly)
+                lists = get_lists(phone_number)
+                if len(lists) == 1:
+                    list_id = lists[0][0]
+                    list_name = lists[0][1]
+                    create_or_update_user(phone_number, last_active_list=list_name)
+                    items = get_list_items(list_id)
+                    if items:
+                        item_lines = []
+                        for i, (item_id, item_text, completed) in enumerate(items, 1):
+                            if completed:
+                                item_lines.append(f"{i}. [x] {item_text}")
+                            else:
+                                item_lines.append(f"{i}. {item_text}")
+                        reply_text = f"{list_name}:\n\n" + "\n".join(item_lines)
+                    else:
+                        reply_text = f"Your {list_name} is empty."
+                elif lists:
+                    list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
+                    reply_text = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
+                    create_or_update_user(
+                        phone_number,
+                        last_active_list="__LISTS__",
+                        pending_reminder_delete=None,
+                    )
                 else:
                     reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
             log_interaction(phone_number, incoming_msg, reply_text, "show_current_list", True)

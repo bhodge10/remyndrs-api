@@ -3,7 +3,7 @@ Tests for SHOW LISTS number-picker replies.
 
 Production bug: after SHOW LISTS ("Reply with a number to see that list"),
 the user texted "Show 3" expecting list #3 and instead got a reminder-delete
-confirmation. The picker only matched /^\d+$/, so "Show 3" fell through to
+confirmation. The picker only matched a bare digit, so "Show 3" fell through to
 the AI which emitted delete_reminder for scheduled reminder #3.
 """
 
