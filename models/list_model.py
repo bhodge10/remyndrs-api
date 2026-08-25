@@ -3,11 +3,29 @@ List Model
 Handles all list-related database operations
 """
 
+import html
 from datetime import datetime
 from typing import Any, Optional
 
 from database import get_db_connection, return_db_connection
 from config import logger, ENCRYPTION_ENABLED, SHARED_LIST_MAX_MEMBERS, SHARED_LIST_MAX_PER_USER, SHARED_LIST_MAX_RECEIVED
+
+# last_active_list context markers are not real list names
+_CONTEXT_MARKERS = frozenset({
+    "__RECURRING__", "__REMINDERS__", "__LISTS__", "__MEMORIES__",
+})
+_PARTIAL_MATCH_MIN = 3
+
+
+def _norm_text(value: str) -> str:
+    """Lowercase, strip, and HTML-unescape for lookup comparison.
+
+    Leftover encoded names from before the storage-time escaping fix
+    (e.g. Sam&#39;s Club) then match user/AI input like "Sam's Club".
+    """
+    if not value:
+        return ""
+    return html.unescape(value).strip().lower()
 
 
 def create_list(phone_number: str, list_name: str) -> Optional[int]:
@@ -127,7 +145,28 @@ def get_list_by_name(phone_number: str, list_name: str) -> Optional[tuple[int, s
             )
             result = c.fetchone()
 
-        return result
+        if result:
+            return result
+
+        # Fallback: HTML-unescaped equality (issue #15 leftover encoded names)
+        if list_name:
+            if ENCRYPTION_ENABLED:
+                from utils.encryption import hash_phone
+                phone_hash = hash_phone(phone_number)
+                c.execute(
+                    'SELECT id, list_name FROM lists WHERE phone_hash = %s OR phone_number = %s',
+                    (phone_hash, phone_number)
+                )
+            else:
+                c.execute(
+                    'SELECT id, list_name FROM lists WHERE phone_number = %s',
+                    (phone_number,)
+                )
+            target = _norm_text(list_name)
+            for row in c.fetchall():
+                if _norm_text(row[1]) == target:
+                    return row
+        return None
     except Exception as e:
         logger.error(f"Error getting list by name: {e}")
         return None
@@ -395,43 +434,12 @@ def find_item_in_any_list(phone_number: str, item_text: str) -> list[tuple[int, 
 
 def delete_list_item(phone_number: str, list_name: str, item_text: str) -> bool:
     """Delete an item from a list"""
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-
-        # Find the list first
-        if ENCRYPTION_ENABLED:
-            from utils.encryption import hash_phone
-            phone_hash = hash_phone(phone_number)
-            c.execute(
-                'SELECT id FROM lists WHERE phone_hash = %s AND LOWER(list_name) = LOWER(%s)',
-                (phone_hash, list_name)
-            )
-        else:
-            c.execute(
-                'SELECT id FROM lists WHERE phone_number = %s AND LOWER(list_name) = LOWER(%s)',
-                (phone_number, list_name)
-            )
-
-        list_result = c.fetchone()
-        if not list_result:
-            return False
-
-        list_id = list_result[0]
-        c.execute(
-            'DELETE FROM list_items WHERE list_id = %s AND LOWER(item_text) = LOWER(%s)',
-            (list_id, item_text)
-        )
-        deleted = c.rowcount > 0
-        conn.commit()
-        return deleted
-    except Exception as e:
-        logger.error(f"Error deleting list item: {e}")
+    # Resolve list via the same lookup as show/add so HTML-encoded leftover
+    # names and encryption fallbacks stay consistent.
+    list_info = get_list_by_name(phone_number, list_name)
+    if not list_info:
         return False
-    finally:
-        if conn:
-            return_db_connection(conn)
+    return delete_list_item_by_list_id(list_info[0], item_text)
 
 
 def delete_list(phone_number: str, list_name: str) -> bool:
@@ -1068,6 +1076,12 @@ def get_accessible_list_by_name(phone_number: str, list_name: str) -> Optional[t
         result = c.fetchone()
         if result:
             return (result[0], result[1], True, result[2])
+
+        # Fallback: HTML-unescaped equality for leftover encoded names
+        if list_name:
+            for lid, name, _count, _done, owner in get_shared_lists_for_user(phone_number):
+                if _norm_text(name) == _norm_text(list_name):
+                    return (lid, name, True, owner)
         return None
     except Exception as e:
         logger.error(f"Error getting accessible list: {e}")
@@ -1240,6 +1254,13 @@ def delete_list_item_by_list_id(list_id: int, item_text: str) -> bool:
             'DELETE FROM list_items WHERE list_id = %s AND LOWER(item_text) = LOWER(%s)',
             (list_id, item_text)
         )
+        if c.rowcount == 0 and item_text:
+            # Exact SQL miss — HTML-unescaped equality on this list's items
+            target = _norm_text(item_text)
+            c.execute('SELECT id, item_text FROM list_items WHERE list_id = %s', (list_id,))
+            matches = [row for row in c.fetchall() if _norm_text(row[1]) == target]
+            if len(matches) == 1:
+                c.execute('DELETE FROM list_items WHERE id = %s', (matches[0][0],))
         deleted = c.rowcount > 0
         conn.commit()
         return deleted
@@ -1249,3 +1270,145 @@ def delete_list_item_by_list_id(list_id: int, item_text: str) -> bool:
     finally:
         if conn:
             return_db_connection(conn)
+
+
+def match_item_in_list(
+    list_id: int,
+    item_text: str,
+    exact_only: bool = False
+) -> Optional[tuple[int, str, bool]]:
+    """Find an item in a list by exact (HTML-unescaped) match, then unique partial.
+
+    Returns (item_id, item_text, completed) or None.
+    """
+    if not item_text:
+        return None
+    items = get_list_items(list_id)
+    target = _norm_text(item_text)
+    if not target:
+        return None
+
+    exact = [i for i in items if _norm_text(i[1]) == target]
+    if exact:
+        return exact[0]
+    if exact_only or len(target) < _PARTIAL_MATCH_MIN:
+        return None
+
+    partial = [
+        i for i in items
+        if target in _norm_text(i[1]) or _norm_text(i[1]) in target
+    ]
+    if len(partial) == 1:
+        return partial[0]
+    return None
+
+
+def _iter_accessible_lists(phone_number: str):
+    """Yield (list_id, list_name, is_shared, owner_phone) for owned + accepted shared lists."""
+    for lid, name, *_rest in get_lists(phone_number):
+        yield lid, name, False, None
+    for lid, name, _count, _done, owner in get_shared_lists_for_user(phone_number):
+        yield lid, name, True, owner
+
+
+def _unique_partial_list(phone_number: str, fragment: str) -> Optional[tuple[int, str, bool, Optional[str]]]:
+    """Unique partial/substring list-name match across owned + shared lists."""
+    frag = _norm_text(fragment)
+    if len(frag) < _PARTIAL_MATCH_MIN:
+        return None
+    matches = []
+    for lid, name, is_shared, owner in _iter_accessible_lists(phone_number):
+        n = _norm_text(name)
+        if frag == n or frag in n or n in frag:
+            matches.append((lid, name, is_shared, owner))
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def resolve_item_for_delete(
+    phone_number: str,
+    list_name: Optional[str] = None,
+    item_text: Optional[str] = None,
+    last_active_list: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Resolve which list item a delete request refers to.
+
+    Returns:
+        None if nothing matched.
+        {'ambiguous': True} if the item exists in more than one list.
+        {'list_id', 'list_name', 'item_text', 'is_shared'} on a unique match.
+    """
+    if not item_text:
+        return None
+
+    accessible = None
+    used_explicit_list = False
+    if list_name:
+        accessible = get_accessible_list_by_name(phone_number, list_name)
+        if not accessible:
+            accessible = _unique_partial_list(phone_number, list_name)
+        used_explicit_list = accessible is not None
+
+    if not accessible and last_active_list and last_active_list not in _CONTEXT_MARKERS:
+        accessible = get_accessible_list_by_name(phone_number, last_active_list)
+        if not accessible:
+            accessible = _unique_partial_list(phone_number, last_active_list)
+
+    if accessible:
+        list_id, actual_name, is_shared, _owner = accessible
+        item = match_item_in_list(list_id, item_text)
+        if item:
+            return {
+                'list_id': list_id,
+                'list_name': actual_name,
+                'item_text': item[1],
+                'is_shared': is_shared,
+            }
+        if used_explicit_list:
+            return None
+
+    matches = []
+    for lid, name, is_shared, _owner in _iter_accessible_lists(phone_number):
+        item = match_item_in_list(lid, item_text)
+        if item:
+            matches.append((lid, name, is_shared, item[1]))
+    if len(matches) == 1:
+        lid, name, is_shared, actual_item = matches[0]
+        return {
+            'list_id': lid,
+            'list_name': name,
+            'item_text': actual_item,
+            'is_shared': is_shared,
+        }
+    if len(matches) > 1:
+        return {'ambiguous': True}
+    return None
+
+
+def delete_list_item_from_pending(phone_number: str, delete_data: dict) -> bool:
+    """Delete a list item from a pending confirmation/selection payload.
+
+    Prefers list_id (works for owned and shared lists), then item id (undo),
+    then name+text lookup. Accepts both `list_id` and legacy `shared_list_id`.
+    """
+    if not delete_data:
+        return False
+
+    list_id = delete_data.get('list_id') or delete_data.get('shared_list_id')
+    item_text = delete_data.get('text')
+    if list_id is not None and item_text:
+        if delete_list_item_by_list_id(list_id, item_text):
+            return True
+        matched = match_item_in_list(list_id, item_text)
+        if matched and delete_list_item_by_list_id(list_id, matched[1]):
+            return True
+
+    item_id = delete_data.get('id')
+    if item_id and delete_list_item_by_id(item_id, phone_number):
+        return True
+
+    list_name = delete_data.get('list_name')
+    if list_name and item_text:
+        return delete_list_item(phone_number, list_name, item_text)
+    return False

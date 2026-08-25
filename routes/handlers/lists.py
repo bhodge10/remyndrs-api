@@ -19,7 +19,8 @@ from models.list_model import (
     accept_share, decline_share, leave_shared_list,
     add_list_item as db_add_list_item,
     mark_item_complete_by_list_id, mark_item_incomplete_by_list_id,
-    delete_list_item_by_list_id, is_shared_list_read_only
+    delete_list_item_by_list_id, is_shared_list_read_only,
+    resolve_item_for_delete,
 )
 from services.ai_service import parse_list_items
 from utils.validation import (
@@ -489,36 +490,51 @@ def handle_delete_item(
     list_name = ai_response.get("list_name")
     item_text = ai_response.get("item_text")
 
-    accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
-    if accessible:
-        list_id, actual_name, is_shared, _owner_phone = accessible
-        if is_shared:
-            read_only, _ = is_shared_list_read_only(list_id)
-            if read_only:
-                reply_text = f"The shared list '{actual_name}' is currently read-only because the owner's Premium plan has expired."
-                log_interaction(phone_number, incoming_msg, reply_text, "delete_item_confirm", False)
-                return reply_text
-        confirm_data = json.dumps({
-            'awaiting_confirmation': True,
-            'type': 'list_item',
-            'list_name': actual_name,
-            'list_id': list_id,
-            'is_shared': is_shared,
-            'text': item_text,
-        })
-        create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
-        display = f"shared list '{actual_name}'" if is_shared else actual_name
-        reply_text = f"Remove '{item_text}' from {display}?\n\nReply YES to confirm or CANCEL to keep it."
-    else:
-        # Preserve old behavior: store with name only; confirmation will report not-found
-        confirm_data = json.dumps({
-            'awaiting_confirmation': True,
-            'type': 'list_item',
-            'list_name': list_name,
-            'text': item_text,
-        })
-        create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
-        reply_text = f"Remove '{item_text}' from {list_name}?\n\nReply YES to confirm or CANCEL to keep it."
+    resolved = resolve_item_for_delete(
+        phone_number,
+        list_name=list_name,
+        item_text=item_text,
+        last_active_list=get_last_active_list(phone_number),
+    )
+
+    if not resolved:
+        if list_name and item_text:
+            reply_text = f"Couldn't find '{item_text}' in '{list_name}'."
+        elif item_text:
+            reply_text = f"Couldn't find '{item_text}' in your lists."
+        else:
+            reply_text = "I couldn't tell which item to remove. Try 'Delete 1' after viewing a list."
+        log_interaction(phone_number, incoming_msg, reply_text, "delete_item", False)
+        return reply_text
+    if resolved.get('ambiguous'):
+        reply_text = f"'{item_text}' is in multiple lists. Please specify which list."
+        log_interaction(phone_number, incoming_msg, reply_text, "delete_item", True)
+        return reply_text
+
+    list_id = resolved['list_id']
+    actual_name = resolved['list_name']
+    actual_item = resolved['item_text']
+    is_shared = resolved['is_shared']
+
+    if is_shared:
+        read_only, _ = is_shared_list_read_only(list_id)
+        if read_only:
+            reply_text = f"The shared list '{actual_name}' is currently read-only because the owner's Premium plan has expired."
+            log_interaction(phone_number, incoming_msg, reply_text, "delete_item_confirm", False)
+            return reply_text
+
+    confirm_data = json.dumps({
+        'awaiting_confirmation': True,
+        'type': 'list_item',
+        'list_name': actual_name,
+        'list_id': list_id,
+        'is_shared': is_shared,
+        'text': actual_item,
+        'shared_list_id': list_id if is_shared else None,
+    })
+    create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+    display = f"shared list '{actual_name}'" if is_shared else actual_name
+    reply_text = f"Remove '{actual_item}' from {display}?\n\nReply YES to confirm or CANCEL to keep it."
 
     log_interaction(phone_number, incoming_msg, "Asking delete_item confirmation", "delete_item_confirm", True)
     return reply_text

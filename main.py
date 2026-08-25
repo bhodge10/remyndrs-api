@@ -42,7 +42,8 @@ from models.list_model import (
     get_next_available_list_name,
     get_accessible_list_by_name, can_user_access_list,
     get_shared_lists_for_user, get_pending_shares,
-    is_shared_list_read_only
+    is_shared_list_read_only,
+    resolve_item_for_delete, delete_list_item_from_pending,
 )
 from routes.handlers.lists import (
     handle_share_list, handle_unshare_list, handle_show_list_members,
@@ -2019,15 +2020,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                             reply_msg = "Couldn't delete that recurring reminder."
 
                     elif delete_type == 'list_item':
-                        from models.list_model import delete_list_item_by_id, delete_list_item_by_list_id
-                        item_id = delete_data.get('id')
-                        shared_list_id = delete_data.get('shared_list_id')
-                        if item_id and delete_list_item_by_id(item_id, phone_number):
-                            reply_msg = f"Removed '{delete_data['text']}' from {delete_data['list_name']}"
-                        elif shared_list_id and delete_list_item_by_list_id(shared_list_id, delete_data['text']):
-                            reply_msg = f"Removed '{delete_data['text']}' from shared list '{delete_data['list_name']}'"
-                        elif delete_list_item(phone_number, delete_data['list_name'], delete_data['text']):
-                            reply_msg = f"Removed '{delete_data['text']}' from {delete_data['list_name']}"
+                        if delete_list_item_from_pending(phone_number, delete_data):
+                            is_shared = bool(delete_data.get('is_shared') or delete_data.get('shared_list_id'))
+                            list_label = delete_data.get('list_name', 'the list')
+                            display = f"shared list '{list_label}'" if is_shared else list_label
+                            reply_msg = f"Removed '{delete_data['text']}' from {display}"
                         else:
                             reply_msg = "Couldn't delete that item."
 
@@ -2076,8 +2073,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                                 reply_msg = "Couldn't delete that reminder."
 
                         elif delete_type == 'list_item':
-                            if delete_list_item(phone_number, selected['list_name'], selected['text']):
-                                reply_msg = f"Removed '{selected['text']}' from {selected['list_name']}"
+                            if delete_list_item_from_pending(phone_number, selected):
+                                is_shared = bool(selected.get('is_shared') or selected.get('shared_list_id'))
+                                list_label = selected.get('list_name', 'the list')
+                                display = f"shared list '{list_label}'" if is_shared else list_label
+                                reply_msg = f"Removed '{selected['text']}' from {display}"
                             else:
                                 reply_msg = "Couldn't delete that list item."
 
@@ -2119,7 +2119,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
                 # Check if this is a confirmation (single memory awaiting YES)
                 if memory_data.get('awaiting_confirmation'):
-                    if incoming_msg.upper() == "YES":
+                    memory_reply = incoming_msg.strip().upper()
+                    if memory_reply == "YES":
                         memory_id = memory_data['id']
                         memory_text = memory_data['text']
                         if delete_memory(phone_number, memory_id):
@@ -2131,7 +2132,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         resp.message(reply_msg)
                         log_interaction(phone_number, incoming_msg, reply_msg, "delete_memory_confirmed", True)
                         return Response(content=str(resp), media_type="application/xml")
-                    elif incoming_msg.upper() in ["NO", "CANCEL"]:
+                    elif memory_reply in ["NO", "CANCEL"]:
                         create_or_update_user(phone_number, pending_memory_delete=None)
                         resp = MessagingResponse()
                         resp.message("Cancelled. Your memory is safe!")
@@ -5796,32 +5797,52 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             list_name = ai_response.get("list_name")
             item_text = ai_response.get("item_text")
 
-            # Check if this is a shared list the user has access to
-            accessible = get_accessible_list_by_name(phone_number, list_name) if list_name else None
-            is_shared_list = accessible and accessible[2]
+            resolved = resolve_item_for_delete(
+                phone_number,
+                list_name=list_name,
+                item_text=item_text,
+                last_active_list=get_last_active_list(phone_number),
+            )
 
-            # Check if shared list is read-only (owner no longer Premium)
-            if is_shared_list:
-                read_only, owner_name = is_shared_list_read_only(accessible[0])
-                if read_only:
-                    reply_text = f"The shared list '{accessible[1]}' is currently read-only because the owner's Premium plan has expired."
-                    log_interaction(phone_number, incoming_msg, reply_text, "delete_item_readonly", False)
-                    resp = MessagingResponse()
-                    resp.message(staging_prefix(reply_text))
-                    return Response(content=str(resp), media_type="application/xml")
+            if not resolved:
+                if list_name and item_text:
+                    reply_text = f"Couldn't find '{item_text}' in '{list_name}'."
+                elif item_text:
+                    reply_text = f"Couldn't find '{item_text}' in your lists."
+                else:
+                    reply_text = "I couldn't tell which item to remove. Try 'Delete 1' after viewing a list."
+                log_interaction(phone_number, incoming_msg, reply_text, "delete_item", False)
+            elif resolved.get('ambiguous'):
+                reply_text = f"'{item_text}' is in multiple lists. Please specify which list."
+                log_interaction(phone_number, incoming_msg, reply_text, "delete_item", True)
+            else:
+                list_id = resolved['list_id']
+                actual_name = resolved['list_name']
+                actual_item = resolved['item_text']
+                is_shared_list = resolved['is_shared']
 
-            # Ask for confirmation before deleting
-            confirm_data = json.dumps({
-                'awaiting_confirmation': True,
-                'type': 'list_item',
-                'list_name': list_name,
-                'text': item_text,
-                'shared_list_id': accessible[0] if is_shared_list else None
-            })
-            create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
-            prefix = "shared list " if is_shared_list else ""
-            reply_text = f"Remove '{item_text}' from {prefix}{list_name}?\n\nReply YES to confirm or CANCEL to keep it."
-            log_interaction(phone_number, incoming_msg, "Asking delete_item confirmation", "delete_item_confirm", True)
+                if is_shared_list:
+                    read_only, owner_name = is_shared_list_read_only(list_id)
+                    if read_only:
+                        reply_text = f"The shared list '{actual_name}' is currently read-only because the owner's Premium plan has expired."
+                        log_interaction(phone_number, incoming_msg, reply_text, "delete_item_readonly", False)
+                        resp = MessagingResponse()
+                        resp.message(staging_prefix(reply_text))
+                        return Response(content=str(resp), media_type="application/xml")
+
+                confirm_data = json.dumps({
+                    'awaiting_confirmation': True,
+                    'type': 'list_item',
+                    'list_name': actual_name,
+                    'list_id': list_id,
+                    'is_shared': is_shared_list,
+                    'text': actual_item,
+                    'shared_list_id': list_id if is_shared_list else None,
+                })
+                create_or_update_user(phone_number, pending_reminder_delete=confirm_data)
+                display = f"shared list '{actual_name}'" if is_shared_list else actual_name
+                reply_text = f"Remove '{actual_item}' from {display}?\n\nReply YES to confirm or CANCEL to keep it."
+                log_interaction(phone_number, incoming_msg, "Asking delete_item confirmation", "delete_item_confirm", True)
 
         elif ai_response["action"] == "delete_list":
             list_name = ai_response.get("list_name")
@@ -6207,7 +6228,12 @@ def process_single_action(ai_response, phone_number, incoming_msg):
             log_interaction(phone_number, incoming_msg, reply_text, "update_settings", True)
 
         elif ai_response["action"] == "delete_memory":
-            search_term = ai_response.get("search_term", "")
+            search_term = (ai_response.get("search_term") or ai_response.get("query") or "").strip()
+
+            if not search_term:
+                reply_text = "Which memory would you like to delete? Text SHOW MEMORIES to see them, then 'Delete 1'."
+                log_interaction(phone_number, incoming_msg, reply_text, "delete_memory", True)
+                return reply_text
 
             # Search for matching memories
             matching_memories = search_memories(phone_number, search_term)

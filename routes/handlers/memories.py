@@ -70,7 +70,12 @@ def handle_delete_memory(
     ai_response: dict[str, Any]
 ) -> str:
     """Handle delete_memory action."""
-    search_term = ai_response.get("search_term", "")
+    search_term = (ai_response.get("search_term") or ai_response.get("query") or "").strip()
+
+    if not search_term:
+        reply_text = "Which memory would you like to delete? Text SHOW MEMORIES to see them, then 'Delete 1'."
+        log_interaction(phone_number, incoming_msg, reply_text, "delete_memory", True)
+        return reply_text
 
     matching_memories = search_memories(phone_number, search_term)
 
