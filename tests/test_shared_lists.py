@@ -1019,6 +1019,7 @@ class TestSharedListEditPaths:
     async def test_show_then_delete_by_number_targets_shared_list(self, accepted_share, simulator, ai_mock):
         """After 'Show <shared>', 'Delete N' should target the shared list, not fall back to
         a cross-type disambiguation menu. Regression for Heather's screenshot bug."""
+        from models.list_model import get_list_items
         ai_mock.set_response("show grocery list", {
             "action": "show_list",
             "list_name": "Grocery List",
@@ -1033,6 +1034,17 @@ class TestSharedListEditPaths:
         # Should ask for YES/CANCEL confirmation targeted at the shared list
         assert "milk" in out and ("yes" in out or "remove" in out), (
             f"Expected confirmation prompt for Milk from shared list. Got: {result['output']}"
+        )
+
+        confirm = await simulator.send_message(PHONE_SHARED, "YES")
+        confirm_out = confirm["output"].lower()
+        assert "couldn't delete" not in confirm_out, (
+            f"YES after Delete-by-number failed on shared list. Got: {confirm['output']}"
+        )
+        assert "removed" in confirm_out or "milk" in confirm_out
+        items_after = get_list_items(accepted_share["list_id"])
+        assert not any(item[1].lower() == "milk" for item in items_after), (
+            f"Milk still on shared list after YES: {items_after}"
         )
 
     @pytest.mark.asyncio

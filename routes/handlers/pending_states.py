@@ -88,17 +88,12 @@ def handle_pending_delete(
                     reply_msg = "Couldn't delete that recurring reminder."
 
             elif delete_type == 'list_item':
-                list_id = delete_data.get('list_id')
-                is_shared = delete_data.get('is_shared', False)
-                if list_id is not None:
-                    from models.list_model import delete_list_item_by_list_id
-                    if delete_list_item_by_list_id(list_id, delete_data['text']):
-                        display = f"shared list '{delete_data['list_name']}'" if is_shared else delete_data['list_name']
-                        reply_msg = f"Removed '{delete_data['text']}' from {display}"
-                    else:
-                        reply_msg = "Couldn't delete that item."
-                elif delete_list_item(phone_number, delete_data['list_name'], delete_data['text']):
-                    reply_msg = f"Removed '{delete_data['text']}' from {delete_data['list_name']}"
+                from models.list_model import delete_list_item_from_pending
+                if delete_list_item_from_pending(phone_number, delete_data):
+                    is_shared = bool(delete_data.get('is_shared') or delete_data.get('shared_list_id'))
+                    list_label = delete_data.get('list_name', 'the list')
+                    display = f"shared list '{list_label}'" if is_shared else list_label
+                    reply_msg = f"Removed '{delete_data['text']}' from {display}"
                 else:
                     reply_msg = "Couldn't delete that item."
 
@@ -134,17 +129,12 @@ def handle_pending_delete(
                         reply_msg = "Couldn't delete that reminder."
 
                 elif delete_type == 'list_item':
-                    list_id = selected.get('list_id')
-                    is_shared = selected.get('is_shared', False)
-                    if list_id is not None:
-                        from models.list_model import delete_list_item_by_list_id
-                        if delete_list_item_by_list_id(list_id, selected['text']):
-                            display = f"shared list '{selected['list_name']}'" if is_shared else selected['list_name']
-                            reply_msg = f"Removed '{selected['text']}' from {display}"
-                        else:
-                            reply_msg = "Couldn't delete that list item."
-                    elif delete_list_item(phone_number, selected['list_name'], selected['text']):
-                        reply_msg = f"Removed '{selected['text']}' from {selected['list_name']}"
+                    from models.list_model import delete_list_item_from_pending
+                    if delete_list_item_from_pending(phone_number, selected):
+                        is_shared = bool(selected.get('is_shared') or selected.get('shared_list_id'))
+                        list_label = selected.get('list_name', 'the list')
+                        display = f"shared list '{list_label}'" if is_shared else list_label
+                        reply_msg = f"Removed '{selected['text']}' from {display}"
                     else:
                         reply_msg = "Couldn't delete that list item."
 
@@ -188,7 +178,8 @@ def handle_pending_memory_delete(
 
         # Handle YES/NO confirmation for single memory
         if memory_data.get('awaiting_confirmation'):
-            if incoming_msg.upper() == "YES":
+            memory_reply = incoming_msg.strip().upper()
+            if memory_reply == "YES":
                 memory_id = memory_data['id']
                 memory_text = memory_data['text']
                 if delete_memory(phone_number, memory_id):
@@ -199,7 +190,7 @@ def handle_pending_memory_delete(
                 log_interaction(phone_number, incoming_msg, reply_msg, "delete_memory_confirmed", True)
                 return (True, reply_msg)
 
-            elif incoming_msg.upper() in ["NO", "CANCEL"]:
+            elif memory_reply in ["NO", "CANCEL"]:
                 create_or_update_user(phone_number, pending_memory_delete=None)
                 log_interaction(phone_number, incoming_msg, "Delete cancelled", "delete_memory_cancelled", True)
                 return (True, "Cancelled. Your memory is safe!")
