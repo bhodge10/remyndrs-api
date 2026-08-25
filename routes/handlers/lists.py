@@ -4,7 +4,8 @@ Handles list-related AI actions: create, add items, view, complete, delete
 """
 
 import json
-from typing import Any
+import re
+from typing import Any, Optional
 
 from config import logger, ENVIRONMENT
 from models.user import create_or_update_user, get_last_active_list
@@ -1042,6 +1043,66 @@ def handle_decline_share(phone_number: str, incoming_msg: str) -> str:
 # =====================================================
 # SHARED LIST DISPLAY HELPERS
 # =====================================================
+
+
+# SHOW LISTS picker: "3", "Show 3", "show 3", "#3", "show #3", "show list 3"
+_LIST_PICKER_RE = re.compile(
+    r'^(?:(?:show|open|view)\s+(?:list\s+)?)?#?(\d+)$',
+    re.IGNORECASE,
+)
+
+
+def parse_list_picker_reply(incoming_msg: str, *, allow_bare_number: bool = True) -> Optional[int]:
+    """Parse a SHOW LISTS number-picker reply.
+
+    Matches '3', 'Show 3', 'show 3', '#3' (and close variants). Returns a 1-based
+    index, or None if the message is not a picker reply.
+    """
+    msg = incoming_msg.strip()
+    if not allow_bare_number and msg.isdigit():
+        return None
+    match = _LIST_PICKER_RE.match(msg)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def format_numbered_list_reply(phone_number: str, list_num: int) -> Optional[str]:
+    """Open the Nth list in SHOW LISTS order (owned, then shared).
+
+    Sets last_active_list to the selected list and clears pending_reminder_delete
+    so a leftover delete confirmation cannot hijack the next turn.
+    Returns None if list_num is out of range.
+    """
+    all_lists = get_all_lists_with_shared(phone_number)
+    if not all_lists or not (1 <= list_num <= len(all_lists)):
+        return None
+
+    selected = all_lists[list_num - 1]
+    list_id = selected['list_id']
+    list_name = selected['list_name']
+    is_shared = selected['is_shared']
+    prefix = "[Shared] " if is_shared else ""
+
+    create_or_update_user(
+        phone_number,
+        last_active_list=list_name,
+        pending_reminder_delete=None,
+        pending_memory_delete=None,
+    )
+
+    items = get_list_items(list_id)
+    if items:
+        item_lines = []
+        for i, (_item_id, item_text, completed) in enumerate(items, 1):
+            if completed:
+                item_lines.append(f"{i}. [x] {item_text}")
+            else:
+                item_lines.append(f"{i}. {item_text}")
+        return f"{prefix}{list_name}:\n\n" + "\n".join(item_lines)
+    if is_shared:
+        return f"{prefix}{list_name} is empty."
+    return f"Your {list_name} is empty."
 
 
 def get_all_lists_with_shared(phone_number: str) -> list[dict]:

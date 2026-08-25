@@ -154,6 +154,9 @@ def handle_pending_delete(
             logger.error(f"Error parsing pending delete data: {e}")
             create_or_update_user(phone_number, pending_reminder_delete=None)
 
+    else:
+        create_or_update_user(phone_number, pending_reminder_delete=None)
+
     return (False, None)
 
 
@@ -194,6 +197,9 @@ def handle_pending_memory_delete(
                 create_or_update_user(phone_number, pending_memory_delete=None)
                 log_interaction(phone_number, incoming_msg, "Delete cancelled", "delete_memory_cancelled", True)
                 return (True, "Cancelled. Your memory is safe!")
+            else:
+                create_or_update_user(phone_number, pending_memory_delete=None)
+                return (False, None)
 
         # Handle number selection from multiple memories
         elif memory_data.get('options') and incoming_msg.strip().isdigit():
@@ -219,6 +225,10 @@ def handle_pending_memory_delete(
                 return (True, reply_msg)
             else:
                 return (True, f"Please reply with a number between 1 and {len(memory_options)}")
+
+        else:
+            create_or_update_user(phone_number, pending_memory_delete=None)
+            return (False, None)
 
     except (json.JSONDecodeError, KeyError) as e:
         logger.error(f"Error parsing pending memory delete data: {e}")
