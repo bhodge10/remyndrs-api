@@ -845,7 +845,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             return Response(content=str(resp), media_type="application/xml")
 
         if is_score_message(incoming_msg):
-            reply_text = handle_score_keyword(phone_number)
+            reply_text = handle_score_keyword(phone_number, incoming_msg)
             resp = MessagingResponse()
             resp.message(staging_prefix(reply_text))
             log_interaction(phone_number, incoming_msg, reply_text, "sports_score", True)

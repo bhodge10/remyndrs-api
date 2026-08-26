@@ -2413,15 +2413,17 @@ def generate_daily_analytics_summary(self):
     time_limit=300,
     soft_time_limit=270,
 )
-def send_nfl_score_asks(self, dry_run_phone=None, fake_game=False, scoreboard_date=None):
+def send_nfl_score_asks(self, dry_run_phone=None, fake_game=False, scoreboard_date=None,
+                       send_invite=False, full_loop=False, teams=None):
     """
     Morning-after NFL score asks (9-10 AM local), same window as trial lifecycle.
 
-    Does NOT send weekly/dormant invites. Opt-in is YES + team; SCORE is inbound.
+    Does NOT send weekly/dormant invites to production. Opt-in is YES + team; SCORE is inbound.
 
     Founder dry-run (does not blast anyone else):
-        celery -A celery_app call tasks.reminder_tasks.send_nfl_score_asks --kwargs='{"dry_run_phone":"+18593935374","fake_game":true}'
-    Or POST /admin/sports-scores/dry-run with {"phone":"+18593935374","fake_game":true}.
+        celery -A celery_app call tasks.reminder_tasks.send_nfl_score_asks --kwargs='{"dry_run_phone":"+18593935374","fake_game":true,"full_loop":true}'
+    full_loop sends invite copy, opts that phone into Bengals+Lions, then staggered asks.
+    Or POST /admin/sports-scores/dry-run with the same fields.
     """
     from datetime import datetime, date as date_cls
     from services.sports_score_service import process_morning_asks
@@ -2437,15 +2439,45 @@ def send_nfl_score_asks(self, dry_run_phone=None, fake_game=False, scoreboard_da
         "Starting NFL score asks"
         + (f" dry_run={dry_run_phone[-4:]}" if dry_run_phone else "")
         + (" fake_game" if fake_game else "")
+        + (" full_loop" if full_loop else "")
     )
     try:
         result = process_morning_asks(
             dry_run_phone=dry_run_phone,
             fake_game=bool(fake_game),
             scoreboard_date=parsed_date,
+            send_invite=bool(send_invite) or bool(full_loop),
+            full_loop=bool(full_loop),
+            teams=teams,
         )
         logger.info(f"NFL score asks complete: {result}")
         return result
     except Exception as exc:
         logger.exception("Error in send_nfl_score_asks")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    time_limit=60,
+    soft_time_limit=50,
+)
+def send_one_nfl_score_ask(self, phone_number, team_abbr, game, ask_date_iso=None):
+    """Delayed single-team ask used to stagger two founder-phone asks."""
+    from datetime import datetime
+    from services.sports_score_service import deliver_score_ask
+
+    ask_date = None
+    if ask_date_iso:
+        try:
+            ask_date = datetime.strptime(ask_date_iso, "%Y-%m-%d").date()
+        except ValueError:
+            ask_date = None
+    try:
+        ok = deliver_score_ask(phone_number, team_abbr, game, ask_date=ask_date)
+        return {"sent": bool(ok), "team": team_abbr}
+    except Exception as exc:
+        logger.exception("Error in send_one_nfl_score_ask")
         raise self.retry(exc=exc)

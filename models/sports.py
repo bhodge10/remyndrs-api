@@ -1,6 +1,7 @@
 """Data access for the NFL morning-after score beta.
 
-sports_optins: one row per opted-in user (team, cohort, ask/pause state).
+sports_optins: one row per (phone, team). Production users are kept to one
+team in the service layer; founder dry-run phones may have two.
 sports_score_events: growth-analytics events, always tagged with cohort so
 weekly and dormant counters never mix.
 users.sports_invite_*: invite tracking (sending is NOT in this PR).
@@ -23,51 +24,88 @@ EVENT_SCORE_IGNORE = "score_ignore"
 EVENT_UPGRADE_TO_KEEP = "upgrade_to_keep"
 EVENT_SPORTS_YES = "sports_yes"
 
+_OPTIN_SELECT = """
+    phone_number, team_abbr, team_short, cohort, opted_in_at,
+    ignore_streak, last_ask_date, last_ask_game_id, last_ask_replied,
+    pending_score_payload, beta_started_at, pause_at, paused_at,
+    stopped_silently, last_ask_at
+"""
 
-def get_optin(phone_number: str) -> Optional[dict]:
+
+def _parse_payload(payload):
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except (TypeError, ValueError):
+            return None
+    return payload
+
+
+def _optin_from_row(row, extra=None) -> dict:
+    data = {
+        "phone_number": row[0],
+        "team_abbr": row[1],
+        "team_short": row[2],
+        "cohort": row[3],
+        "opted_in_at": row[4],
+        "ignore_streak": row[5] or 0,
+        "last_ask_date": row[6],
+        "last_ask_game_id": row[7],
+        "last_ask_replied": bool(row[8]),
+        "pending_score_payload": _parse_payload(row[9]),
+        "beta_started_at": row[10],
+        "pause_at": row[11],
+        "paused_at": row[12],
+        "stopped_silently": bool(row[13]),
+        "last_ask_at": row[14] if len(row) > 14 else None,
+    }
+    if extra:
+        data.update(extra)
+    return data
+
+
+def get_optin(phone_number: str, team_abbr: Optional[str] = None) -> Optional[dict]:
+    """One opt-in row. If team_abbr is omitted, the most recently updated row."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        if team_abbr:
+            c.execute(
+                f"SELECT {_OPTIN_SELECT} FROM sports_optins WHERE phone_number = %s AND team_abbr = %s",
+                (phone_number, team_abbr),
+            )
+        else:
+            c.execute(
+                f"SELECT {_OPTIN_SELECT} FROM sports_optins WHERE phone_number = %s "
+                "ORDER BY updated_at DESC NULLS LAST, opted_in_at DESC NULLS LAST LIMIT 1",
+                (phone_number,),
+            )
+        row = c.fetchone()
+        if not row:
+            return None
+        return _optin_from_row(row)
+    except Exception as e:
+        logger.error(f"Error getting sports opt-in: {e}")
+        return None
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
+def list_optins(phone_number: str) -> list:
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
-            """
-            SELECT phone_number, team_abbr, team_short, cohort, opted_in_at,
-                   ignore_streak, last_ask_date, last_ask_game_id, last_ask_replied,
-                   pending_score_payload, beta_started_at, pause_at, paused_at,
-                   stopped_silently
-            FROM sports_optins
-            WHERE phone_number = %s
-            """,
+            f"SELECT {_OPTIN_SELECT} FROM sports_optins WHERE phone_number = %s ORDER BY team_abbr",
             (phone_number,),
         )
-        row = c.fetchone()
-        if not row:
-            return None
-        payload = row[9]
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except (TypeError, ValueError):
-                payload = None
-        return {
-            "phone_number": row[0],
-            "team_abbr": row[1],
-            "team_short": row[2],
-            "cohort": row[3],
-            "opted_in_at": row[4],
-            "ignore_streak": row[5] or 0,
-            "last_ask_date": row[6],
-            "last_ask_game_id": row[7],
-            "last_ask_replied": bool(row[8]),
-            "pending_score_payload": payload,
-            "beta_started_at": row[10],
-            "pause_at": row[11],
-            "paused_at": row[12],
-            "stopped_silently": bool(row[13]),
-        }
+        return [_optin_from_row(row) for row in c.fetchall()]
     except Exception as e:
-        logger.error(f"Error getting sports opt-in: {e}")
-        return None
+        logger.error(f"Error listing sports opt-ins for phone: {e}")
+        return []
     finally:
         if conn:
             return_db_connection(conn)
@@ -81,8 +119,13 @@ def upsert_optin(
     opted_in_at: Optional[datetime] = None,
     pause_at: Optional[datetime] = None,
     beta_started_at: Optional[datetime] = None,
+    replace_others: bool = True,
 ) -> None:
-    """Insert or replace the user's one-team opt-in. Resets ask/ignore state on team change."""
+    """Insert or update one (phone, team) opt-in.
+
+    replace_others=True (production): delete any other teams for this phone.
+    replace_others=False (founder dual): keep existing other teams.
+    """
     if cohort not in VALID_COHORTS:
         raise ValueError(f"Invalid sports cohort: {cohort}")
     now = opted_in_at or datetime.utcnow()
@@ -91,41 +134,27 @@ def upsert_optin(
     try:
         conn = get_db_connection()
         c = conn.cursor()
+        if replace_others:
+            c.execute(
+                "DELETE FROM sports_optins WHERE phone_number = %s AND team_abbr <> %s",
+                (phone_number, team_abbr),
+            )
         c.execute(
             """
             INSERT INTO sports_optins (
                 phone_number, team_abbr, team_short, cohort, opted_in_at,
                 ignore_streak, last_ask_date, last_ask_game_id, last_ask_replied,
                 pending_score_payload, beta_started_at, pause_at, paused_at,
-                stopped_silently, updated_at
+                stopped_silently, last_ask_at, updated_at
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 0, NULL, NULL, FALSE,
                 NULL, %s, %s, NULL,
-                FALSE, CURRENT_TIMESTAMP
+                FALSE, NULL, CURRENT_TIMESTAMP
             )
-            ON CONFLICT (phone_number) DO UPDATE SET
-                team_abbr = EXCLUDED.team_abbr,
+            ON CONFLICT (phone_number, team_abbr) DO UPDATE SET
                 team_short = EXCLUDED.team_short,
                 cohort = sports_optins.cohort,
-                ignore_streak = CASE
-                    WHEN sports_optins.team_abbr = EXCLUDED.team_abbr
-                    THEN sports_optins.ignore_streak ELSE 0 END,
-                last_ask_date = CASE
-                    WHEN sports_optins.team_abbr = EXCLUDED.team_abbr
-                    THEN sports_optins.last_ask_date ELSE NULL END,
-                last_ask_game_id = CASE
-                    WHEN sports_optins.team_abbr = EXCLUDED.team_abbr
-                    THEN sports_optins.last_ask_game_id ELSE NULL END,
-                last_ask_replied = CASE
-                    WHEN sports_optins.team_abbr = EXCLUDED.team_abbr
-                    THEN sports_optins.last_ask_replied ELSE FALSE END,
-                pending_score_payload = CASE
-                    WHEN sports_optins.team_abbr = EXCLUDED.team_abbr
-                    THEN sports_optins.pending_score_payload ELSE NULL END,
-                stopped_silently = CASE
-                    WHEN sports_optins.team_abbr = EXCLUDED.team_abbr
-                    THEN sports_optins.stopped_silently ELSE FALSE END,
                 pause_at = COALESCE(sports_optins.pause_at, EXCLUDED.pause_at),
                 beta_started_at = COALESCE(sports_optins.beta_started_at, EXCLUDED.beta_started_at),
                 updated_at = CURRENT_TIMESTAMP
@@ -141,11 +170,11 @@ def upsert_optin(
             return_db_connection(conn)
 
 
-def update_optin(phone_number: str, **fields: Any) -> None:
+def update_optin(phone_number: str, team_abbr: Optional[str] = None, **fields: Any) -> None:
     allowed = {
         "ignore_streak", "last_ask_date", "last_ask_game_id", "last_ask_replied",
         "pending_score_payload", "pause_at", "paused_at", "stopped_silently",
-        "team_abbr", "team_short",
+        "team_abbr", "team_short", "last_ask_at",
     }
     sets = []
     values = []
@@ -159,15 +188,23 @@ def update_optin(phone_number: str, **fields: Any) -> None:
     if not sets:
         return
     sets.append("updated_at = CURRENT_TIMESTAMP")
-    values.append(phone_number)
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute(
-            f"UPDATE sports_optins SET {', '.join(sets)} WHERE phone_number = %s",
-            tuple(values),
-        )
+        if team_abbr:
+            values.append(phone_number)
+            values.append(team_abbr)
+            c.execute(
+                f"UPDATE sports_optins SET {', '.join(sets)} WHERE phone_number = %s AND team_abbr = %s",
+                tuple(values),
+            )
+        else:
+            values.append(phone_number)
+            c.execute(
+                f"UPDATE sports_optins SET {', '.join(sets)} WHERE phone_number = %s",
+                tuple(values),
+            )
         conn.commit()
     except Exception as e:
         logger.error(f"Error updating sports opt-in: {e}")
@@ -177,8 +214,26 @@ def update_optin(phone_number: str, **fields: Any) -> None:
             return_db_connection(conn)
 
 
+def delete_optin(phone_number: str, team_abbr: str) -> None:
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            "DELETE FROM sports_optins WHERE phone_number = %s AND team_abbr = %s",
+            (phone_number, team_abbr),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Error deleting sports opt-in: {e}")
+        raise
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def list_active_optins() -> list[dict]:
-    """Opted-in users who have not silently stopped. Caller applies pause/time filters."""
+    """Opted-in (phone, team) rows that have not silently stopped."""
     conn = None
     try:
         conn = get_db_connection()
@@ -188,7 +243,8 @@ def list_active_optins() -> list[dict]:
             SELECT s.phone_number, s.team_abbr, s.team_short, s.cohort, s.opted_in_at,
                    s.ignore_streak, s.last_ask_date, s.last_ask_game_id, s.last_ask_replied,
                    s.pending_score_payload, s.beta_started_at, s.pause_at, s.paused_at,
-                   s.stopped_silently, u.timezone, u.trial_end_date, u.premium_status,
+                   s.stopped_silently, s.last_ask_at,
+                   u.timezone, u.trial_end_date, u.premium_status,
                    u.subscription_status, u.stripe_subscription_id, u.opted_out,
                    u.winback_30d_sent, u.sports_invite_sent_at
             FROM sports_optins s
@@ -201,36 +257,17 @@ def list_active_optins() -> list[dict]:
         rows = c.fetchall()
         results = []
         for row in rows:
-            payload = row[9]
-            if isinstance(payload, str):
-                try:
-                    payload = json.loads(payload)
-                except (TypeError, ValueError):
-                    payload = None
-            results.append({
-                "phone_number": row[0],
-                "team_abbr": row[1],
-                "team_short": row[2],
-                "cohort": row[3],
-                "opted_in_at": row[4],
-                "ignore_streak": row[5] or 0,
-                "last_ask_date": row[6],
-                "last_ask_game_id": row[7],
-                "last_ask_replied": bool(row[8]),
-                "pending_score_payload": payload,
-                "beta_started_at": row[10],
-                "pause_at": row[11],
-                "paused_at": row[12],
-                "stopped_silently": bool(row[13]),
-                "timezone": row[14],
-                "trial_end_date": row[15],
-                "premium_status": row[16],
-                "subscription_status": row[17],
-                "stripe_subscription_id": row[18],
-                "opted_out": row[19],
-                "winback_30d_sent": row[20],
-                "sports_invite_sent_at": row[21],
-            })
+            extra = {
+                "timezone": row[15],
+                "trial_end_date": row[16],
+                "premium_status": row[17],
+                "subscription_status": row[18],
+                "stripe_subscription_id": row[19],
+                "opted_out": row[20],
+                "winback_30d_sent": row[21],
+                "sports_invite_sent_at": row[22],
+            }
+            results.append(_optin_from_row(row, extra))
         return results
     except Exception as e:
         logger.error(f"Error listing sports opt-ins: {e}")

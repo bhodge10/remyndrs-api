@@ -23,6 +23,7 @@ from models.sports import (
     EVENT_SPORTS_YES,
     EVENT_UPGRADE_TO_KEEP,
     get_optin,
+    list_optins,
     upsert_optin,
     update_optin,
     log_sports_event,
@@ -37,7 +38,10 @@ from services.sports_score_service import (
     PAUSE_COPY,
     INVITE_WEEKLY,
     INVITE_DORMANT,
+    STAGGER_SECONDS,
     handle_yes_team,
+    handle_score_keyword,
+    deliver_score_ask,
     process_morning_asks,
     should_skip_score_ask,
     compute_pause_at,
@@ -503,3 +507,186 @@ class TestLockedAskCopy:
         assert mock_sms.call_args.args[1] == "Bengals played last night. Reply SCORE if you want it, or ignore."
         assert "Sept" not in mock_sms.call_args.args[1]
         assert "recap" not in mock_sms.call_args.args[1].lower()
+
+
+def _espn_two_finals():
+    """Bengals and Lions both final last night, distinct scores."""
+    return {
+        "events": [
+            _espn_final("game-cin-kc", "CIN", "KC", "27", "24")["events"][0],
+            {
+                "id": "game-det-gb",
+                "competitions": [{
+                    "status": {"type": {"name": "STATUS_FINAL", "completed": True}},
+                    "competitors": [
+                        {
+                            "homeAway": "away",
+                            "score": "31",
+                            "team": {"abbreviation": "DET", "shortDisplayName": "Lions"},
+                        },
+                        {
+                            "homeAway": "home",
+                            "score": "17",
+                            "team": {"abbreviation": "GB", "shortDisplayName": "Packers"},
+                        },
+                    ],
+                }],
+            },
+        ]
+    }
+
+
+def _opt_in_team(phone, team_abbr, team_short, **kwargs):
+    now = kwargs.pop("opted_in_at", datetime.utcnow())
+    pause_at = kwargs.pop("pause_at", now + timedelta(days=28))
+    upsert_optin(
+        phone, team_abbr, team_short, kwargs.pop("cohort", COHORT_WEEKLY),
+        opted_in_at=now, pause_at=pause_at, beta_started_at=now,
+        replace_others=kwargs.pop("replace_others", False),
+    )
+    if kwargs:
+        update_optin(phone, team_abbr=team_abbr, **kwargs)
+
+
+class TestProductionStaysOneTeam:
+    def test_second_yes_replaces_first(self, onboarded_user):
+        phone = onboarded_user["phone"]
+        handle_yes_team(phone, "YES Bengals")
+        handle_yes_team(phone, "YES Lions")
+        teams = list_optins(phone)
+        assert len(teams) == 1
+        assert teams[0]["team_abbr"] == "DET"
+        assert teams[0]["team_short"] == "Lions"
+
+
+class TestFounderDualOptIn:
+    def test_yes_bengals_then_lions_keeps_both(self, onboarded_user):
+        phone = onboarded_user["phone"]
+        with patch("services.sports_score_service.is_founder_phone", return_value=True):
+            handle_yes_team(phone, "YES Bengals")
+            handle_yes_team(phone, "YES Lions")
+        teams = {o["team_abbr"]: o["team_short"] for o in list_optins(phone)}
+        assert teams == {"CIN": "Bengals", "DET": "Lions"}
+
+    def test_third_yes_replaces_oldest(self, onboarded_user):
+        phone = onboarded_user["phone"]
+        with patch("services.sports_score_service.is_founder_phone", return_value=True):
+            handle_yes_team(phone, "YES Bengals")
+            handle_yes_team(phone, "YES Lions")
+            handle_yes_team(phone, "YES Chiefs")
+        abbrs = {o["team_abbr"] for o in list_optins(phone)}
+        assert len(abbrs) == 2
+        assert "KC" in abbrs
+
+
+class TestFounderStaggeredAsks:
+    def test_two_played_last_night_staggers_and_does_not_leak(self, onboarded_user):
+        phone = onboarded_user["phone"]
+        _opt_in_team(phone, "CIN", "Bengals")
+        _opt_in_team(phone, "DET", "Lions")
+        scheduled = []
+
+        def capture_schedule(p, team_abbr, game, delay, ask_date_iso):
+            scheduled.append((p, team_abbr, game, delay, ask_date_iso))
+
+        with patch("services.sports_score_service.send_sms") as mock_sms:
+            mock_sms.return_value = None
+            result = process_morning_asks(
+                now_utc=_et_morning(),
+                skip_window_check=True,
+                fetch_fn=_fetch(_espn_two_finals()),
+                schedule_staggered=capture_schedule,
+            )
+        assert result["asked"] == 1
+        assert result["scheduled"] == 1
+        assert mock_sms.call_count == 1
+        ask = mock_sms.call_args.args[1]
+        assert ask == "Bengals played last night. Reply SCORE if you want it, or ignore."
+        assert "27" not in ask
+        assert "24" not in ask
+        assert "31" not in ask
+        assert "17" not in ask
+        assert "Packers" not in ask
+        assert "Chiefs" not in ask
+        assert scheduled[0][1] == "DET"
+        assert scheduled[0][3] == STAGGER_SECONDS
+        assert STAGGER_SECONDS >= 120
+        # Staggered team is not dumped in the same send.
+        assert get_optin(phone, "DET")["last_ask_game_id"] is None
+        assert get_optin(phone, "CIN")["pending_score_payload"]["away_score"] == "27"
+
+    def test_score_one_ignore_the_other(self, onboarded_user):
+        phone = onboarded_user["phone"]
+        _opt_in_team(phone, "CIN", "Bengals")
+        _opt_in_team(phone, "DET", "Lions")
+        now = _et_morning()
+        scheduled = []
+
+        def capture_schedule(p, team_abbr, game, delay, ask_date_iso):
+            scheduled.append((team_abbr, game, ask_date_iso))
+
+        with patch("services.sports_score_service.send_sms") as mock_sms:
+            mock_sms.return_value = None
+            process_morning_asks(
+                now_utc=now,
+                skip_window_check=True,
+                fetch_fn=_fetch(_espn_two_finals()),
+                schedule_staggered=capture_schedule,
+            )
+            # Stagger fires a few minutes later — deliver Lions ask separately.
+            team_abbr, game, ask_date_iso = scheduled[0]
+            deliver_score_ask(
+                phone, team_abbr, game, ask_date=now.date(),
+                asked_at=now + timedelta(minutes=3),
+            )
+
+        with patch("services.sports_score_service.send_sms"):
+            reply = handle_score_keyword(phone, "SCORE")
+        assert reply == "Lions 31, Packers 17"
+        scored = get_optin(phone, "DET")
+        ignored = get_optin(phone, "CIN")
+        assert scored["last_ask_replied"] is True
+        assert ignored["last_ask_replied"] is False
+        assert ignored["pending_score_payload"] is not None
+        events = _event_counts(phone)
+        assert (COHORT_WEEKLY, EVENT_SCORE_REPLY) in events
+        assert (COHORT_WEEKLY, EVENT_SCORE_ASK) in events
+
+    def test_full_loop_invite_then_staggered_asks(self, onboarded_user):
+        phone = onboarded_user["phone"]
+        scheduled = []
+
+        def capture_schedule(p, team_abbr, game, delay, ask_date_iso):
+            scheduled.append((team_abbr, delay))
+
+        with patch("services.sports_score_service.is_founder_phone", return_value=True):
+            with patch("services.sports_score_service.send_sms") as mock_sms:
+                mock_sms.return_value = None
+                result = process_morning_asks(
+                    now_utc=_et_morning(),
+                    dry_run_phone=phone,
+                    fake_game=True,
+                    full_loop=True,
+                    schedule_staggered=capture_schedule,
+                )
+        assert result["invite_sent"] == 1
+        assert result["asked"] == 1
+        assert result["scheduled"] == 1
+        bodies = [c.args[1] for c in mock_sms.call_args_list]
+        assert bodies[0] == INVITE_WEEKLY
+        assert bodies[1] == "Bengals played last night. Reply SCORE if you want it, or ignore."
+        assert "27" not in bodies[1]
+        assert "24" not in bodies[1]
+        assert scheduled == [("DET", STAGGER_SECONDS)]
+        teams = {o["team_abbr"] for o in list_optins(phone)}
+        assert teams == {"CIN", "DET"}
+        from celery_config import beat_schedule
+        assert not any("invite" in v["task"] for v in beat_schedule.values())
+
+    def test_ensure_founder_teams_noops_for_production_phone(self, onboarded_user):
+        from services.sports_score_service import ensure_founder_teams
+        phone = onboarded_user["phone"]
+        with patch("services.sports_score_service.is_founder_phone", return_value=False):
+            ensure_founder_teams(phone)
+        assert list_optins(phone) == []
+

@@ -1,6 +1,7 @@
 """NFL morning-after score beta — opt-in, SCORE, asks, pause, anti-bunch.
 
-Closed beta plumbing. Invites are NOT sent from this module.
+Closed beta plumbing. Production invites are never blasted from this module.
+Founder dry-run may send locked invite copy to one allowlisted phone.
 """
 
 import re
@@ -20,11 +21,14 @@ from models.sports import (
     EVENT_UPGRADE_TO_KEEP,
     EVENT_SPORTS_YES,
     get_optin,
+    list_optins,
     upsert_optin,
     update_optin,
+    delete_optin,
     list_active_optins,
     log_sports_event,
     get_invite_state,
+    mark_sports_invite,
     sports_invite_sent_this_week,
 )
 from services.espn_nfl import (
@@ -55,10 +59,13 @@ UNKNOWN_TEAM_COPY = "I didn't recognize that team. Reply YES + team (NFL), like 
 NO_PENDING_SCORE_COPY = "No score waiting — I'll ask the morning after your team plays."
 
 YES_TEAM_RE = re.compile(r"^\s*YES\s*\+?\s+(.+)$", re.IGNORECASE)
-SCORE_RE = re.compile(r"^\s*SCORE\s*$", re.IGNORECASE)
+SCORE_RE = re.compile(r"^\s*SCORE(?:\s*\+?\s+(.+))?\s*$", re.IGNORECASE)
 
 BETA_DAYS = 28
 IGNORE_STOP_STREAK = 3
+FOUNDER_DUAL_MAX = 2
+FOUNDER_DUAL_TEAMS = ("CIN", "DET")  # Bengals + Lions dry-run default
+STAGGER_SECONDS = 180  # a few minutes between asks on the same phone
 
 # Day 7/13/14 of a 14-day trial, matching check_trial_expirations windows.
 DAY7_REMAINING = (6, 7)
@@ -78,6 +85,15 @@ def parse_yes_team(text: str) -> Optional[str]:
     if not match:
         return None
     return match.group(1).strip()
+
+
+def parse_score_team(text: str) -> Optional[str]:
+    """Optional team after SCORE (founder dual). Bare SCORE returns None."""
+    match = SCORE_RE.match(text or "")
+    if not match:
+        return None
+    extra = match.group(1)
+    return extra.strip() if extra else None
 
 
 def _user_tz(timezone_str: Optional[str]):
@@ -193,7 +209,11 @@ def should_skip_score_ask(user_row: dict, now_utc: datetime) -> Optional[str]:
 
 
 def handle_yes_team(phone_number: str, incoming_msg: str) -> str:
-    """Opt the user in. Returns SMS reply (never None — caller always answers)."""
+    """Opt the user in. Returns SMS reply (never None — caller always answers).
+
+    Production: one team (a new YES replaces the old).
+    Founder allowlist: up to two teams so Bengals + Lions can both be dry-run.
+    """
     team_raw = parse_yes_team(incoming_msg)
     if team_raw is None:
         return UNKNOWN_TEAM_COPY
@@ -208,26 +228,53 @@ def handle_yes_team(phone_number: str, incoming_msg: str) -> str:
         cohort = COHORT_WEEKLY
 
     trial_end = _fetch_trial_end(phone_number)
-
     now = datetime.utcnow()
     pause_at = compute_pause_at(now, trial_end)
-    upsert_optin(
-        phone_number,
-        team["abbr"],
-        team["short"],
-        cohort,
-        opted_in_at=now,
-        pause_at=pause_at,
-        beta_started_at=now,
-    )
+    founder = is_founder_phone(phone_number)
+    existing = list_optins(phone_number)
+
+    if founder:
+        already = [o for o in existing if o["team_abbr"] == team["abbr"]]
+        others = [o for o in existing if o["team_abbr"] != team["abbr"]]
+        if not already and len(others) >= FOUNDER_DUAL_MAX:
+            oldest = min(others, key=lambda o: o.get("opted_in_at") or now)
+            delete_optin(phone_number, oldest["team_abbr"])
+        upsert_optin(
+            phone_number,
+            team["abbr"],
+            team["short"],
+            cohort,
+            opted_in_at=now,
+            pause_at=pause_at,
+            beta_started_at=now,
+            replace_others=False,
+        )
+    else:
+        upsert_optin(
+            phone_number,
+            team["abbr"],
+            team["short"],
+            cohort,
+            opted_in_at=now,
+            pause_at=pause_at,
+            beta_started_at=now,
+            replace_others=True,
+        )
+
     log_sports_event(
         phone_number,
         EVENT_SPORTS_YES,
         cohort,
-        metadata={"team": team["abbr"]},
+        metadata={"team": team["abbr"], "founder_dual": founder},
     )
+    extra = ""
+    if founder:
+        teams = list_optins(phone_number)
+        if len(teams) > 1:
+            names = " and ".join(o["team_short"] for o in teams)
+            extra = f" (founder dual: {names})"
     return (
-        f"Got it — {team['short']}. I'll ask the morning after they play. "
+        f"Got it — {team['short']}{extra}. I'll ask the morning after they play. "
         "Reply SCORE if you want it, or ignore."
     )
 
@@ -249,18 +296,22 @@ def _fetch_trial_end(phone_number: str) -> Optional[datetime]:
             return_db_connection(conn)
 
 
-def handle_score_keyword(phone_number: str) -> Optional[str]:
-    """If a pending ask exists, send the final and mark replied. Never hits the AI."""
-    optin = get_optin(phone_number)
-    if not optin:
-        return NO_PENDING_SCORE_COPY
-    payload = optin.get("pending_score_payload")
-    if not payload or optin.get("last_ask_replied"):
+def handle_score_keyword(phone_number: str, incoming_msg: str = "SCORE") -> Optional[str]:
+    """If a pending ask exists, send the final and mark replied. Never hits the AI.
+
+    Bare SCORE: most recently asked unreplied team (stagger-friendly).
+    SCORE + team: that team's pending final (founder dual).
+    """
+    team_hint = parse_score_team(incoming_msg)
+    target = _pending_score_optin(phone_number, team_hint)
+    if not target:
         return NO_PENDING_SCORE_COPY
 
+    payload = target.get("pending_score_payload")
     reply = format_final(payload)
     update_optin(
         phone_number,
+        team_abbr=target["team_abbr"],
         last_ask_replied=True,
         ignore_streak=0,
         pending_score_payload=None,
@@ -268,10 +319,36 @@ def handle_score_keyword(phone_number: str) -> Optional[str]:
     log_sports_event(
         phone_number,
         EVENT_SCORE_REPLY,
-        optin["cohort"],
-        metadata={"game_id": optin.get("last_ask_game_id"), "team": optin.get("team_abbr")},
+        target["cohort"],
+        metadata={"game_id": target.get("last_ask_game_id"), "team": target.get("team_abbr")},
     )
     return reply
+
+
+def _pending_score_optin(phone_number: str, team_hint: Optional[str] = None) -> Optional[dict]:
+    optins = list_optins(phone_number)
+    pending = [
+        o for o in optins
+        if o.get("pending_score_payload") and not o.get("last_ask_replied")
+    ]
+    if team_hint:
+        team, err = resolve_team(team_hint)
+        if err or not team:
+            return None
+        pending = [o for o in pending if o["team_abbr"] == team["abbr"]]
+    if not pending:
+        return None
+
+    def _ask_key(optin):
+        at = optin.get("last_ask_at")
+        if at:
+            return at
+        d = optin.get("last_ask_date")
+        if d:
+            return datetime.combine(d, datetime.min.time())
+        return datetime.min
+
+    return max(pending, key=_ask_key)
 
 
 def maybe_log_upgrade_to_keep(phone_number: str) -> None:
@@ -306,11 +383,117 @@ def dry_run_phones() -> list[str]:
     return phones
 
 
+def is_founder_phone(phone_number: str) -> bool:
+    """Allowlist for dual-team dry-run. Production users are never on this list."""
+    return phone_number in dry_run_phones()
+
+
 def is_dry_run_allowed(phone_number: str) -> bool:
     from config import ENVIRONMENT
     if ENVIRONMENT in ("test", "testing", "development"):
         return True
-    return phone_number in dry_run_phones()
+    return is_founder_phone(phone_number)
+
+
+def send_founder_invite(phone_number: str, cohort: str = COHORT_WEEKLY) -> bool:
+    """Send locked invite copy to one founder phone. Not a production blast."""
+    if not is_founder_phone(phone_number):
+        logger.warning("Founder invite refused — phone not on dry-run allowlist")
+        return False
+    copy = INVITE_DORMANT if cohort == COHORT_DORMANT else INVITE_WEEKLY
+    send_sms(phone_number, copy, message_type="sports_invite_dry_run")
+    mark_sports_invite(phone_number, cohort)
+    return True
+
+
+def ensure_founder_teams(
+    phone_number: str,
+    team_abbrs=None,
+    cohort: str = COHORT_WEEKLY,
+) -> list:
+    """Opt a founder phone into Bengals + Lions (or given teams). No-op off allowlist."""
+    from services.nfl_teams import NFL_TEAMS
+    if not is_founder_phone(phone_number):
+        return list_optins(phone_number)
+    wanted = list(team_abbrs or FOUNDER_DUAL_TEAMS)
+    trial_end = _fetch_trial_end(phone_number)
+    now = datetime.utcnow()
+    pause_at = compute_pause_at(now, trial_end)
+    for abbr in wanted:
+        team = NFL_TEAMS.get(abbr.upper())
+        if not team:
+            continue
+        upsert_optin(
+            phone_number,
+            team["abbr"],
+            team["short"],
+            cohort,
+            opted_in_at=now,
+            pause_at=pause_at,
+            beta_started_at=now,
+            replace_others=False,
+        )
+        log_sports_event(
+            phone_number,
+            EVENT_SPORTS_YES,
+            cohort,
+            metadata={"team": team["abbr"], "source": "founder_dry_run"},
+        )
+    return list_optins(phone_number)
+
+
+def deliver_score_ask(phone_number: str, team_abbr: str, game: dict, ask_date=None, asked_at=None) -> bool:
+    """Send the spoiler-free ask and store the final for a later SCORE. Never includes the score."""
+    optin = get_optin(phone_number, team_abbr=team_abbr)
+    if not optin:
+        return False
+    ask_text = ASK_TEMPLATE.format(team=optin["team_short"])
+    if _ask_would_leak_score(ask_text, game):
+        logger.error("Refusing score ask that would leak a score")
+        return False
+    send_sms(phone_number, ask_text, message_type="sports_score_ask")
+    update_optin(
+        phone_number,
+        team_abbr=team_abbr,
+        last_ask_date=ask_date,
+        last_ask_at=asked_at or datetime.utcnow(),
+        last_ask_game_id=game["game_id"],
+        last_ask_replied=False,
+        pending_score_payload=game,
+    )
+    log_sports_event(
+        phone_number,
+        EVENT_SCORE_ASK,
+        optin["cohort"],
+        metadata={"game_id": game["game_id"], "team": team_abbr},
+    )
+    logger.info(f"Sent NFL score ask to ...{phone_number[-4:]} ({optin['team_short']}, {optin['cohort']})")
+    return True
+
+
+def _ask_would_leak_score(ask_text: str, game: dict) -> bool:
+    """True if the ask body contains a score digit string from the stored final."""
+    for key in ("away_score", "home_score"):
+        score = game.get(key)
+        if score is None:
+            continue
+        s = str(score).strip()
+        if s and s in ask_text:
+            return True
+    return False
+
+
+def _schedule_staggered_ask(phone_number: str, team_abbr: str, game: dict, delay_seconds: int, ask_date_iso: Optional[str]):
+    from tasks.reminder_tasks import send_one_nfl_score_ask
+    send_one_nfl_score_ask.apply_async(
+        kwargs={
+            "phone_number": phone_number,
+            "team_abbr": team_abbr,
+            "game": game,
+            "ask_date_iso": ask_date_iso,
+        },
+        countdown=delay_seconds,
+    )
 
 
 def process_morning_asks(
@@ -320,21 +503,41 @@ def process_morning_asks(
     scoreboard_date: Optional[date] = None,
     skip_window_check: bool = False,
     fetch_fn=None,
+    send_invite: bool = False,
+    full_loop: bool = False,
+    teams=None,
+    schedule_staggered=None,
 ) -> dict:
     """Send spoiler-free asks to opted-in users whose team finished yesterday.
 
     dry_run_phone: process only that phone (founder fake/preseason morning).
-    fake_game: use canned Bengals/Chiefs-style final instead of ESPN.
-    Invites are never sent here.
+    fake_game: use canned finals instead of ESPN.
+    full_loop: founder only — send invite copy, ensure Bengals+Lions, then asks.
+    Invites are never blasted to production users.
     """
     now_utc = now_utc or datetime.utcnow()
+    stats = {
+        "asked": 0, "paused": 0, "skipped": 0, "stopped": 0, "ignored": 0,
+        "invite_sent": 0, "scheduled": 0,
+    }
+
     if not _asks_enabled() and not dry_run_phone:
         logger.info("NFL score asks disabled via nfl_score_asks_enabled setting")
-        return {"asked": 0, "paused": 0, "skipped": 0, "stopped": 0, "reason": "disabled"}
+        stats["reason"] = "disabled"
+        return stats
 
     if dry_run_phone and not is_dry_run_allowed(dry_run_phone):
         logger.warning("NFL score dry-run refused — phone not on founder allowlist")
-        return {"asked": 0, "paused": 0, "skipped": 0, "stopped": 0, "reason": "dry_run_not_allowed"}
+        stats["reason"] = "dry_run_not_allowed"
+        return stats
+
+    if dry_run_phone and (send_invite or full_loop):
+        if send_founder_invite(dry_run_phone):
+            stats["invite_sent"] = 1
+        skip_window_check = True
+
+    if dry_run_phone and full_loop:
+        ensure_founder_teams(dry_run_phone, team_abbrs=teams or FOUNDER_DUAL_TEAMS)
 
     optins = list_active_optins()
     if dry_run_phone:
@@ -342,7 +545,8 @@ def process_morning_asks(
         skip_window_check = True
 
     scoreboard_cache = {}
-    stats = {"asked": 0, "paused": 0, "skipped": 0, "stopped": 0, "ignored": 0}
+    due_by_phone = {}
+    paused_phones = set()
 
     for optin in optins:
         phone = optin["phone_number"]
@@ -359,16 +563,20 @@ def process_morning_asks(
             continue
 
         if should_pause_scores(optin, now_utc, optin):
-            if not optin.get("paused_at"):
+            if phone not in paused_phones and not optin.get("paused_at"):
                 try:
                     send_sms(phone, PAUSE_COPY, message_type="sports_score_pause")
                     update_optin(phone, paused_at=now_utc, pending_score_payload=None)
                     stats["paused"] += 1
+                    paused_phones.add(phone)
                     logger.info(f"Sent NFL score pause to ...{phone[-4:]}")
                 except Exception as e:
                     logger.error(f"Failed to send NFL score pause to ...{phone[-4:]}: {e}")
             else:
-                stats["skipped"] += 1
+                if optin.get("paused_at"):
+                    stats["skipped"] += 1
+                else:
+                    update_optin(phone, team_abbr=optin["team_abbr"], paused_at=now_utc, pending_score_payload=None)
             continue
 
         yesterday = scoreboard_date or (local.date() - timedelta(days=1))
@@ -381,7 +589,6 @@ def process_morning_asks(
         else:
             cache_key = yesterday.isoformat()
             if cache_key not in scoreboard_cache:
-                kwargs = {}
                 if fetch_fn is not None:
                     board = fetch_scoreboard(yesterday, fetch_fn=fetch_fn)
                 else:
@@ -392,53 +599,83 @@ def process_morning_asks(
         if not game:
             continue
 
-        # Don't ping again for the same game.
         if optin.get("last_ask_game_id") == game["game_id"]:
             stats["skipped"] += 1
             continue
 
-        # Previous ask went unanswered → ignore streak.
         if optin.get("last_ask_game_id") and not optin.get("last_ask_replied"):
             new_streak = (optin.get("ignore_streak") or 0) + 1
             log_sports_event(
                 phone,
                 EVENT_SCORE_IGNORE,
                 optin["cohort"],
-                metadata={"game_id": optin.get("last_ask_game_id"), "streak": new_streak},
+                metadata={"game_id": optin.get("last_ask_game_id"), "streak": new_streak, "team": optin["team_abbr"]},
             )
             stats["ignored"] += 1
             if new_streak >= IGNORE_STOP_STREAK:
                 update_optin(
                     phone,
+                    team_abbr=optin["team_abbr"],
                     ignore_streak=new_streak,
                     stopped_silently=True,
                     pending_score_payload=None,
                 )
                 stats["stopped"] += 1
-                logger.info(f"NFL score beta silent-stop for ...{phone[-4:]} after {new_streak} ignores")
+                logger.info(f"NFL score beta silent-stop for ...{phone[-4:]} {optin['team_abbr']} after {new_streak} ignores")
                 continue
-            update_optin(phone, ignore_streak=new_streak)
+            update_optin(phone, team_abbr=optin["team_abbr"], ignore_streak=new_streak)
             optin["ignore_streak"] = new_streak
 
-        ask_text = ASK_TEMPLATE.format(team=optin["team_short"])
-        try:
-            send_sms(phone, ask_text, message_type="sports_score_ask")
-            update_optin(
-                phone,
-                last_ask_date=local.date(),
-                last_ask_game_id=game["game_id"],
-                last_ask_replied=False,
-                pending_score_payload=game,
-            )
-            log_sports_event(
-                phone,
-                EVENT_SCORE_ASK,
-                optin["cohort"],
-                metadata={"game_id": game["game_id"], "team": optin["team_abbr"]},
-            )
-            stats["asked"] += 1
-            logger.info(f"Sent NFL score ask to ...{phone[-4:]} ({optin['team_short']}, {optin['cohort']})")
-        except Exception as e:
-            logger.error(f"Failed to send NFL score ask to ...{phone[-4:]}: {e}")
+        due_by_phone.setdefault(phone, []).append({
+            "optin": optin,
+            "game": game,
+            "ask_date": local.date(),
+        })
+
+    scheduler = schedule_staggered if schedule_staggered is not None else _schedule_staggered_ask
+
+    for phone, items in due_by_phone.items():
+        items.sort(key=lambda x: x["optin"]["team_abbr"])
+        for idx, item in enumerate(items):
+            optin = item["optin"]
+            if idx == 0:
+                try:
+                    if deliver_score_ask(
+                        phone,
+                        optin["team_abbr"],
+                        item["game"],
+                        ask_date=item["ask_date"],
+                        asked_at=now_utc,
+                    ):
+                        stats["asked"] += 1
+                except Exception as e:
+                    logger.error(f"Failed to send NFL score ask to ...{phone[-4:]}: {e}")
+            else:
+                delay = STAGGER_SECONDS * idx
+                try:
+                    scheduler(
+                        phone,
+                        optin["team_abbr"],
+                        item["game"],
+                        delay,
+                        item["ask_date"].isoformat(),
+                    )
+                    stats["scheduled"] += 1
+                    logger.info(
+                        f"Staggered NFL score ask for ...{phone[-4:]} {optin['team_short']} in {delay}s"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to schedule staggered ask for ...{phone[-4:]}: {e}")
+                    try:
+                        if deliver_score_ask(
+                            phone,
+                            optin["team_abbr"],
+                            item["game"],
+                            ask_date=item["ask_date"],
+                            asked_at=now_utc,
+                        ):
+                            stats["asked"] += 1
+                    except Exception as send_err:
+                        logger.error(f"Fallback ask failed for ...{phone[-4:]}: {send_err}")
 
     return stats

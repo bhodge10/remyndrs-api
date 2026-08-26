@@ -729,13 +729,14 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS sports_invite_sent_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS sports_invite_cohort TEXT",
             """CREATE TABLE IF NOT EXISTS sports_optins (
-                phone_number TEXT PRIMARY KEY,
+                phone_number TEXT NOT NULL,
                 team_abbr TEXT NOT NULL,
                 team_short TEXT NOT NULL,
                 cohort TEXT NOT NULL CHECK (cohort IN ('weekly', 'dormant')),
                 opted_in_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 ignore_streak INTEGER NOT NULL DEFAULT 0,
                 last_ask_date DATE,
+                last_ask_at TIMESTAMP,
                 last_ask_game_id TEXT,
                 last_ask_replied BOOLEAN NOT NULL DEFAULT FALSE,
                 pending_score_payload JSONB,
@@ -744,8 +745,10 @@ def init_db():
                 paused_at TIMESTAMP,
                 stopped_silently BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (phone_number, team_abbr)
             )""",
+            "ALTER TABLE sports_optins ADD COLUMN IF NOT EXISTS last_ask_at TIMESTAMP",
             """CREATE TABLE IF NOT EXISTS sports_score_events (
                 id SERIAL PRIMARY KEY,
                 phone_number TEXT NOT NULL,
@@ -810,6 +813,26 @@ def init_db():
                     pass  # Expected — index already exists
                 else:
                     logger.error(f"Unexpected index migration error: {index_migration[:80]}... — {e}")
+
+        # Founder dual dry-run: one phone can have two teams. Production stays
+        # one-team via application logic. Older DBs had phone_number as PK.
+        try:
+            c.execute(
+                """
+                SELECT a.attname
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE i.indrelid = 'sports_optins'::regclass AND i.indisprimary
+                ORDER BY a.attnum
+                """
+            )
+            pk_cols = [row[0] for row in c.fetchall()]
+            if pk_cols == ['phone_number']:
+                c.execute("ALTER TABLE sports_optins DROP CONSTRAINT sports_optins_pkey")
+                c.execute("ALTER TABLE sports_optins ADD PRIMARY KEY (phone_number, team_abbr)")
+                logger.info("Migrated sports_optins primary key to (phone_number, team_abbr)")
+        except Exception as e:
+            logger.error(f"sports_optins PK migration skipped/failed: {e}")
 
         conn.commit()
         return_db_connection(conn)

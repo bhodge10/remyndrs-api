@@ -4,13 +4,13 @@
 
 Closed-beta plumbing for NFL scores the morning after a user's team plays. **Invites are not sent by this change.** Users who text `YES + team` opt in; the 9–10 AM local Celery job (`send_nfl_score_asks`, :35 past the hour) asks; `SCORE` returns only the final (`Bengals 27, Chiefs 24`). ESPN public scoreboard, finals only.
 
-**Schema:** `sports_optins` (team, cohort weekly|dormant, ignore streak, last ask, pause, silent stop) and `sports_score_events` (cohort-tagged: `score_ask`, `score_reply`, `score_ignore`, `upgrade_to_keep`, `sports_yes`). Invite tracking columns on `users` for a later send PR; inactivity KEEP/CLEAR is skipped the same week if an invite was recorded.
+**Schema:** `sports_optins` one row per `(phone, team)` — production stays one team in the service layer. Founder dry-run phones (`FOUNDER_SURVEY_EXCLUDE_PHONES` + `nfl_score_dry_run_phones`) may hold two (Bengals + Lions). Events stay cohort-tagged (`score_ask`, `score_reply`, `score_ignore`, `upgrade_to_keep`, `sports_yes`). Invite tracking columns on `users` for a later send PR; inactivity KEEP/CLEAR is skipped the same week if an invite was recorded.
 
-**Dry-run (founder phones only, no invite blast):**
+**Founder dual dry-run (same allowlist, not a production blast):**
 ```
-celery -A celery_app call tasks.reminder_tasks.send_nfl_score_asks --kwargs='{"dry_run_phone":"+18593935374","fake_game":true}'
+celery -A celery_app call tasks.reminder_tasks.send_nfl_score_asks --kwargs='{"dry_run_phone":"+18593935374","fake_game":true,"full_loop":true}'
 ```
-or `POST /admin/sports-scores/dry-run` with `{"phone":"+18593935374","fake_game":true}` after texting `YES Bengals`. Allowlist: `FOUNDER_SURVEY_EXCLUDE_PHONES` plus setting `nfl_score_dry_run_phones`. Kill switch: `nfl_score_asks_enabled` (default true).
+or `POST /admin/sports-scores/dry-run` with `{"phone":"+18593935374","fake_game":true,"full_loop":true}`. Sends locked weekly invite copy to that phone only, opts into Bengals + Lions, then spoiler-free asks staggered by 3 minutes. Optional `scoreboard_date=YYYYMMDD` uses ESPN finals instead of canned. `YES Bengals` then `YES Lions` also keeps both on a founder phone; a normal user still replaces. SCORE one / ignore the other is the intended dual path.
 
 **Files:** `services/sports_score_service.py`, `services/nfl_teams.py`, `services/espn_nfl.py`, `models/sports.py`, `tasks/reminder_tasks.py`, `celery_config.py`, `main.py`, `admin_dashboard.py`, `database.py`, `tests/test_nfl_scores.py`.
 
