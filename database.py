@@ -708,10 +708,11 @@ def init_db():
             "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%4793' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
             "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%2936' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
             "UPDATE users SET last_nudged_at = '2026-03-10 16:35:00', nudge_count_24h = 1 WHERE phone_number LIKE '%6167' AND last_nudged_at IS NULL AND onboarding_complete = FALSE",
-            # Free tier versioning: v1 = grandfathered existing users, v2 = new users (default)
+            # Free tier versioning: v1 = grandfathered existing users, v2 = new users (default).
+            # One-time prod backfill to v1 already ran. Do not re-add an UPDATE that
+            # sets free_tier_version = 1 — it re-runs on every API/worker boot and
+            # converts new users (column default 2) back to grandfathered 1.
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_tier_version INTEGER DEFAULT 2",
-            # Backfill all existing users to v1 (grandfathered)
-            "UPDATE users SET free_tier_version = 1 WHERE free_tier_version = 2 OR free_tier_version IS NULL",
             # Shared lists: pending name prompt state (JSON with list_id, shared_with_phone, list_name)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_share_name TEXT",
             # Shared lists: owner-assigned name for the person they shared with
