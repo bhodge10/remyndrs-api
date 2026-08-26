@@ -48,7 +48,8 @@ from models.list_model import (
 from routes.handlers.lists import (
     handle_share_list, handle_unshare_list, handle_show_list_members,
     handle_leave_shared_list, handle_accept_share, handle_decline_share,
-    handle_pending_share_name, format_all_lists_display
+    handle_pending_share_name, format_all_lists_display,
+    parse_list_picker_reply, format_numbered_list_reply, get_all_lists_with_shared,
 )
 from services.sms_service import send_sms, log_inbound_sms
 from services.ai_service import process_with_ai, parse_list_items
@@ -1979,6 +1980,36 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
+        # LIST PICKER ("Show 3", "show 3", "#3")
+        # ==========================================
+        # Bare numbers still mean "pick N" from a pending delete/show menu.
+        # Prefixed forms are a new intent: open that list and drop any leftover
+        # pending delete so we never confirm-delete reminder #N instead.
+        if not get_pending_list_item(phone_number):
+            picker_num = parse_list_picker_reply(incoming_msg, allow_bare_number=False)
+            if picker_num is not None:
+                create_or_update_user(
+                    phone_number,
+                    pending_reminder_delete=None,
+                    pending_memory_delete=None,
+                )
+                reply = format_numbered_list_reply(phone_number, picker_num)
+                resp = MessagingResponse()
+                if reply:
+                    resp.message(reply)
+                    log_interaction(phone_number, incoming_msg, reply, "show_list", True)
+                else:
+                    total = len(get_all_lists_with_shared(phone_number))
+                    range_msg = (
+                        f"Please reply with a number between 1 and {total}."
+                        if total else
+                        "You don't have any lists yet."
+                    )
+                    resp.message(range_msg)
+                    log_interaction(phone_number, incoming_msg, range_msg, "show_list", False)
+                return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
         # PENDING DELETE SELECTION (reminders, list items, memories)
         # ==========================================
         # Check if user has pending deletion and sent a number or CANCEL
@@ -2051,7 +2082,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     create_or_update_user(phone_number, pending_reminder_delete=None)
                     # Fall through to normal message processing
 
-            # Handle number selection
+            # Handle number selection from a delete-options menu. Bare numbers
+            # still pick item N; anything else is a new intent (clear and continue).
             if incoming_msg.strip().isdigit():
                 try:
                     delete_options = json.loads(pending_delete_data)
@@ -2107,6 +2139,14 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.error(f"Error parsing pending delete data: {e}")
                     create_or_update_user(phone_number, pending_reminder_delete=None)
+            elif not (
+                delete_data
+                and isinstance(delete_data, dict)
+                and delete_data.get('awaiting_confirmation')
+            ):
+                # Numbered delete menu is still pending but this isn't a pick —
+                # treat it as a new intent instead of re-prompting YES/CANCEL.
+                create_or_update_user(phone_number, pending_reminder_delete=None)
 
         # ==========================================
         # PENDING MEMORY DELETE SELECTION/CONFIRMATION
@@ -2138,6 +2178,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         resp.message("Cancelled. Your memory is safe!")
                         log_interaction(phone_number, incoming_msg, "Delete cancelled", "delete_memory_cancelled", True)
                         return Response(content=str(resp), media_type="application/xml")
+                    else:
+                        # New intent — don't keep re-prompting YES to delete.
+                        create_or_update_user(phone_number, pending_memory_delete=None)
 
                 # Check if this is a number selection (multiple memories)
                 elif memory_data.get('options') and incoming_msg.strip().isdigit():
@@ -2168,6 +2211,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                         resp = MessagingResponse()
                         resp.message(f"Please reply with a number between 1 and {len(memory_options)}")
                         return Response(content=str(resp), media_type="application/xml")
+                else:
+                    # New intent — drop the memory-delete menu/confirm.
+                    create_or_update_user(phone_number, pending_memory_delete=None)
 
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Error parsing pending memory delete data: {e}")
@@ -4180,8 +4226,15 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # LIST COMMANDS (MY LISTS, SHOW LISTS)
         # ==========================================
         if incoming_msg.upper() in ["MY LISTS", "SHOW LISTS", "LIST LISTS", "LISTS"]:
-            # Clear any pending list item state so number responses show lists, not add items
-            create_or_update_user(phone_number, pending_list_item=None, pending_delete=False)
+            # Clear pending add/delete state so number replies open a list, not
+            # confirm a leftover reminder delete or add an item.
+            create_or_update_user(
+                phone_number,
+                pending_list_item=None,
+                pending_delete=False,
+                pending_reminder_delete=None,
+                pending_memory_delete=None,
+            )
 
             # Use shared-list-aware display
             reply = format_all_lists_display(phone_number)
@@ -4216,7 +4269,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 if pending:
                     reply += f"\n\nYou have {len(pending)} pending shared list invitation{'s' if len(pending) > 1 else ''}. Reply ACCEPT or DECLINE."
             elif total_lists > 1:
-                create_or_update_user(phone_number, last_active_list="__LISTS__")
+                create_or_update_user(
+                    phone_number,
+                    last_active_list="__LISTS__",
+                    pending_reminder_delete=None,
+                )
             else:
                 pass  # format_all_lists_display already handles empty case
 
@@ -4228,31 +4285,11 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # NUMBER RESPONSE TO SHOW LIST
         # ==========================================
-        # If user sends just a number and has lists (but no pending item), show that list
-        if incoming_msg.strip().isdigit() and not get_pending_list_item(phone_number):
-            list_num = int(incoming_msg.strip())
-            from routes.handlers.lists import get_all_lists_with_shared
-            all_lists = get_all_lists_with_shared(phone_number)
-            if all_lists and 1 <= list_num <= len(all_lists):
-                selected = all_lists[list_num - 1]
-                list_id = selected['list_id']
-                list_name = selected['list_name']
-                is_shared = selected['is_shared']
-                prefix = "[Shared] " if is_shared else ""
-                # Set context so "Delete #" knows we're viewing this specific list
-                create_or_update_user(phone_number, last_active_list=list_name)
-                items = get_list_items(list_id)
-                if items:
-                    item_lines = []
-                    for i, (item_id, item_text, completed) in enumerate(items, 1):
-                        if completed:
-                            item_lines.append(f"{i}. [x] {item_text}")
-                        else:
-                            item_lines.append(f"{i}. {item_text}")
-                    reply = f"{prefix}{list_name}:\n\n" + "\n".join(item_lines)
-                else:
-                    reply = f"{prefix}{list_name} is empty." if is_shared else f"Your {list_name} is empty."
-
+        # Bare number, or "Show N" / "#N". Skip if the user is picking a list to add to.
+        picker_num = parse_list_picker_reply(incoming_msg)
+        if picker_num is not None and not get_pending_list_item(phone_number):
+            reply = format_numbered_list_reply(phone_number, picker_num)
+            if reply:
                 resp = MessagingResponse()
                 resp.message(reply)
                 log_interaction(phone_number, incoming_msg, reply, "show_list", True)
@@ -4321,37 +4358,8 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if pending_date_check:
             pending_states['date_clarification'] = pending_date_check
 
-        # Check for reminder delete confirmation
-        pending_reminder_del = get_pending_reminder_delete(phone_number)
-        if pending_reminder_del:
-            try:
-                del_data = json.loads(pending_reminder_del)
-                if isinstance(del_data, list):
-                    # It's a list of options for selection
-                    pending_states['reminder_delete_selection'] = del_data
-                elif isinstance(del_data, dict):
-                    if del_data.get('awaiting_confirmation'):
-                        pending_states['reminder_delete_confirmation'] = del_data
-                    elif 'options' in del_data:
-                        pending_states['reminder_delete_selection'] = del_data
-            except json.JSONDecodeError:
-                pass
-
-        # Check for memory delete confirmation
-        pending_memory_del = get_pending_memory_delete(phone_number)
-        if pending_memory_del:
-            try:
-                mem_data = json.loads(pending_memory_del)
-                if isinstance(mem_data, list):
-                    # It's a list of options for selection
-                    pending_states['memory_delete_selection'] = mem_data
-                elif isinstance(mem_data, dict):
-                    if mem_data.get('awaiting_confirmation'):
-                        pending_states['memory_delete_confirmation'] = mem_data
-                    elif 'options' in mem_data:
-                        pending_states['memory_delete_selection'] = mem_data
-            except json.JSONDecodeError:
-                pass
+        # Pending reminder/memory/list-item deletes are handled above (YES / CANCEL /
+        # bare number). Do not re-prompt them here — a new intent should proceed.
 
         # Check for list item selection (pending_list_item without pending_delete)
         pending_list_item_check = get_pending_list_item(phone_number)
@@ -4422,16 +4430,6 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 elif 'date_clarification' in pending_states:
                     state = pending_states['date_clarification']
                     reminder = f"I still need to know what time for '{state['text']}' on {state['date']}.\n\nWhat time? (e.g., '9am', '3:30pm')\n\n(Say 'cancel' to skip)"
-                elif 'reminder_delete_confirmation' in pending_states:
-                    state = pending_states['reminder_delete_confirmation']
-                    reminder = f"I still need your confirmation: Delete reminder '{state.get('text', 'your reminder')}'?\n\nReply YES to delete or NO to keep it. (Say 'cancel' to skip)"
-                elif 'reminder_delete_selection' in pending_states:
-                    reminder = "I still need you to select which reminder to delete.\n\nReply with the number of the reminder to delete, or say 'cancel' to skip."
-                elif 'memory_delete_confirmation' in pending_states:
-                    state = pending_states['memory_delete_confirmation']
-                    reminder = f"I still need your confirmation: Delete this memory?\n\nReply YES to delete or NO to keep it. (Say 'cancel' to skip)"
-                elif 'memory_delete_selection' in pending_states:
-                    reminder = "I still need you to select which memory to delete.\n\nReply with the number of the memory to delete, or say 'cancel' to skip."
                 elif 'list_selection' in pending_states:
                     state = pending_states['list_selection']
                     reminder = f"I still need to know which list to add '{state['item']}' to.\n\nReply with the list number, or say 'cancel' to skip."
@@ -5658,6 +5656,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                     elif lists:
                         list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
                         reply_text = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
+                        create_or_update_user(
+                            phone_number,
+                            last_active_list="__LISTS__",
+                            pending_reminder_delete=None,
+                        )
                     else:
                         reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
             else:
@@ -5681,6 +5684,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 elif lists:
                     list_lines = [f"{i+1}. {l[1]} ({l[2]} items)" for i, l in enumerate(lists)]
                     reply_text = "Your lists:\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
+                    create_or_update_user(
+                        phone_number,
+                        last_active_list="__LISTS__",
+                        pending_reminder_delete=None,
+                    )
                 else:
                     reply_text = "You don't have any lists yet. Try 'Create a grocery list'!"
             log_interaction(phone_number, incoming_msg, reply_text, "show_current_list", True)
@@ -5732,7 +5740,11 @@ def process_single_action(ai_response, phone_number, incoming_msg):
                 header = f"Your{filter_desc} lists:" if list_filter else "Your lists:"
                 reply_text = header + "\n\n" + "\n".join(list_lines) + "\n\nReply with a number to see that list."
                 # Track that user is viewing list of lists for number selection
-                create_or_update_user(phone_number, last_active_list="__LISTS__")
+                create_or_update_user(
+                    phone_number,
+                    last_active_list="__LISTS__",
+                    pending_reminder_delete=None,
+                )
             else:
                 if list_filter:
                     reply_text = f"You don't have any {list_filter} lists. Try 'Create a {list_filter} list'!"

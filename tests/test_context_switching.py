@@ -120,7 +120,7 @@ class TestConfirmationInterrupts:
     """Test context switches during confirmation prompts."""
 
     async def test_delete_reminder_confirmation_interrupted(self, simulator, onboarded_user, ai_mock):
-        """Delete reminder confirmation pending -> user adds to grocery list -> system reminds about delete."""
+        """Delete reminder confirmation pending -> new intent proceeds, pending cleared."""
         phone = onboarded_user["phone"]
 
         # Create a reminder first
@@ -138,15 +138,22 @@ class TestConfirmationInterrupts:
         })
         result = await simulator.send_message(phone, "delete my mom reminder")
 
-        # If confirmation is pending, try to switch context
+        # If confirmation is pending, a new request should not stay in the confirm loop
         if "yes" in result["output"].lower() or "confirm" in result["output"].lower() or "delete" in result["output"].lower():
+            ai_mock.set_response("add bread to shopping list", {
+                "action": "add_to_list",
+                "list_name": "shopping list",
+                "items": ["bread"],
+            })
             result = await simulator.send_message(phone, "add bread to shopping list")
             output_lower = result["output"].lower()
-            # Should remind about delete confirmation
-            assert "still need" in output_lower or "delete" in output_lower or "yes" in output_lower or "no" in output_lower or "call mom" in output_lower
+            assert "still need" not in output_lower
+            assert "reply yes" not in output_lower
+            from models.user import get_pending_reminder_delete
+            assert get_pending_reminder_delete(phone) is None
 
     async def test_delete_memory_confirmation_interrupted(self, simulator, onboarded_user, ai_mock):
-        """Delete memory confirmation pending -> user creates reminder -> system reminds about delete."""
+        """Delete memory confirmation pending -> new intent proceeds, pending cleared."""
         phone = onboarded_user["phone"]
 
         # Store a memory
@@ -161,10 +168,16 @@ class TestConfirmationInterrupts:
         result = await simulator.send_message(phone, "delete my wifi password memory")
 
         if "yes" in result["output"].lower() or "confirm" in result["output"].lower():
+            ai_mock.set_response("what time is it in london", {
+                "action": "chitchat",
+                "response": "I don't track timezones other than yours."
+            })
             result = await simulator.send_message(phone, "what time is it in london")
             output_lower = result["output"].lower()
-            # Should remind about memory delete
-            assert "still need" in output_lower or "delete" in output_lower or "memory" in output_lower or "yes" in output_lower
+            assert "still need" not in output_lower
+            assert "reply yes" not in output_lower
+            from models.user import get_pending_memory_delete
+            assert get_pending_memory_delete(phone) is None
 
     async def test_low_confidence_confirmation_interrupted(self, simulator, onboarded_user, ai_mock):
         """Low confidence reminder confirmation -> user ignores, new request -> system reminds about confirmation."""
@@ -212,11 +225,15 @@ class TestSelectionInterrupts:
         result = await simulator.send_message(phone, "delete john's phone")
 
         if "1" in result["output"] and "2" in result["output"]:
-            # User ignores and asks something else
+            # User ignores and asks something else — new intent should proceed
+            ai_mock.set_response("tell me a story", {
+                "action": "chitchat",
+                "response": "Once upon a time there was a reminder."
+            })
             result = await simulator.send_message(phone, "tell me a story")
             output_lower = result["output"].lower()
-            # Should remind to select
-            assert "still need" in output_lower or "select" in output_lower or "which" in output_lower or "number" in output_lower
+            assert "still need" not in output_lower
+            assert "reply yes" not in output_lower
 
     async def test_list_number_selection_interrupted(self, simulator, onboarded_user, ai_mock):
         """List number selection pending -> user asks for reminders -> system reminds to select."""
