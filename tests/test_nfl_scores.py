@@ -269,8 +269,9 @@ class TestIgnoreAndStop:
 
     def test_three_ignores_stops_silently(self, onboarded_user):
         phone = onboarded_user["phone"]
-        _opt_in(phone)
         now = _et_morning()
+        _set_trial(phone, now + timedelta(days=90))
+        _opt_in(phone, opted_in_at=now, pause_at=now + timedelta(days=90))
         with patch("services.sports_score_service.send_sms") as mock_sms:
             mock_sms.return_value = None
             for i, gid in enumerate(["g1", "g2", "g3", "g4"], start=1):
