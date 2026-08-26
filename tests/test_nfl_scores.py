@@ -38,7 +38,6 @@ from services.sports_score_service import (
     INVITE_WEEKLY,
     INVITE_DORMANT,
     handle_yes_team,
-    handle_score_keyword,
     process_morning_asks,
     should_skip_score_ask,
     compute_pause_at,
