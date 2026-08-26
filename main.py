@@ -622,6 +622,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                 c.execute("DELETE FROM memories WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM list_items WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM lists WHERE phone_number = %s", (phone_number,))
+                try:
+                    c.execute("SAVEPOINT del_sports")
+                    c.execute("DELETE FROM sports_score_events WHERE phone_number = %s", (phone_number,))
+                    c.execute("DELETE FROM sports_optins WHERE phone_number = %s", (phone_number,))
+                except Exception:
+                    c.execute("ROLLBACK TO SAVEPOINT del_sports")
                 c.execute("DELETE FROM logs WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (phone_number,))
                 c.execute("DELETE FROM feedback WHERE user_phone = %s", (phone_number,))
@@ -745,6 +751,12 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
                     c.execute("DELETE FROM memories WHERE phone_number = %s", (phone_number,))
                     c.execute("DELETE FROM list_items WHERE phone_number = %s", (phone_number,))
                     c.execute("DELETE FROM lists WHERE phone_number = %s", (phone_number,))
+                    try:
+                        c.execute("SAVEPOINT del_sports_reset")
+                        c.execute("DELETE FROM sports_score_events WHERE phone_number = %s", (phone_number,))
+                        c.execute("DELETE FROM sports_optins WHERE phone_number = %s", (phone_number,))
+                    except Exception:
+                        c.execute("ROLLBACK TO SAVEPOINT del_sports_reset")
                     c.execute("DELETE FROM logs WHERE phone_number = %s", (phone_number,))
                     c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (phone_number,))
                     c.execute("DELETE FROM users WHERE phone_number = %s", (phone_number,))
@@ -814,6 +826,29 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             log_interaction(phone_number, incoming_msg, "[Handled by Twilio]", "stop", True)
             resp = MessagingResponse()
+            return Response(content=str(resp), media_type="application/xml")
+
+        # ==========================================
+        # NFL SCORE BETA (YES + team / SCORE) — keyword path BEFORE AI
+        # ==========================================
+        # Bare YES still falls through to confirmations below. CANCEL/STOP
+        # already returned. Invites are not sent from inbound handling.
+        from services.sports_score_service import (
+            is_yes_team_message, is_score_message,
+            handle_yes_team, handle_score_keyword,
+        )
+        if is_yes_team_message(incoming_msg) and is_user_onboarded(phone_number):
+            reply_text = handle_yes_team(phone_number, incoming_msg)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(reply_text))
+            log_interaction(phone_number, incoming_msg, reply_text, "sports_yes_team", True)
+            return Response(content=str(resp), media_type="application/xml")
+
+        if is_score_message(incoming_msg):
+            reply_text = handle_score_keyword(phone_number, incoming_msg)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(reply_text))
+            log_interaction(phone_number, incoming_msg, reply_text, "sports_score", True)
             return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
@@ -2956,6 +2991,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             from config import STRIPE_ENABLED, APP_BASE_URL, PREMIUM_MONTHLY_PRICE, PREMIUM_ANNUAL_PRICE
 
             subscription = get_user_subscription(phone_number)
+
+            # Growth analytics: paused score-beta users who text UPGRADE
+            try:
+                from services.sports_score_service import maybe_log_upgrade_to_keep
+                maybe_log_upgrade_to_keep(phone_number)
+            except Exception as sports_upgrade_err:
+                logger.warning(f"sports upgrade_to_keep log failed: {sports_upgrade_err}")
 
             # If already premium, show account management
             if subscription['tier'] != 'free' and subscription['status'] == 'active':

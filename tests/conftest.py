@@ -305,6 +305,7 @@ def sms_capture():
          patch('services.onboarding_recovery_service.send_sms', side_effect=capture.send_sms), \
          patch('services.onboarding_service.send_sms', side_effect=capture.send_sms), \
          patch('tasks.reminder_tasks.send_sms', side_effect=capture.send_sms), \
+         patch('services.sports_score_service.send_sms', side_effect=capture.send_sms), \
          patch('services.onboarding_service.send_delayed_sms.apply_async', side_effect=mock_delayed_sms_apply_async), \
          patch('services.onboarding_service.send_engagement_nudge.apply_async', side_effect=mock_engagement_nudge_apply_async), \
          patch('main.send_sms', side_effect=capture.send_sms), \
@@ -410,6 +411,8 @@ def onboarded_user(test_phone):
         c.execute("DELETE FROM support_tickets WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM logs WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM sms_inbound_log WHERE phone_number = %s", (test_phone,))
+        c.execute("DELETE FROM sports_score_events WHERE phone_number = %s", (test_phone,))
+        c.execute("DELETE FROM sports_optins WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM users WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (test_phone,))
         conn.commit()
@@ -457,6 +460,8 @@ def onboarded_user(test_phone):
         c.execute("DELETE FROM support_tickets WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM logs WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM sms_inbound_log WHERE phone_number = %s", (test_phone,))
+        c.execute("DELETE FROM sports_score_events WHERE phone_number = %s", (test_phone,))
+        c.execute("DELETE FROM sports_optins WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM users WHERE phone_number = %s", (test_phone,))
         c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (test_phone,))
         conn.commit()
@@ -491,6 +496,8 @@ def clean_test_user(test_phone):
             c.execute("DELETE FROM memories WHERE phone_number = %s", (test_phone,))
             c.execute("DELETE FROM support_tickets WHERE phone_number = %s", (test_phone,))
             c.execute("DELETE FROM logs WHERE phone_number = %s", (test_phone,))
+            c.execute("DELETE FROM sports_score_events WHERE phone_number = %s", (test_phone,))
+            c.execute("DELETE FROM sports_optins WHERE phone_number = %s", (test_phone,))
             c.execute("DELETE FROM users WHERE phone_number = %s", (test_phone,))
             c.execute("DELETE FROM onboarding_progress WHERE phone_number = %s", (test_phone,))
             conn.commit()
@@ -613,6 +620,7 @@ def disable_twilio_globally():
         patch('services.onboarding_recovery_service.send_sms', side_effect=mock_send_sms),
         patch('services.stripe_service.send_sms', side_effect=mock_send_sms),
         patch('tasks.reminder_tasks.send_sms', side_effect=mock_send_sms),
+        patch('services.sports_score_service.send_sms', side_effect=mock_send_sms),
         patch('main.send_sms', side_effect=mock_send_sms),
         patch('admin_dashboard.send_sms', side_effect=mock_send_sms),
     ]
