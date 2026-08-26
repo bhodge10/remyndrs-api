@@ -1,5 +1,19 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## NFL Morning-After Score Beta v1 (Aug 2026)
+
+Closed-beta plumbing for NFL scores the morning after a user's team plays. **Invites are not sent by this change.** Users who text `YES + team` opt in; the 9–10 AM local Celery job (`send_nfl_score_asks`, :35 past the hour) asks; `SCORE` returns only the final (`Bengals 27, Chiefs 24`). ESPN public scoreboard, finals only.
+
+**Schema:** `sports_optins` (team, cohort weekly|dormant, ignore streak, last ask, pause, silent stop) and `sports_score_events` (cohort-tagged: `score_ask`, `score_reply`, `score_ignore`, `upgrade_to_keep`, `sports_yes`). Invite tracking columns on `users` for a later send PR; inactivity KEEP/CLEAR is skipped the same week if an invite was recorded.
+
+**Dry-run (founder phones only, no invite blast):**
+```
+celery -A celery_app call tasks.reminder_tasks.send_nfl_score_asks --kwargs='{"dry_run_phone":"+18593935374","fake_game":true}'
+```
+or `POST /admin/sports-scores/dry-run` with `{"phone":"+18593935374","fake_game":true}` after texting `YES Bengals`. Allowlist: `FOUNDER_SURVEY_EXCLUDE_PHONES` plus setting `nfl_score_dry_run_phones`. Kill switch: `nfl_score_asks_enabled` (default true).
+
+**Files:** `services/sports_score_service.py`, `services/nfl_teams.py`, `services/espn_nfl.py`, `models/sports.py`, `tasks/reminder_tasks.py`, `celery_config.py`, `main.py`, `admin_dashboard.py`, `database.py`, `tests/test_nfl_scores.py`.
+
 ## Email Reminder Fallback (Aug 2026)
 Built during the Aug 2026 Twilio account suspension (suspicious-activity flag; every outbound SMS API call failed while inbound stopped reaching the webhook entirely). Reminders were never at risk of being lost — `send_single_reminder` only marks `sent = TRUE` after a successful send, so they queue and retry — but users with due reminders heard nothing.
 

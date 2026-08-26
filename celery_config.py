@@ -153,6 +153,16 @@ beat_schedule = {
             "expires": 3500,
         },
     },
+    # NFL morning-after score asks — 9-10 AM local, after other lifecycle
+    # tasks so Day 7/13/14 and win-back win the anti-bunch check.
+    # Invites are NOT scheduled here. Do not add an invite beat entry.
+    "send-nfl-score-asks": {
+        "task": "tasks.reminder_tasks.send_nfl_score_asks",
+        "schedule": crontab(minute=35),  # Every hour, at :35
+        "options": {
+            "expires": 3500,
+        },
+    },
 
     # ===========================================
     # AI ANALYTICS SUMMARY

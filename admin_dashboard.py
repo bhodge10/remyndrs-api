@@ -946,6 +946,52 @@ def _founder_survey_recipients(c):
     return recipients
 
 
+class SportsScoreDryRunRequest(BaseModel):
+    phone: str
+    fake_game: bool = True
+    scoreboard_date: Optional[str] = None  # YYYYMMDD for a real ESPN preseason date
+
+
+@router.post("/admin/sports-scores/dry-run")
+async def sports_score_dry_run(
+    request: SportsScoreDryRunRequest,
+    admin: str = Depends(verify_admin),
+):
+    """Trigger a fake/preseason morning-after ask for one founder phone.
+
+    Does not send weekly or dormant invites. Phone must be on the founder
+    allowlist (FOUNDER_SURVEY_EXCLUDE_PHONES or nfl_score_dry_run_phones).
+    User must already be opted in via YES + team.
+    """
+    from services.sports_score_service import process_morning_asks, is_dry_run_allowed
+    from models.sports import get_optin
+
+    phone = (request.phone or "").strip()
+    if not phone.startswith("+"):
+        raise HTTPException(status_code=400, detail="phone must be E.164 (e.g. +18593935374)")
+    if not is_dry_run_allowed(phone):
+        raise HTTPException(status_code=403, detail="phone is not on the founder dry-run allowlist")
+    if not get_optin(phone):
+        raise HTTPException(
+            status_code=400,
+            detail="that phone is not opted in — text YES + team first (e.g. YES Bengals)",
+        )
+
+    parsed_date = None
+    if request.scoreboard_date:
+        try:
+            parsed_date = datetime.strptime(request.scoreboard_date, "%Y%m%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="scoreboard_date must be YYYYMMDD")
+
+    result = process_morning_asks(
+        dry_run_phone=phone,
+        fake_game=request.fake_game,
+        scoreboard_date=parsed_date,
+    )
+    return JSONResponse(content={"ok": True, "result": result})
+
+
 @router.get("/admin/founder-survey/recipients-preview")
 async def founder_survey_preview(admin: str = Depends(verify_admin)):
     """Preview who would receive the founder survey (no sends)."""

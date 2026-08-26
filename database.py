@@ -724,6 +724,36 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_messages_opted_out BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_messages_opted_out_at TIMESTAMP",
             "UPDATE users SET lifecycle_messages_opted_out = FALSE WHERE lifecycle_messages_opted_out IS NULL",
+            # NFL morning-after score beta (closed beta). Invite sending is NOT
+            # scheduled — these columns only record a send if a later PR does it.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS sports_invite_sent_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS sports_invite_cohort TEXT",
+            """CREATE TABLE IF NOT EXISTS sports_optins (
+                phone_number TEXT PRIMARY KEY,
+                team_abbr TEXT NOT NULL,
+                team_short TEXT NOT NULL,
+                cohort TEXT NOT NULL CHECK (cohort IN ('weekly', 'dormant')),
+                opted_in_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ignore_streak INTEGER NOT NULL DEFAULT 0,
+                last_ask_date DATE,
+                last_ask_game_id TEXT,
+                last_ask_replied BOOLEAN NOT NULL DEFAULT FALSE,
+                pending_score_payload JSONB,
+                beta_started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                pause_at TIMESTAMP,
+                paused_at TIMESTAMP,
+                stopped_silently BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            """CREATE TABLE IF NOT EXISTS sports_score_events (
+                id SERIAL PRIMARY KEY,
+                phone_number TEXT NOT NULL,
+                cohort TEXT NOT NULL CHECK (cohort IN ('weekly', 'dormant')),
+                event_type TEXT NOT NULL,
+                metadata JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups
@@ -756,6 +786,9 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_list_shares_shared_with ON list_shares(shared_with_phone)",
             "CREATE INDEX IF NOT EXISTS idx_list_shares_list_id ON list_shares(list_id)",
             "CREATE INDEX IF NOT EXISTS idx_list_shares_owner ON list_shares(owner_phone)",
+            "CREATE INDEX IF NOT EXISTS idx_sports_score_events_cohort_type ON sports_score_events(cohort, event_type, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_sports_score_events_phone ON sports_score_events(phone_number)",
+            "CREATE INDEX IF NOT EXISTS idx_sports_optins_stopped ON sports_optins(stopped_silently) WHERE stopped_silently = FALSE",
         ]
 
         for migration in migrations:
