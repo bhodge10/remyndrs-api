@@ -72,6 +72,8 @@ beat_schedule = {
     # "your trial is expiring" warnings were crying wolf to ~46 users (a top STOP
     # driver). The task function is kept intact; re-add this schedule entry only
     # once a genuine trial/paywall exists. See docs/changelog.md.
+    # Do NOT re-enable for the Aug 2026 beta-comp wall — fake Day 13 would lie
+    # to the September-dated comps. Use the one-shot tasks below instead.
     # "check-trial-expirations": {
     #     "task": "tasks.reminder_tasks.check_trial_expirations",
     #     "schedule": crontab(minute=0),  # Every hour, on the hour
@@ -79,6 +81,22 @@ beat_schedule = {
     #         "expires": 3500,  # Just under 1 hour
     #     },
     # },
+    # One-shot beta-comp wall (32 comps). Thu/Fri warning at :00, Saturday
+    # flip+confirm at :08 so the warning has had a chance to send first.
+    "send-beta-comp-warnings": {
+        "task": "tasks.reminder_tasks.send_beta_comp_warnings",
+        "schedule": crontab(minute=0),
+        "options": {
+            "expires": 3500,
+        },
+    },
+    "send-beta-comp-downgrade": {
+        "task": "tasks.reminder_tasks.send_beta_comp_downgrade",
+        "schedule": crontab(minute=8),
+        "options": {
+            "expires": 3500,
+        },
+    },
     # Send mid-trial value reminders hourly — timezone-aware (9-10 AM local)
     "send-mid-trial-value-reminders": {
         "task": "tasks.reminder_tasks.send_mid_trial_value_reminders",

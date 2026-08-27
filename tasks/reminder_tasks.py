@@ -1095,6 +1095,54 @@ Want unlimited access back? Text UPGRADE — {PREMIUM_MONTHLY_PRICE}/mo or {PREM
             return_db_connection(conn)
 
 
+# =====================================================
+# ONE-SHOT BETA-COMP WALL (not a restore of check_trial_expirations)
+# =====================================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def send_beta_comp_warnings(self, now_utc=None):
+    """Thu/Fri 9-10am local warning to the 32 beta comps. Once per user.
+
+    Does not flip. Does not re-enable check_trial_expirations.
+    A regular reminder the same morning does not suppress this.
+    """
+    from services.beta_comp_downgrade import process_beta_comp_warnings
+
+    try:
+        return process_beta_comp_warnings(now_utc=now_utc)
+    except Exception as exc:
+        logger.exception("Error in send_beta_comp_warnings")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def send_beta_comp_downgrade(self, now_utc=None):
+    """Saturday 9-10am local: flip the 32 to free and send confirm.
+
+    Scheduled after the warning task so Thu/Fri warning goes first.
+    Saturday-only so the warning window has closed. Idempotent.
+    """
+    from services.beta_comp_downgrade import process_beta_comp_downgrade
+
+    try:
+        return process_beta_comp_downgrade(now_utc=now_utc)
+    except Exception as exc:
+        logger.exception("Error in send_beta_comp_downgrade")
+        raise self.retry(exc=exc)
+
+
 @celery_app.task(
     bind=True,
     max_retries=2,
@@ -2111,7 +2159,8 @@ def send_30d_winback(self):
         window_start = target_date - timedelta(days=1)
 
         c.execute("""
-            SELECT phone_number, first_name, trial_end_date, timezone
+            SELECT phone_number, first_name, trial_end_date, timezone,
+                   beta_comp_warning_sent_at, beta_comp_downgraded_at
             FROM users
             WHERE trial_end_date IS NOT NULL
               AND trial_end_date >= %s
@@ -2133,7 +2182,7 @@ def send_30d_winback(self):
         messages_sent = 0
 
         for user in users:
-            phone_number, first_name, trial_end_date, timezone_str = user
+            phone_number, first_name, trial_end_date, timezone_str, warning_at, downgraded_at = user
 
             # Only send when it's 9-10 AM in user's local timezone
             try:
@@ -2142,6 +2191,21 @@ def send_30d_winback(self):
                 user_tz = pytz.timezone('America/New_York')
             user_local_hour = datetime.now(pytz.utc).astimezone(user_tz).hour
             if not (9 <= user_local_hour < 10):
+                continue
+
+            from services.beta_comp_downgrade import beta_comp_message_sent_this_local_morning
+            if beta_comp_message_sent_this_local_morning(
+                {
+                    "timezone": timezone_str,
+                    "beta_comp_warning_sent_at": warning_at,
+                    "beta_comp_downgraded_at": downgraded_at,
+                },
+                now_utc,
+            ):
+                logger.info(
+                    f"Skipping 30-day winback for ...{phone_number[-4:]} — "
+                    "beta-comp warning/confirm sent this local morning"
+                )
                 continue
 
             # Anti-bunching: skip if any other lifecycle/nudge fired in last 48h

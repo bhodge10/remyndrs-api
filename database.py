@@ -758,6 +758,10 @@ def init_db():
                 metadata JSONB,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
+            # One-shot beta-comp wall (Thu/Fri warning, Saturday flip). Not a
+            # restore of check_trial_expirations — that stay unscheduled.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS beta_comp_warning_sent_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS beta_comp_downgraded_at TIMESTAMP",
         ]
 
         # Create indexes on phone_hash columns for efficient lookups

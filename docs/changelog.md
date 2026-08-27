@@ -1,5 +1,15 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## Beta-comp wall (Aug 2026)
+
+One-shot downgrade for the 32 premium comps with no Stripe (trial_end_date 2026-08-29 or 2026-06-18). The four September comps (2026-09-07, 2026-09-12), `subscription_status='manual'`, and anyone with a real Stripe subscription are left alone. **Does not re-enable `check_trial_expirations`** — that stays commented out on purpose (a fake Day 13 would lie to the September-dated comps). Copy locked by Retention.
+
+- **Thu/Fri 9–10 AM local:** warning SMS, once per user (`beta_comp_warning_sent_at`). A regular reminder that morning does not suppress it. Sports score pings and 30-day win-back lose the same local morning.
+- **Saturday 9–10 AM local:** flip to free (Day-14 behavior: `premium_status='free'`, new recurring blocked, existing recurring keep running) and send confirm. Scheduled after the warning task. Idempotent (`beta_comp_downgraded_at`).
+- **In-product limit-hit copy** (when they bounce on Free, not a blast): 3rd reminder today, and new repeating reminders.
+
+**Files:** `services/beta_comp_downgrade.py` (new), `services/tier_service.py`, `tasks/reminder_tasks.py`, `celery_config.py`, `database.py`, `models/user.py`, `models/sports.py`, `services/sports_score_service.py`, `tests/test_beta_comp_downgrade.py`.
+
 ## NFL Morning-After Score Beta v1 (Aug 2026)
 
 Closed-beta plumbing for NFL scores the morning after a user's team plays. **Invites are not sent by this change.** Users who text `YES + team` opt in; the 9–10 AM local Celery job (`send_nfl_score_asks`, :35 past the hour) asks; `SCORE` returns only the final (`Bengals 27, Chiefs 24`). ESPN public scoreboard, finals only.
