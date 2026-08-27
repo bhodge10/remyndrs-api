@@ -246,7 +246,8 @@ def list_active_optins() -> list[dict]:
                    s.stopped_silently, s.last_ask_at,
                    u.timezone, u.trial_end_date, u.premium_status,
                    u.subscription_status, u.stripe_subscription_id, u.opted_out,
-                   u.winback_30d_sent, u.sports_invite_sent_at
+                   u.winback_30d_sent, u.sports_invite_sent_at,
+                   u.beta_comp_warning_sent_at, u.beta_comp_downgraded_at
             FROM sports_optins s
             JOIN users u ON u.phone_number = s.phone_number
             WHERE COALESCE(s.stopped_silently, FALSE) = FALSE
@@ -266,6 +267,8 @@ def list_active_optins() -> list[dict]:
                 "opted_out": row[20],
                 "winback_30d_sent": row[21],
                 "sports_invite_sent_at": row[22],
+                "beta_comp_warning_sent_at": row[23],
+                "beta_comp_downgraded_at": row[24],
             }
             results.append(_optin_from_row(row, extra))
         return results

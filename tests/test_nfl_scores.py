@@ -344,6 +344,34 @@ class TestAntiBunch:
         assert "reminder" not in PUSHED_MESSAGE_TYPES
         assert "sports_score_ask" not in PUSHED_MESSAGE_TYPES
 
+    def test_skip_if_beta_comp_warning_sent_that_local_morning(self, onboarded_user):
+        """Score ping loses if the beta-comp warning went the same local morning."""
+        phone = onboarded_user["phone"]
+        now = _et_morning(day=27, month=8, year=2026)  # Thursday
+        trial_end = datetime(2026, 6, 18, 16, 0, 0)  # not a Day 13/14 window
+        _set_trial(phone, trial_end, premium_status="premium")
+        conn = get_db_connection()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "UPDATE users SET beta_comp_warning_sent_at = %s WHERE phone_number = %s",
+                (now, phone),
+            )
+            conn.commit()
+        finally:
+            return_db_connection(conn)
+        _opt_in(phone)
+        row = _user_fields(phone)
+        row.update(get_optin(phone))
+        assert should_skip_score_ask(row, now) == "beta_comp_warning"
+        with patch("services.sports_score_service.send_sms") as mock_sms:
+            mock_sms.return_value = None
+            result = process_morning_asks(
+                now_utc=now, skip_window_check=True, fetch_fn=_fetch(_espn_final()),
+            )
+        assert result["asked"] == 0
+        assert mock_sms.call_count == 0
+
 
 def _user_fields(phone):
     conn = get_db_connection()
@@ -352,7 +380,8 @@ def _user_fields(phone):
         c.execute(
             """
             SELECT timezone, trial_end_date, premium_status, subscription_status,
-                   stripe_subscription_id, winback_30d_sent, sports_invite_sent_at
+                   stripe_subscription_id, winback_30d_sent, sports_invite_sent_at,
+                   beta_comp_warning_sent_at, beta_comp_downgraded_at
             FROM users WHERE phone_number = %s
             """,
             (phone,),
@@ -366,6 +395,8 @@ def _user_fields(phone):
             "stripe_subscription_id": row[4],
             "winback_30d_sent": row[5],
             "sports_invite_sent_at": row[6],
+            "beta_comp_warning_sent_at": row[7],
+            "beta_comp_downgraded_at": row[8],
             "phone_number": phone,
         }
     finally:

@@ -52,6 +52,8 @@ ALLOWED_USER_FIELDS = {
     'shared_lists_beta_opt_in',
     # Soft opt-out for proactive lifecycle messages
     'lifecycle_messages_opted_out', 'lifecycle_messages_opted_out_at',
+    # One-shot beta-comp wall (Thu/Fri warning, Saturday flip)
+    'beta_comp_warning_sent_at', 'beta_comp_downgraded_at',
 }
 
 

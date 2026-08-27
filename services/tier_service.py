@@ -11,6 +11,15 @@ from config import (
     TIER_LIMITS, FREE_TIER_LIMITS, get_tier_limits
 )
 
+# Retention-locked free-tier bounce copy. In-product when they hit a wall
+# after going Free — not a blast. Do not rewrite.
+V1_DAILY_REMINDER_LIMIT_COPY = (
+    "You're at 2 reminders today on Free. Text UPGRADE for unlimited, or try again tomorrow."
+)
+NEW_RECURRING_LIMIT_COPY = (
+    "New repeating reminders are Premium. Text UPGRADE to set this one, or send it as a one-off."
+)
+
 
 def get_user_tier(phone_number: str) -> str:
     """Get user's subscription tier. Returns 'free' if not found.
@@ -352,11 +361,8 @@ def can_create_reminder(phone_number: str, reminder_date: datetime = None) -> tu
     current_count = get_reminders_created_today(phone_number)
 
     if current_count >= limits['reminders_per_day']:
-        return (
-            False,
-            f"You've used all {limits['reminders_per_day']} reminders for today — they reset at midnight. "
-            f"Need more? Text UPGRADE for unlimited reminders ({PREMIUM_MONTHLY_PRICE}/mo)."
-        )
+        # Retention-locked copy for v1 (2/day). Do not rewrite.
+        return (False, V1_DAILY_REMINDER_LIMIT_COPY)
 
     return (True, None)
 
@@ -473,12 +479,7 @@ def can_create_recurring_reminder(phone_number: str) -> tuple[bool, str | None]:
     limits = get_tier_limits(tier)
 
     if not limits['recurring_reminders']:
-        from config import PREMIUM_MONTHLY_PRICE
-        return (
-            False,
-            "Recurring reminders are a Premium feature. "
-            f"Text UPGRADE for daily, weekly & monthly reminders ({PREMIUM_MONTHLY_PRICE}/mo)."
-        )
+        return (False, NEW_RECURRING_LIMIT_COPY)
 
     return (True, None)
 

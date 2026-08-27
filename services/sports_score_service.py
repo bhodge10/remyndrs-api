@@ -199,12 +199,18 @@ def winback_due_this_morning(user_row: dict, now_utc: datetime) -> bool:
 
 
 def should_skip_score_ask(user_row: dict, now_utc: datetime) -> Optional[str]:
-    """Anti-bunch: score ping loses to Day 7/13/14, win-back, or the sports invite."""
+    """Anti-bunch: score ping loses to Day 7/13/14, win-back, sports invite,
+    or the beta-comp warning/confirm the same local morning.
+    """
     reason = trial_day_conflict(user_row, now_utc)
     if reason:
         return reason
     if winback_due_this_morning(user_row, now_utc):
         return "winback"
+    from services.beta_comp_downgrade import should_skip_score_for_beta_comp
+    beta_reason = should_skip_score_for_beta_comp(user_row, now_utc)
+    if beta_reason:
+        return beta_reason
     return None
 
 
