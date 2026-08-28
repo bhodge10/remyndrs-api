@@ -269,12 +269,11 @@ class ConversationSimulator:
                                    zip_code="10001", **kwargs):
         """
         Complete the onboarding flow for a test user.
+        Reminder-first onboarding completes on the first inbound (no name/ZIP quiz).
         Returns the conversation history.
         """
         messages = [
-            "START",  # Initial trigger
-            first_name,  # First name
-            zip_code  # ZIP code
+            "START",  # Completes onboarding and sends the locked welcome
         ]
         return await self.run_conversation(phone_number, messages)
 

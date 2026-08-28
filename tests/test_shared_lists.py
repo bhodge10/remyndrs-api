@@ -778,43 +778,37 @@ class TestNonUserInvitationFlow:
 
     @pytest.mark.asyncio
     async def test_non_user_onboarding_shows_shared_list_welcome(self, premium_owner, owner_list, simulator, sms_capture):
-        """Non-user replying YES gets a customized welcome mentioning the shared list."""
-        from models.list_model import share_list
+        """Non-user replying YES gets reminder-first welcome and is onboarded (no name quiz)."""
+        from models.list_model import share_list, get_shared_lists_for_user
+        from models.user import is_user_onboarded
         share_list(PHONE_OWNER, owner_list["list_id"], PHONE_NEW)
 
-        # Non-user texts YES — enters onboarding step 0
         result = await simulator.send_message(PHONE_NEW, "YES")
-        assert "Brad" in result["output"] or "shared" in result["output"].lower()
-        assert "Grocery List" in result["output"]
-        assert "name" in result["output"].lower()
+        assert "Welcome to Remyndrs" in result["output"]
+        assert "first name" not in result["output"].lower()
+        assert "ai-powered" not in result["output"].lower()
+        assert is_user_onboarded(PHONE_NEW)
+        shared = get_shared_lists_for_user(PHONE_NEW)
+        assert len(shared) == 1
+        assert shared[0][1] == "Grocery List"
 
     @pytest.mark.asyncio
     async def test_non_user_full_onboarding_auto_accepts_share(self, premium_owner, owner_list, simulator, sms_capture):
-        """Non-user completes onboarding → pending share is auto-accepted → owner notified."""
+        """Non-user first inbound completes onboarding and auto-accepts the pending share."""
         from models.list_model import share_list, get_shared_lists_for_user
 
         share_list(PHONE_OWNER, owner_list["list_id"], PHONE_NEW)
         sms_capture.messages.clear()
 
-        # Step 0: initial message
-        await simulator.send_message(PHONE_NEW, "YES")
+        result = await simulator.send_message(PHONE_NEW, "YES")
 
-        # Step 1: provide name
-        await simulator.send_message(PHONE_NEW, "Sarah")
+        assert "Welcome to Remyndrs" in result["output"]
+        assert "finish setup first" not in result["output"].lower()
 
-        # Step 2: provide ZIP → completes onboarding
-        result = await simulator.send_message(PHONE_NEW, "90210")
-
-        # Completion message should mention the shared list
-        assert "Grocery List" in result["output"]
-        assert "all set" in result["output"].lower() or "set" in result["output"].lower()
-
-        # Share should now be accepted
         shared = get_shared_lists_for_user(PHONE_NEW)
         assert len(shared) == 1
         assert shared[0][1] == "Grocery List"
 
-        # Owner should have been notified
         owner_msgs = [m for m in sms_capture.messages if m["to"] == PHONE_OWNER]
         assert any("joined" in m["message"].lower() or "accepted" in m["message"].lower() for m in owner_msgs)
 
@@ -826,9 +820,7 @@ class TestNonUserInvitationFlow:
 
         share_list(PHONE_OWNER, owner_list["list_id"], PHONE_NEW)
 
-        # Complete onboarding (referral set after user record exists)
         await simulator.send_message(PHONE_NEW, "YES")
-        await simulator.send_message(PHONE_NEW, "Sarah")
 
         # Check referral source (set during step 1 when user record exists)
         conn = get_db_connection()
@@ -874,7 +866,8 @@ class TestNonUserInvitationFlow:
         """Non-user saying NO without a pending share just enters normal onboarding."""
         result = await simulator.send_message(PHONE_NEW, "No")
         # Should enter onboarding, not get a decline message
-        assert "welcome" in result["output"].lower() or "name" in result["output"].lower()
+        assert "welcome" in result["output"].lower()
+        assert "first name" not in result["output"].lower()
 
 
 # =====================================================

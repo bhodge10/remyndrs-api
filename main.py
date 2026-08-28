@@ -53,7 +53,7 @@ from routes.handlers.lists import (
 )
 from services.sms_service import send_sms, log_inbound_sms
 from services.ai_service import process_with_ai, parse_list_items
-from services.onboarding_service import handle_onboarding
+from services.onboarding_service import handle_onboarding, first_inbound_reminder_reply
 from services.first_action_service import should_prompt_daily_summary, mark_daily_summary_prompted, get_daily_summary_prompt_message
 from services.trial_messaging_service import (
     is_pricing_question, is_comparison_question, is_acknowledgment,
@@ -452,6 +452,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         )
 
         phone_number = From
+        first_inbound_reminder = False
 
         # Staging Fallback: If enabled in production, fail for test numbers to trigger Twilio fallback URL
         if ENVIRONMENT == "production":
@@ -807,7 +808,9 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
 
             # Trigger the actual onboarding flow to show welcome message
             if ENVIRONMENT == "staging" or is_developer:
-                return handle_onboarding(phone_number, incoming_msg)
+                onboarding_result = handle_onboarding(phone_number, incoming_msg)
+                if onboarding_result is not None:
+                    return onboarding_result
 
             resp = MessagingResponse()
             resp.message("✅ Your account has been reset. Let's start over!\n\nWhat's your first name?")
@@ -983,6 +986,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             ("google", "google", None),
             ("linkedin", "linkedin", None),
         ]
+        detected_referral_source = None
         if not is_user_onboarded(phone_number):
             msg_lower = incoming_msg.lower().strip()
             referral_source = REFERRAL_MESSAGES.get(msg_lower)
@@ -1015,6 +1019,7 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
             if not referral_source:
                 referral_source = "sms-organic"
 
+            detected_referral_source = referral_source
             set_referral_source(phone_number, referral_source)
             logger.info(f"Referral source detected for ...{phone_number[-4:]}: {referral_source}")
 
@@ -1040,8 +1045,17 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # ==========================================
         # ONBOARDING CHECK
         # ==========================================
+        # Reminder-first: Hello/START/empty get the locked welcome and are
+        # marked complete. A first inbound that is a reminder returns None so
+        # we fall through and actually create it (name/ZIP do not gate).
         if not is_user_onboarded(phone_number):
-            return handle_onboarding(phone_number, incoming_msg)
+            onboarding_result = handle_onboarding(phone_number, incoming_msg)
+            # User row now exists — referral UPDATE that ran earlier may have missed.
+            if detected_referral_source:
+                set_referral_source(phone_number, detected_referral_source)
+            if onboarding_result is not None:
+                return onboarding_result
+            first_inbound_reminder = True
 
         # ==========================================
         # POST-ONBOARDING ENGAGEMENT TRACKING
@@ -4551,6 +4565,13 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         # If this was a QUESTION command, append escape hatch for human help
         if is_question_command:
             reply_text += "\n\nNeed more help? Text SUPPORT followed by your message to chat with a real person."
+
+        # First inbound was a reminder: replace the normal confirm with locked copy
+        # (no trial-info append, no daily-summary nag, no extra pin/VCF on msg 1).
+        if first_inbound_reminder:
+            locked_confirm = first_inbound_reminder_reply(phone_number)
+            if locked_confirm:
+                reply_text = locked_confirm
 
         # Send response (with SMS fallback if processing took too long)
         return twiml_or_sms_fallback(phone_number, reply_text, request_start_time)
