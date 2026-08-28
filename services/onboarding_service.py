@@ -4,16 +4,19 @@ Handles new user onboarding flow
 """
 
 import re
-import pytz
 from datetime import datetime, timedelta
+from typing import Optional
+
+import pytz
 from fastapi.responses import Response
 from twilio.twiml.messaging_response import MessagingResponse
 
 from config import logger, FREE_TRIAL_DAYS, TIER_PREMIUM, API_BASE_URL, PREMIUM_MONTHLY_PRICE
-from models.user import get_user, get_onboarding_step, create_or_update_user
+from models.user import get_user, get_onboarding_step, create_or_update_user, get_user_timezone
 from models.memory import save_memory
 from models.list_model import get_pending_shares, accept_share, get_share_name
-from utils.timezone import get_timezone_from_zip, get_user_current_time
+from models.reminder import get_pending_reminders
+from utils.timezone import get_timezone_from_zip
 from utils.formatting import get_onboarding_prompt
 from services.sms_service import send_sms
 from tasks.reminder_tasks import send_delayed_sms, send_engagement_nudge
@@ -22,6 +25,50 @@ from services.onboarding_recovery_service import (
     mark_onboarding_complete,
     mark_onboarding_cancelled,
     get_onboarding_progress,
+)
+
+# Locked first-reply copy (Retention). Do not rewrite.
+FIRST_REPLY_WELCOME = (
+    "Welcome to Remyndrs. You just forgot something — text me what to remember and when.\n"
+    "No app, no card. Reply STOP anytime."
+)
+FIRST_REPLY_REMINDER_CONFIRM = (
+    "Got it — I'll text you at {time}. Pin this chat so I don't land in spam.\n"
+    "No app, no card. Reply STOP anytime."
+)
+
+DEFAULT_ONBOARDING_TIMEZONE = "America/New_York"
+
+# First inbound that is Hello / START / empty / a CTA is NOT a reminder.
+_NOT_REMINDER_MESSAGES = {
+    "",
+    "hello", "hi", "hey", "yo", "sup", "hiya", "howdy",
+    "hello!", "hi!", "hey!", "hello.", "hi.", "hey.",
+    "hi there", "hello there", "hey there",
+    "start", "unstop", "begin", "yes", "ok", "okay",
+    "thanks", "thank you",
+    "go", "work", "try", "kristen",
+    "hi, sign me up!", "hey, sign me up!",
+    "hi, i'd like to sign up!", "hey, i'd like to sign up!",
+    "sign me up!",
+}
+
+_TIME_CUE_RE = re.compile(
+    r"\b("
+    r"tomorrow|tonight|today|"
+    r"this\s+(morning|afternoon|evening|weekend|week)|"
+    r"next\s+(week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"in\s+\d+\s*(min|mins|minute|minutes|hr|hrs|hour|hours|day|days|week|weeks)|"
+    r"at\s+\d{1,2}"
+    r")\b"
+    r"|\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b",
+    re.IGNORECASE,
+)
+_REMIND_CREATE_RE = re.compile(r"\bremind", re.IGNORECASE)
+_REMINDER_VIEW_RE = re.compile(
+    r"\b((show|list|see|view)\s+(my\s+)?reminders?|my\s+reminders?|what(?:'s| is)\s+(on\s+)?my\s+reminders?)\b",
+    re.IGNORECASE,
 )
 
 
@@ -101,8 +148,176 @@ What's your 5-digit ZIP code?"""
     return """Please enter a valid 5-digit ZIP code:"""
 
 
+def looks_like_reminder_intent(message: str) -> bool:
+    """True when the first inbound is a reminder (or a what+when), not a greeting/CTA."""
+    msg = (message or "").strip()
+    if not msg:
+        return False
+    msg_lower = msg.lower()
+    if msg_lower in _NOT_REMINDER_MESSAGES:
+        return False
+    if _REMINDER_VIEW_RE.search(msg_lower):
+        return False
+    if _REMIND_CREATE_RE.search(msg_lower):
+        return True
+    if _TIME_CUE_RE.search(msg_lower) and len(msg_lower.split()) >= 2:
+        return True
+    return False
+
+
+def format_first_reminder_time(phone_number: str) -> Optional[str]:
+    """Human time for the locked first-reminder confirm, or None if nothing was saved."""
+    pending = get_pending_reminders(phone_number)
+    if not pending:
+        return None
+
+    _id, _text, reminder_date = pending[0]
+    tz_str = get_user_timezone(phone_number) or DEFAULT_ONBOARDING_TIMEZONE
+    try:
+        tz = pytz.timezone(tz_str)
+    except pytz.exceptions.UnknownTimeZoneError:
+        tz = pytz.timezone(DEFAULT_ONBOARDING_TIMEZONE)
+
+    if isinstance(reminder_date, datetime):
+        utc_dt = reminder_date
+        if utc_dt.tzinfo is None:
+            utc_dt = pytz.UTC.localize(utc_dt)
+    else:
+        utc_dt = datetime.strptime(str(reminder_date), "%Y-%m-%d %H:%M:%S")
+        utc_dt = pytz.UTC.localize(utc_dt)
+
+    local = utc_dt.astimezone(tz)
+    time_part = local.strftime("%I:%M %p").lstrip("0")
+    now_local = datetime.now(tz)
+    if local.date() == now_local.date():
+        return time_part
+    if local.date() == (now_local + timedelta(days=1)).date():
+        return f"{time_part} tomorrow"
+    return f"{time_part} on {local.strftime('%A, %B')} {local.day}"
+
+
+def first_inbound_reminder_reply(phone_number: str) -> Optional[str]:
+    """Locked first-reply confirm if a reminder was created; otherwise None."""
+    time_display = format_first_reminder_time(phone_number)
+    if not time_display:
+        return None
+    return FIRST_REPLY_REMINDER_CONFIRM.format(time=time_display)
+
+
+def _auto_accept_pending_shares(phone_number):
+    """Accept pending shared-list invites. Returns list of (list_name, owner_phone)."""
+    accepted_lists = []
+    pending = get_pending_shares(phone_number)
+    for _share_id, list_id, owner_phone, list_name in pending:
+        success, _ = accept_share(phone_number, list_id)
+        if success:
+            accepted_lists.append((list_name, owner_phone))
+            display_name = get_share_name(list_id, phone_number)
+            if not display_name:
+                new_user = get_user(phone_number)
+                display_name = (new_user[1] if new_user else None) or "Someone"
+            send_sms(
+                owner_phone,
+                f"{display_name} joined Remyndrs and accepted your shared list '{list_name}'!",
+                message_type="reply",
+            )
+    return accepted_lists
+
+
+def _schedule_post_onboarding_touchbacks(phone_number):
+    """1-hour delayed VCF (not on message 1) and 5-minute engagement nudge."""
+    vcf_url = f"{API_BASE_URL}/contact.vcf"
+    vcf_message = """📱 Tap to save Remyndrs to your contacts!
+
+Tip: Pin this conversation to keep me at the top of your texts — that way I'm always one tap away when you need to remember something!"""
+    try:
+        send_delayed_sms.apply_async(
+            args=[phone_number, vcf_message],
+            kwargs={"media_url": vcf_url},
+            countdown=3600,  # 1 hour — do not send on message 1
+        )
+    except Exception as celery_error:
+        # Celery not available - fall back to immediate send
+        logger.info(f"Celery unavailable, sending VCF immediately: {celery_error}")
+        try:
+            send_sms(phone_number, vcf_message, media_url=vcf_url, message_type="onboarding")
+        except Exception as sms_error:
+            logger.warning(f"Could not send VCF card for {phone_number}: {sms_error}")
+
+    try:
+        nudge_scheduled_at = datetime.utcnow()
+        create_or_update_user(
+            phone_number,
+            five_minute_nudge_scheduled_at=nudge_scheduled_at,
+            five_minute_nudge_sent=False,
+            post_onboarding_interactions=0,
+        )
+        send_engagement_nudge.apply_async(
+            args=[phone_number],
+            countdown=300,  # 5 minutes
+        )
+        logger.info(f"Scheduled 5-minute engagement nudge for ...{phone_number[-4:]}")
+    except Exception as nudge_error:
+        logger.warning(f"Could not schedule engagement nudge for {phone_number}: {nudge_error}")
+
+
+def complete_fast_onboarding(phone_number, zip_code=None, timezone=None):
+    """
+    Open the account so the first reminder is not gated on name/ZIP.
+
+    Uses America/New_York when timezone is unknown. Starts the Premium trial.
+    Does not send a first-reply SMS — the caller owns that copy.
+    """
+    user = get_user(phone_number)
+    existing_timezone = user[5] if user else None
+    existing_zip = user[4] if user else None
+    first_name = user[1] if user else None
+
+    timezone = timezone or existing_timezone or DEFAULT_ONBOARDING_TIMEZONE
+    zip_code = zip_code or existing_zip
+
+    trial_end_date = datetime.utcnow() + timedelta(days=FREE_TRIAL_DAYS)
+    kwargs = {
+        "timezone": timezone,
+        "onboarding_complete": True,
+        "onboarding_step": 3,
+        "premium_status": TIER_PREMIUM,
+        "trial_end_date": trial_end_date,
+    }
+    if zip_code:
+        kwargs["zip_code"] = zip_code
+    create_or_update_user(phone_number, **kwargs)
+
+    mark_onboarding_complete(phone_number)
+    accepted_lists = _auto_accept_pending_shares(phone_number)
+
+    signup_date = datetime.utcnow().strftime("%B %d, %Y")
+    first_memory = f"Signed up for Remyndrs on {signup_date}"
+    save_memory(phone_number, first_memory, {"type": "signup", "auto_created": True})
+
+    _schedule_post_onboarding_touchbacks(phone_number)
+
+    user_tz = pytz.timezone(timezone)
+    trial_end_local = trial_end_date.replace(tzinfo=pytz.UTC).astimezone(user_tz)
+    trial_end_str = trial_end_local.strftime("%B %d")
+
+    logger.info(f"Reminder-first onboarding complete for ...{phone_number[-4:]} tz={timezone}")
+    return {
+        "first_name": first_name,
+        "timezone": timezone,
+        "trial_end_str": trial_end_str,
+        "accepted_lists": accepted_lists,
+        "first_memory": first_memory,
+    }
+
+
 def handle_onboarding(phone_number, message):
-    """Handle onboarding flow for new users"""
+    """Handle onboarding for new users.
+
+    Returns a TwiML Response for greetings / leftover name-ZIP answers.
+    Returns None when the inbound is a reminder so main.py can create it
+    (name/ZIP must not gate the first reminder).
+    """
     try:
         step = get_onboarding_step(phone_number)
         resp = MessagingResponse()
@@ -110,9 +325,11 @@ def handle_onboarding(phone_number, message):
         message_lower = message.lower().strip()
         message_stripped = message.strip()
 
-        # Expanded service keywords
-        service_keywords = ['remind', 'list', 'delete', 'what', 'when', 'where', 'how', 'my',
-                           'add', 'show', 'create', 'set', 'save', 'remember']
+        # First inbound that looks like a reminder (or leftover users still on
+        # step 1/2) must create it — not bounce to the name/ZIP quiz.
+        if looks_like_reminder_intent(message):
+            complete_fast_onboarding(phone_number)
+            return None
 
         # Handle help request during onboarding
         if message_lower in ['help', '?'] and step > 0:
@@ -166,7 +383,7 @@ What's your first name?""")
 What's your first name?""")
             return Response(content=str(resp), media_type="application/xml")
 
-        # Handle skip requests during ZIP step
+        # Handle skip requests during ZIP step (leftover in-flight users only)
         if message_lower in ['skip', 'pass', "i don't want to", "dont want to"]:
             if step == 2:
                 resp.message("""I totally get it! But here's why I need it:
@@ -178,40 +395,10 @@ Your 5-digit ZIP code helps me send reminders when YOU need them.
 What's your ZIP code?""")
                 return Response(content=str(resp), media_type="application/xml")
 
-        # Check if user is trying to use the service before completing onboarding
-        if any(keyword in message_lower for keyword in service_keywords) and step > 0:
-            remaining = 2 - step + 1
-            question_word = "question" if remaining == 1 else "questions"
-            resp.message(f"""⚠️ Almost there! Please finish setup first.
-
-You're on step {step} of 2 - just {remaining} more {question_word}!
-
-{get_onboarding_prompt(step)}""")
-            return Response(content=str(resp), media_type="application/xml")
-
         if step == 0:
-            # Welcome message - ask for first name
-            create_or_update_user(phone_number, onboarding_step=1)
-            track_onboarding_progress(phone_number, 1)
-
-            # Check if this user was invited via a shared list
-            pending = get_pending_shares(phone_number)
-            if pending:
-                _share_id, _list_id, owner_phone, list_name = pending[0]
-                owner = get_user(owner_phone)
-                owner_name = owner[1] if owner else "Someone"
-                resp.message(f"""{owner_name} shared '{list_name}' with you on Remyndrs!
-
-Let's get you set up in 30 seconds so you can see it. What's your first name?""")
-            else:
-                # Enhanced welcome message with clearer value proposition
-                resp.message("""Welcome to Remyndrs! 👋
-
-I'm your AI-powered reminder assistant. I'll help you remember anything—from daily tasks to important dates.
-
-No app needed - just text me naturally and I'll handle the rest!
-
-Let's get you set up in 30 seconds. What's your first name?""")
+            # Reminder-first: no name/ZIP quiz, no AI-powered pitch, no VCF on msg 1.
+            complete_fast_onboarding(phone_number)
+            resp.message(FIRST_REPLY_WELCOME)
 
         elif step == 1:
             # Check if user sent START again (maybe trying to restart)
@@ -250,70 +437,20 @@ Last question: ZIP code?
 (This helps me send reminders at the right time in your timezone)""")
 
         elif step == 2:
-            # Validate and store zip code, calculate timezone, complete onboarding
+            # Leftover in-flight users still answering ZIP
             zip_code, error_type = validate_zip_code(message_stripped)
 
             if error_type:
                 resp.message(get_zip_error_message(error_type, message_stripped))
                 return Response(content=str(resp), media_type="application/xml")
 
-            # Get timezone from zip code
             timezone = get_timezone_from_zip(zip_code)
+            result = complete_fast_onboarding(phone_number, zip_code=zip_code, timezone=timezone)
+            first_name = result["first_name"] or "there"
+            trial_end_str = result["trial_end_str"]
+            accepted_lists = result["accepted_lists"]
+            first_memory = result["first_memory"]
 
-            # Calculate trial end date
-            trial_end_date = datetime.utcnow() + timedelta(days=FREE_TRIAL_DAYS)
-
-            # Save zip, timezone, trial info, and mark onboarding complete
-            create_or_update_user(
-                phone_number,
-                zip_code=zip_code,
-                timezone=timezone,
-                onboarding_complete=True,
-                onboarding_step=3,
-                premium_status=TIER_PREMIUM,
-                trial_end_date=trial_end_date
-            )
-
-            # Remove from abandoned onboarding tracking
-            mark_onboarding_complete(phone_number)
-
-            # SMART NUDGES: Auto-enable during trial for engagement
-            # Uncomment post-launch when ready to activate for new trial users:
-            # create_or_update_user(phone_number, smart_nudges_enabled=True)
-
-            # Auto-accept any pending shared list invitations
-            accepted_lists = []
-            pending = get_pending_shares(phone_number)
-            for share_id, list_id, owner_phone, list_name in pending:
-                success, _ = accept_share(phone_number, list_id)
-                if success:
-                    accepted_lists.append((list_name, owner_phone))
-                    # Notify the owner
-                    display_name = get_share_name(list_id, phone_number)
-                    if not display_name:
-                        new_user = get_user(phone_number)
-                        display_name = new_user[1] if new_user else "Someone"
-                    send_sms(
-                        owner_phone,
-                        f"{display_name} joined Remyndrs and accepted your shared list '{list_name}'!",
-                        message_type="reply"
-                    )
-
-            # Get user's name for personalized message
-            user = get_user(phone_number)
-            first_name = user[1]
-
-            # Save first memory: signup date
-            signup_date = datetime.utcnow().strftime("%B %d, %Y")
-            first_memory = f"Signed up for Remyndrs on {signup_date}"
-            save_memory(phone_number, first_memory, {"type": "signup", "auto_created": True})
-
-            # Format trial end date in user's timezone
-            user_tz = pytz.timezone(timezone)
-            trial_end_local = trial_end_date.replace(tzinfo=pytz.UTC).astimezone(user_tz)
-            trial_end_str = trial_end_local.strftime('%B %d')
-
-            # Send completion message — customized if they joined via shared list
             if accepted_lists:
                 list_name, _ = accepted_lists[0]
                 shared_note = f"\n\nYou now have access to '{list_name}'! Text 'Show {list_name}' to see it."
@@ -334,43 +471,6 @@ I just saved your first memory: "{first_memory}"
 Keep an eye out for a quick morning tip over the next week or so — I'll show you what else I can do.
 
 Try asking me: "What do I have saved?" """)
-
-            # Send VCF contact card after 1-hour delay — acts as a warm touchback
-            vcf_url = f"{API_BASE_URL}/contact.vcf"
-            vcf_message = """📱 Tap to save Remyndrs to your contacts!
-
-Tip: Pin this conversation to keep me at the top of your texts — that way I'm always one tap away when you need to remember something!"""
-            try:
-                send_delayed_sms.apply_async(
-                    args=[phone_number, vcf_message],
-                    kwargs={"media_url": vcf_url},
-                    countdown=3600  # 1 hour
-                )
-            except Exception as celery_error:
-                # Celery not available - fall back to immediate send
-                logger.info(f"Celery unavailable, sending VCF immediately: {celery_error}")
-                try:
-                    send_sms(phone_number, vcf_message, media_url=vcf_url, message_type="onboarding")
-                except Exception as sms_error:
-                    logger.warning(f"Could not send VCF card for {phone_number}: {sms_error}")
-
-            # Schedule 5-minute engagement nudge (only if user doesn't text back)
-            try:
-                nudge_scheduled_at = datetime.utcnow()
-                create_or_update_user(
-                    phone_number,
-                    five_minute_nudge_scheduled_at=nudge_scheduled_at,
-                    five_minute_nudge_sent=False,
-                    post_onboarding_interactions=0
-                )
-                send_engagement_nudge.apply_async(
-                    args=[phone_number],
-                    countdown=300  # 5 minutes
-                )
-                logger.info(f"Scheduled 5-minute engagement nudge for ...{phone_number[-4:]}")
-            except Exception as nudge_error:
-                # Non-critical - log and continue
-                logger.warning(f"Could not schedule engagement nudge for {phone_number}: {nudge_error}")
 
         return Response(content=str(resp), media_type="application/xml")
 
