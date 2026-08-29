@@ -889,6 +889,24 @@ def send_engagement_nudge(self, phone_number: str):
         return {"status": "error", "error": str(exc)}
 
 
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=120,
+    soft_time_limit=100,
+)
+def send_zip_timezone_ask(self, phone_number: str):
+    """+3 min post-onboarding ZIP timezone ask. Not a reminders row (activation)."""
+    from services.onboarding_service import send_zip_timezone_ask_now
+
+    try:
+        return send_zip_timezone_ask_now(phone_number)
+    except Exception as exc:
+        logger.error(f"Error in ZIP timezone ask task for ...{phone_number[-4:]}: {exc}")
+        return {"status": "error", "error": str(exc)}
+
+
 # =====================================================
 # TRIAL EXPIRATION WARNINGS
 # =====================================================

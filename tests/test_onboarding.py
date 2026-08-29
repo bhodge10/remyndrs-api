@@ -12,7 +12,13 @@ import pytest
 
 from services.onboarding_service import (
     FIRST_REPLY_WELCOME,
+    ZIP_ASK_DELAY_SECONDS,
+    ZIP_TIMEZONE_ASK_COPY,
+    ZIP_TIMEZONE_CONFIRM,
+    handle_zip_timezone_reply,
     looks_like_reminder_intent,
+    send_zip_timezone_ask_now,
+    should_schedule_zip_timezone_ask,
 )
 
 
@@ -272,3 +278,333 @@ class TestBetaCompPathUntouched:
             "New recurring is Premium.\n\n"
             "Text UPGRADE to get unlimited back — $8.99/mo or $89.99/yr."
         )
+
+
+PREVIEW_BANNED = ["in 3 minutes", "in three minutes", "i'll ask", "i will ask"]
+
+
+def _reminder_count(phone):
+    from database import get_db_connection, return_db_connection
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM reminders WHERE phone_number = %s", (phone,))
+        return c.fetchone()[0]
+    finally:
+        return_db_connection(conn)
+
+
+def _assert_no_preview(output: str):
+    lower = output.lower()
+    for banned in PREVIEW_BANNED:
+        assert banned not in lower, f"Must not preview the ZIP ask: {output}"
+    assert ZIP_TIMEZONE_ASK_COPY not in output.replace("&amp;", "&")
+    assert "what's your zip" not in lower
+
+
+class TestZipTimezoneAskScheduled:
+    """Hello and first-inbound-reminder both schedule the +3 min ZIP ping when ZIP is missing."""
+
+    @pytest.mark.asyncio
+    async def test_hello_schedules_zip_ask_not_forget_nudge(
+        self, simulator, clean_test_user, sms_capture
+    ):
+        phone = clean_test_user
+        result = await simulator.send_message(phone, "Hello")
+        _assert_locked_welcome(result["output"])
+        _assert_no_preview(result["output"])
+
+        zip_asks = sms_capture.scheduled("send_zip_timezone_ask")
+        assert len(zip_asks) == 1
+        assert zip_asks[0]["countdown"] == ZIP_ASK_DELAY_SECONDS
+        assert zip_asks[0]["args"] == [phone]
+        assert sms_capture.scheduled("send_engagement_nudge") == []
+
+        vcf = sms_capture.scheduled("send_delayed_sms")
+        assert len(vcf) == 1
+        assert vcf[0]["countdown"] == 3600
+
+        assert _reminder_count(phone) == 0
+
+    @pytest.mark.asyncio
+    async def test_first_inbound_reminder_schedules_zip_ask(
+        self, simulator, clean_test_user, ai_mock, sms_capture
+    ):
+        phone = clean_test_user
+        msg = "remind me tomorrow at 2pm to call mom"
+        future = (datetime.utcnow() + timedelta(days=1)).replace(
+            hour=14, minute=0, second=0, microsecond=0
+        )
+        reminder_response = {
+            "action": "reminder",
+            "reminder_text": "call mom",
+            "reminder_date": future.strftime("%Y-%m-%d %H:%M:%S"),
+            "confidence": 100,
+        }
+        ai_mock.set_response(msg, reminder_response)
+        ai_mock.set_response("remind me tomorrow at 2:pm to call mom", reminder_response)
+        ai_mock.set_response("remind me tomorrow at 2:PM to call mom", reminder_response)
+
+        result = await simulator.send_message(phone, msg)
+        _assert_locked_reminder_confirm(result["output"])
+        _assert_no_preview(result["output"])
+
+        zip_asks = sms_capture.scheduled("send_zip_timezone_ask")
+        assert len(zip_asks) == 1
+        assert zip_asks[0]["countdown"] == ZIP_ASK_DELAY_SECONDS
+        assert sms_capture.scheduled("send_engagement_nudge") == []
+
+        # User reminder only — ZIP ping is not a reminders row
+        assert _reminder_count(phone) == 1
+        from models.reminder import get_pending_reminders
+        pending = get_pending_reminders(phone)
+        assert len(pending) == 1
+        assert "call mom" in pending[0][1].lower()
+
+    @pytest.mark.asyncio
+    async def test_skip_zip_ask_when_zip_already_present(
+        self, simulator, clean_test_user, sms_capture
+    ):
+        phone = clean_test_user
+        from models.user import create_or_update_user
+        create_or_update_user(
+            phone,
+            zip_code="10001",
+            timezone="America/New_York",
+            onboarding_complete=False,
+            onboarding_step=0,
+        )
+        result = await simulator.send_message(phone, "Hello")
+        _assert_locked_welcome(result["output"])
+        assert sms_capture.scheduled("send_zip_timezone_ask") == []
+        forget = sms_capture.scheduled("send_engagement_nudge")
+        assert len(forget) == 1
+        assert forget[0]["countdown"] == 300
+
+
+class TestZipTimezoneReply:
+    """Bare ZIP after onboarded sets tz and locked confirm; does not create a reminder."""
+
+    @pytest.mark.asyncio
+    async def test_bare_zip_after_hello_sets_timezone(
+        self, simulator, clean_test_user, sms_capture
+    ):
+        phone = clean_test_user
+        await simulator.send_message(phone, "Hello")
+        result = await simulator.send_message(phone, "90210")
+        text = result["output"].replace("&amp;", "&").replace("I&apos;ll", "I'll")
+        assert text.strip() == ZIP_TIMEZONE_CONFIRM or ZIP_TIMEZONE_CONFIRM in text
+
+        from models.user import get_user, get_user_timezone
+        user = get_user(phone)
+        assert user[4] == "90210"
+        assert get_user_timezone(phone) == "America/Los_Angeles"
+        assert _reminder_count(phone) == 0
+
+    @pytest.mark.asyncio
+    async def test_zip_plus4_after_onboarded(self, simulator, clean_test_user):
+        phone = clean_test_user
+        await simulator.send_message(phone, "Hi")
+        result = await simulator.send_message(phone, "60601-1234")
+        text = result["output"].replace("&amp;", "&").replace("I&apos;ll", "I'll")
+        assert ZIP_TIMEZONE_CONFIRM in text
+        from models.user import get_user, get_user_timezone
+        assert get_user(phone)[4] == "60601"
+        assert get_user_timezone(phone) == "America/Chicago"
+
+    @pytest.mark.asyncio
+    async def test_already_has_zip_does_not_treat_digits_as_timezone(
+        self, simulator, onboarded_user
+    ):
+        phone = onboarded_user["phone"]
+        result = await simulator.send_message(phone, "90210")
+        text = result["output"].replace("&amp;", "&").replace("I&apos;ll", "I'll")
+        assert ZIP_TIMEZONE_CONFIRM not in text
+        from models.user import get_user, get_user_timezone
+        assert get_user(phone)[4] == "10001"
+        assert get_user_timezone(phone) == "America/New_York"
+
+    def test_handle_zip_timezone_reply_ignores_non_zip(self, onboarded_user):
+        phone = onboarded_user["phone"]
+        from models.user import create_or_update_user
+        create_or_update_user(phone, zip_code=None)
+        assert handle_zip_timezone_reply(phone, "call mom tomorrow") is None
+        assert handle_zip_timezone_reply(phone, "9021") is None
+
+
+class TestZipAskNotActivation:
+    """ZIP ping is not a user reminder: no row, no free-tier slot, no create-confirm."""
+
+    @pytest.mark.asyncio
+    async def test_hello_zip_ping_does_not_consume_free_tier_slot(
+        self, simulator, clean_test_user
+    ):
+        phone = clean_test_user
+        result = await simulator.send_message(phone, "Hello")
+        _assert_locked_welcome(result["output"])
+        assert "Got it — I'll text you at" not in result["output"].replace("&amp;", "&").replace("I&apos;ll", "I'll")
+
+        from models.user import create_or_update_user
+        from services.tier_service import can_create_reminder, get_reminders_created_today
+        create_or_update_user(
+            phone,
+            premium_status="free",
+            free_tier_version=1,
+            trial_end_date=datetime.utcnow() - timedelta(days=1),
+        )
+        assert get_reminders_created_today(phone) == 0
+        allowed, _msg = can_create_reminder(phone)
+        assert allowed is True
+
+    @pytest.mark.asyncio
+    async def test_zip_ask_send_is_not_a_reminder_row(
+        self, simulator, clean_test_user, sms_capture
+    ):
+        phone = clean_test_user
+        await simulator.send_message(phone, "Hello")
+        before = _reminder_count(phone)
+        result = send_zip_timezone_ask_now(phone)
+        assert result["status"] == "sent"
+        assert _reminder_count(phone) == before == 0
+        bodies = [m["message"] for m in sms_capture.get_messages_to(phone)]
+        assert ZIP_TIMEZONE_ASK_COPY in bodies
+
+    @pytest.mark.asyncio
+    async def test_send_skipped_if_zip_arrives_before_ping(
+        self, simulator, clean_test_user, sms_capture
+    ):
+        phone = clean_test_user
+        await simulator.send_message(phone, "Hello")
+        await simulator.send_message(phone, "10001")
+        result = send_zip_timezone_ask_now(phone)
+        assert result == {"status": "skipped", "reason": "already_has_zip"}
+        zip_bodies = [
+            m["message"] for m in sms_capture.get_messages_to(phone)
+            if m["message"] == ZIP_TIMEZONE_ASK_COPY
+        ]
+        assert zip_bodies == []
+
+
+class TestZipAskBetaCompSkip:
+    """Do not pile the ZIP ping onto Saturday 9am local for the beta-comp 32."""
+
+    def test_should_skip_saturday_morning_for_target(self):
+        from services.beta_comp_downgrade import should_skip_zip_ask_for_beta_comp
+        tz = __import__("pytz").timezone("America/New_York")
+        saturday_930 = tz.localize(datetime(2026, 8, 29, 9, 30, 0)).astimezone(
+            __import__("pytz").utc
+        ).replace(tzinfo=None)
+        row = {
+            "premium_status": "premium",
+            "stripe_subscription_id": None,
+            "subscription_status": None,
+            "trial_end_date": datetime(2026, 8, 29),
+            "timezone": "America/New_York",
+            "beta_comp_warning_sent_at": None,
+            "beta_comp_downgraded_at": None,
+        }
+        assert should_skip_zip_ask_for_beta_comp(row, saturday_930) == "beta_comp_saturday_morning"
+
+        thursday_930 = tz.localize(datetime(2026, 8, 27, 9, 30, 0)).astimezone(
+            __import__("pytz").utc
+        ).replace(tzinfo=None)
+        assert should_skip_zip_ask_for_beta_comp(row, thursday_930) is None
+
+        saturday_afternoon = tz.localize(datetime(2026, 8, 29, 15, 0, 0)).astimezone(
+            __import__("pytz").utc
+        ).replace(tzinfo=None)
+        assert should_skip_zip_ask_for_beta_comp(row, saturday_afternoon) is None
+
+    def test_should_skip_if_beta_comp_message_already_sent_that_morning(self):
+        from services.beta_comp_downgrade import should_skip_zip_ask_for_beta_comp
+        tz = __import__("pytz").timezone("America/New_York")
+        saturday_930 = tz.localize(datetime(2026, 8, 29, 9, 30, 0)).astimezone(
+            __import__("pytz").utc
+        ).replace(tzinfo=None)
+        row = {
+            "premium_status": "premium",
+            "stripe_subscription_id": None,
+            "subscription_status": None,
+            "trial_end_date": datetime(2026, 8, 29),
+            "timezone": "America/New_York",
+            "beta_comp_warning_sent_at": None,
+            "beta_comp_downgraded_at": saturday_930,
+        }
+        assert should_skip_zip_ask_for_beta_comp(row, saturday_930) == "beta_comp_warning"
+
+    def test_schedule_skipped_saturday_morning_for_beta_comp(
+        self, clean_test_user, sms_capture
+    ):
+        phone = clean_test_user
+        from unittest.mock import patch
+        from models.user import create_or_update_user
+        from services.onboarding_service import _schedule_post_onboarding_touchbacks
+        create_or_update_user(
+            phone,
+            timezone="America/New_York",
+            onboarding_complete=True,
+            premium_status="premium",
+            trial_end_date=datetime(2026, 8, 29, 16, 0, 0),
+        )
+        tz = __import__("pytz").timezone("America/New_York")
+        saturday_858 = tz.localize(datetime(2026, 8, 29, 8, 58, 0)).astimezone(
+            __import__("pytz").utc
+        ).replace(tzinfo=None)
+        assert should_schedule_zip_timezone_ask(phone, now_utc=saturday_858) is False
+
+        with patch(
+            "services.onboarding_service.should_schedule_zip_timezone_ask",
+            return_value=False,
+        ):
+            _schedule_post_onboarding_touchbacks(phone)
+        assert sms_capture.scheduled("send_zip_timezone_ask") == []
+        forget = sms_capture.scheduled("send_engagement_nudge")
+        assert len(forget) == 1
+        assert forget[0]["countdown"] == 300
+
+    def test_send_skipped_saturday_9am_beta_comp(self, clean_test_user, sms_capture):
+        phone = clean_test_user
+        from models.user import create_or_update_user
+        create_or_update_user(
+            phone,
+            timezone="America/New_York",
+            onboarding_complete=True,
+            premium_status="premium",
+            trial_end_date=datetime(2026, 8, 29, 16, 0, 0),
+        )
+        tz = __import__("pytz").timezone("America/New_York")
+        saturday_901 = tz.localize(datetime(2026, 8, 29, 9, 1, 0)).astimezone(
+            __import__("pytz").utc
+        ).replace(tzinfo=None)
+        result = send_zip_timezone_ask_now(phone, now_utc=saturday_901)
+        assert result == {"status": "skipped", "reason": "beta_comp"}
+        assert ZIP_TIMEZONE_ASK_COPY not in [m["message"] for m in sms_capture.messages]
+
+
+class TestZipAskLockedCopyAndNoAreaCode:
+    """Locked copy is exact. No area-code timezone guess. ET default until ZIP."""
+
+    def test_locked_copy_strings_exact(self):
+        assert ZIP_TIMEZONE_ASK_COPY == "What's your ZIP so I text you at the right time?"
+        assert ZIP_TIMEZONE_CONFIRM == "Got it — I'll use that timezone from now on."
+        assert ZIP_ASK_DELAY_SECONDS == 180
+
+    def test_no_area_code_timezone_path(self):
+        import inspect
+        import utils.timezone as tzmod
+        import services.onboarding_service as ob
+        for mod in (tzmod, ob):
+            source = inspect.getsource(mod).lower()
+            assert "area_code" not in source
+            assert "area-code" not in source
+            assert "area code" not in source
+
+    @pytest.mark.asyncio
+    async def test_hello_stays_eastern_until_zip(self, simulator, clean_test_user):
+        phone = clean_test_user
+        await simulator.send_message(phone, "Hello")
+        from models.user import get_user_timezone
+        assert get_user_timezone(phone) == "America/New_York"
+        assert handle_zip_timezone_reply(phone, "45202") == ZIP_TIMEZONE_CONFIRM
+        assert get_user_timezone(phone) == "America/New_York"  # 45202 is Cincinnati, Eastern
+

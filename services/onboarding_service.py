@@ -19,7 +19,7 @@ from models.reminder import get_pending_reminders
 from utils.timezone import get_timezone_from_zip
 from utils.formatting import get_onboarding_prompt
 from services.sms_service import send_sms
-from tasks.reminder_tasks import send_delayed_sms, send_engagement_nudge
+from tasks.reminder_tasks import send_delayed_sms, send_engagement_nudge, send_zip_timezone_ask
 from services.onboarding_recovery_service import (
     track_onboarding_progress,
     mark_onboarding_complete,
@@ -38,6 +38,12 @@ FIRST_REPLY_REMINDER_CONFIRM = (
 )
 
 DEFAULT_ONBOARDING_TIMEZONE = "America/New_York"
+
+# Locked v1 timezone ask (Retention / launch group, Aug 28 2026). Do not rewrite.
+# Delayed Celery SMS — not a reminders row — so Growth activation stays "user set a reminder".
+ZIP_TIMEZONE_ASK_COPY = "What's your ZIP so I text you at the right time?"
+ZIP_TIMEZONE_CONFIRM = "Got it — I'll use that timezone from now on."
+ZIP_ASK_DELAY_SECONDS = 180
 
 # First inbound that is Hello / START / empty / a CTA is NOT a reminder.
 _NOT_REMINDER_MESSAGES = {
@@ -224,8 +230,131 @@ def _auto_accept_pending_shares(phone_number):
     return accepted_lists
 
 
+def _user_zip_code(user) -> Optional[str]:
+    """Return a non-empty ZIP from a get_user() row, or None."""
+    if not user:
+        return None
+    zip_code = user[4]
+    if zip_code is None:
+        return None
+    zip_code = str(zip_code).strip()
+    return zip_code or None
+
+
+def should_schedule_zip_timezone_ask(phone_number, now_utc=None) -> bool:
+    """True when the +3 min ZIP ping should be scheduled (no ZIP, not beta-comp Saturday 9am)."""
+    user = get_user(phone_number)
+    if _user_zip_code(user):
+        return False
+    fire_at = (now_utc or datetime.utcnow()) + timedelta(seconds=ZIP_ASK_DELAY_SECONDS)
+    from services.beta_comp_downgrade import (
+        load_user_row_for_beta_comp_skip,
+        should_skip_zip_ask_for_beta_comp,
+    )
+    row = load_user_row_for_beta_comp_skip(phone_number)
+    if row and should_skip_zip_ask_for_beta_comp(row, fire_at):
+        return False
+    return True
+
+
+def send_zip_timezone_ask_now(phone_number, now_utc=None):
+    """Send the locked ZIP timezone ask, or skip. No reminders row."""
+    from models.user import is_user_opted_out
+    from services.sms_service import UserOptedOutError
+    from services.beta_comp_downgrade import (
+        load_user_row_for_beta_comp_skip,
+        should_skip_zip_ask_for_beta_comp,
+    )
+
+    user = get_user(phone_number)
+    if not user:
+        return {"status": "skipped", "reason": "no_user"}
+    if _user_zip_code(user):
+        logger.info(f"ZIP timezone ask skipped for ...{phone_number[-4:]}: already has ZIP")
+        return {"status": "skipped", "reason": "already_has_zip"}
+    if is_user_opted_out(phone_number):
+        return {"status": "skipped", "reason": "opted_out"}
+
+    fire_at = now_utc or datetime.utcnow()
+    row = load_user_row_for_beta_comp_skip(phone_number)
+    if row and should_skip_zip_ask_for_beta_comp(row, fire_at):
+        logger.info(f"ZIP timezone ask skipped for ...{phone_number[-4:]}: beta-comp Saturday window")
+        return {"status": "skipped", "reason": "beta_comp"}
+
+    try:
+        send_sms(phone_number, ZIP_TIMEZONE_ASK_COPY, message_type="zip_timezone_ask")
+        logger.info(f"Sent ZIP timezone ask to ...{phone_number[-4:]}")
+        return {"status": "sent"}
+    except UserOptedOutError:
+        return {"status": "skipped", "reason": "user_opted_out"}
+    except Exception as e:
+        logger.error(f"Error sending ZIP timezone ask to ...{phone_number[-4:]}: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+def handle_zip_timezone_reply(phone_number, message):
+    """If an onboarded user with no ZIP texts a bare ZIP, set tz and return locked confirm.
+
+    Returns the confirm string, or None if this inbound is not a ZIP to apply.
+    """
+    if _user_zip_code(get_user(phone_number)):
+        return None
+
+    zip_code, error_type = validate_zip_code(message or "")
+    if error_type or not zip_code:
+        return None
+
+    timezone = get_timezone_from_zip(zip_code)
+    create_or_update_user(phone_number, zip_code=zip_code, timezone=timezone)
+    try:
+        from models.reminder import (
+            recalculate_pending_reminders_for_timezone,
+            update_recurring_reminders_timezone,
+        )
+        recalculate_pending_reminders_for_timezone(phone_number, timezone)
+        update_recurring_reminders_timezone(phone_number, timezone)
+    except Exception as e:
+        logger.warning(f"Could not recalculate reminders after ZIP for ...{phone_number[-4:]}: {e}")
+
+    logger.info(f"ZIP timezone set for ...{phone_number[-4:]} zip={zip_code} tz={timezone}")
+    return ZIP_TIMEZONE_CONFIRM
+
+
+def _schedule_five_minute_nudge(phone_number):
+    """+5 min 'always forget' nudge. Skipped when the ZIP ping is going (one ask)."""
+    try:
+        nudge_scheduled_at = datetime.utcnow()
+        create_or_update_user(
+            phone_number,
+            five_minute_nudge_scheduled_at=nudge_scheduled_at,
+            five_minute_nudge_sent=False,
+            post_onboarding_interactions=0,
+        )
+        send_engagement_nudge.apply_async(
+            args=[phone_number],
+            countdown=300,  # 5 minutes
+        )
+        logger.info(f"Scheduled 5-minute engagement nudge for ...{phone_number[-4:]}")
+    except Exception as nudge_error:
+        logger.warning(f"Could not schedule engagement nudge for {phone_number}: {nudge_error}")
+
+
+def _schedule_zip_timezone_ask(phone_number):
+    """+3 min ZIP timezone ask. Lands with no preview on message 1."""
+    try:
+        send_zip_timezone_ask.apply_async(
+            args=[phone_number],
+            countdown=ZIP_ASK_DELAY_SECONDS,
+        )
+        logger.info(f"Scheduled +3 min ZIP timezone ask for ...{phone_number[-4:]}")
+        return True
+    except Exception as zip_error:
+        logger.warning(f"Could not schedule ZIP timezone ask for {phone_number}: {zip_error}")
+        return False
+
+
 def _schedule_post_onboarding_touchbacks(phone_number):
-    """1-hour delayed VCF (not on message 1) and 5-minute engagement nudge."""
+    """1-hour delayed VCF (not on message 1), then ZIP ping XOR 5-minute forget nudge."""
     vcf_url = f"{API_BASE_URL}/contact.vcf"
     vcf_message = """📱 Tap to save Remyndrs to your contacts!
 
@@ -244,21 +373,14 @@ Tip: Pin this conversation to keep me at the top of your texts — that way I'm 
         except Exception as sms_error:
             logger.warning(f"Could not send VCF card for {phone_number}: {sms_error}")
 
-    try:
-        nudge_scheduled_at = datetime.utcnow()
-        create_or_update_user(
-            phone_number,
-            five_minute_nudge_scheduled_at=nudge_scheduled_at,
-            five_minute_nudge_sent=False,
-            post_onboarding_interactions=0,
-        )
-        send_engagement_nudge.apply_async(
-            args=[phone_number],
-            countdown=300,  # 5 minutes
-        )
-        logger.info(f"Scheduled 5-minute engagement nudge for ...{phone_number[-4:]}")
-    except Exception as nudge_error:
-        logger.warning(f"Could not schedule engagement nudge for {phone_number}: {nudge_error}")
+    if should_schedule_zip_timezone_ask(phone_number):
+        if _schedule_zip_timezone_ask(phone_number):
+            return
+        # Celery failed to schedule the ZIP ping — do not pile the forget nudge on
+        # as a second ask in the same window. VCF at +1 hour still goes.
+        return
+
+    _schedule_five_minute_nudge(phone_number)
 
 
 def complete_fast_onboarding(phone_number, zip_code=None, timezone=None):

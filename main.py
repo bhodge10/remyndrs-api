@@ -53,7 +53,7 @@ from routes.handlers.lists import (
 )
 from services.sms_service import send_sms, log_inbound_sms
 from services.ai_service import process_with_ai, parse_list_items
-from services.onboarding_service import handle_onboarding, first_inbound_reminder_reply
+from services.onboarding_service import handle_onboarding, first_inbound_reminder_reply, handle_zip_timezone_reply
 from services.first_action_service import should_prompt_daily_summary, mark_daily_summary_prompted, get_daily_summary_prompt_message
 from services.trial_messaging_service import (
     is_pricing_question, is_comparison_question, is_acknowledgment,
@@ -1066,6 +1066,18 @@ async def sms_reply(request: Request, Body: str = Form(...), From: str = Form(..
         if nudge_cancelled:
             logger.info(f"User ...{phone_number[-4:]} texted back - cancelled engagement nudge")
         increment_post_onboarding_interactions(phone_number)
+
+        # ==========================================
+        # POST-ONBOARDING ZIP (timezone ask reply)
+        # ==========================================
+        # After reminder-first onboarding, a bare 5-digit ZIP must set timezone
+        # — not create a reminder named "90210". Skip if they already have a ZIP.
+        zip_reply = handle_zip_timezone_reply(phone_number, incoming_msg)
+        if zip_reply:
+            log_interaction(phone_number, incoming_msg, zip_reply, "zip_timezone", True)
+            resp = MessagingResponse()
+            resp.message(staging_prefix(zip_reply))
+            return Response(content=str(resp), media_type="application/xml")
 
         # ==========================================
         # PRICING & TRIAL QUESTIONS
