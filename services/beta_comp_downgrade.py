@@ -140,6 +140,50 @@ def should_skip_score_for_beta_comp(user_row: dict, now_utc: datetime) -> Option
     return None
 
 
+def should_skip_zip_ask_for_beta_comp(user_row: dict, fire_at_utc: datetime) -> Optional[str]:
+    """ZIP timezone ping loses Saturday 9–10am local for the 32, and any local morning a warning/confirm already went."""
+    if beta_comp_message_sent_this_local_morning(user_row, fire_at_utc):
+        return "beta_comp_warning"
+    local = local_now(fire_at_utc, user_row.get("timezone"))
+    if is_flip_weekday(local) and in_morning_window(local) and is_beta_comp_target_row(user_row):
+        return "beta_comp_saturday_morning"
+    return None
+
+
+def load_user_row_for_beta_comp_skip(phone_number: str) -> Optional[dict]:
+    """Fields needed by the beta-comp anti-bunching helpers."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT timezone, premium_status, stripe_subscription_id, subscription_status,
+                   trial_end_date, beta_comp_warning_sent_at, beta_comp_downgraded_at
+            FROM users WHERE phone_number = %s
+            """,
+            (phone_number,),
+        )
+        row = c.fetchone()
+        if not row:
+            return None
+        return {
+            "timezone": row[0],
+            "premium_status": row[1],
+            "stripe_subscription_id": row[2],
+            "subscription_status": row[3],
+            "trial_end_date": row[4],
+            "beta_comp_warning_sent_at": row[5],
+            "beta_comp_downgraded_at": row[6],
+        }
+    except Exception as e:
+        logger.error(f"Error loading beta-comp skip row: {e}")
+        return None
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+
 def list_beta_comp_targets() -> list[dict]:
     """All 32-set rows (no SMS-opt-out filter). Used by tests and both tasks."""
     conn = None

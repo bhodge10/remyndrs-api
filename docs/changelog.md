@@ -1,5 +1,17 @@
 # Changelog — Recent Improvements & Bug Fixes
 
+## +3 min ZIP timezone ask (Aug 2026)
+
+After reminder-first onboarding, a real delayed SMS fires 3 minutes later asking for ZIP so timezone is not guessed from the phone area code (ported mobiles lie). America/New_York stays until they reply. Copy locked by Retention.
+
+- **Ask:** `What's your ZIP so I text you at the right time?` — no preview on message 1.
+- **Confirm:** `Got it — I'll use that timezone from now on.`
+- **Not a reminders row.** Sent via Celery (`send_zip_timezone_ask`, same delayed-SMS pattern as the +5 min nudge / VCF) so Growth activation (any row in `reminders`) is not poisoned, free-tier slots are not consumed, and there is no create-confirm. VCF at +1 hour still goes. If the ZIP ping is scheduled, the +5 min "always forget" nudge is not (one ask).
+- **Skip** if the user already has a ZIP, or Saturday 9–10am local for the beta-comp 32 (`should_skip_zip_ask_for_beta_comp` / `beta_comp_message_sent_this_local_morning`).
+- Bare 5-digit ZIP after onboarded sets zip + timezone; does not create a reminder named `90210`.
+
+**Files:** `services/onboarding_service.py`, `tasks/reminder_tasks.py`, `main.py`, `services/beta_comp_downgrade.py`, `services/sms_service.py`, `tests/test_onboarding.py`.
+
 ## Beta-comp wall (Aug 2026)
 
 One-shot downgrade for the 32 premium comps with no Stripe (trial_end_date 2026-08-29 or 2026-06-18). The four September comps (2026-09-07, 2026-09-12), `subscription_status='manual'`, and anyone with a real Stripe subscription are left alone. **Does not re-enable `check_trial_expirations`** — that stays commented out on purpose (a fake Day 13 would lie to the September-dated comps). Copy locked by Retention.

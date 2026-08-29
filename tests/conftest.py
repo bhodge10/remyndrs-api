@@ -58,6 +58,7 @@ class SMSCapture:
     def __init__(self):
         self.messages = []
         self.call_count = 0
+        self.scheduled_tasks = []
 
     def send_sms(self, to_number, message, media_url=None, message_type="other"):
         """Capture SMS instead of sending via Twilio."""
@@ -81,6 +82,11 @@ class SMSCapture:
         """Clear captured messages."""
         self.messages = []
         self.call_count = 0
+        self.scheduled_tasks = []
+
+    def scheduled(self, task_name):
+        """Celery apply_async calls captured for a given task name."""
+        return [t for t in self.scheduled_tasks if t["task"] == task_name]
 
     def __len__(self):
         return len(self.messages)
@@ -285,6 +291,12 @@ def sms_capture():
 
     def mock_delayed_sms_apply_async(args=None, kwargs=None, countdown=None):
         """Mock for send_delayed_sms.apply_async - captures the SMS immediately"""
+        capture.scheduled_tasks.append({
+            "task": "send_delayed_sms",
+            "args": list(args or []),
+            "kwargs": kwargs or {},
+            "countdown": countdown,
+        })
         if args:
             to_number = args[0]
             message = args[1] if len(args) > 1 else ""
@@ -293,7 +305,23 @@ def sms_capture():
         return None
 
     def mock_engagement_nudge_apply_async(args=None, kwargs=None, countdown=None):
-        """Mock for send_engagement_nudge.apply_async - no-op in tests"""
+        """Mock for send_engagement_nudge.apply_async - record, do not fire."""
+        capture.scheduled_tasks.append({
+            "task": "send_engagement_nudge",
+            "args": list(args or []),
+            "kwargs": kwargs or {},
+            "countdown": countdown,
+        })
+        return None
+
+    def mock_zip_ask_apply_async(args=None, kwargs=None, countdown=None):
+        """Mock for send_zip_timezone_ask.apply_async - record, do not fire."""
+        capture.scheduled_tasks.append({
+            "task": "send_zip_timezone_ask",
+            "args": list(args or []),
+            "kwargs": kwargs or {},
+            "countdown": countdown,
+        })
         return None
 
     # Patch send_sms in ALL modules that import it to prevent real Twilio calls
@@ -307,6 +335,7 @@ def sms_capture():
          patch('services.sports_score_service.send_sms', side_effect=capture.send_sms), \
          patch('services.onboarding_service.send_delayed_sms.apply_async', side_effect=mock_delayed_sms_apply_async), \
          patch('services.onboarding_service.send_engagement_nudge.apply_async', side_effect=mock_engagement_nudge_apply_async), \
+         patch('services.onboarding_service.send_zip_timezone_ask.apply_async', side_effect=mock_zip_ask_apply_async), \
          patch('main.send_sms', side_effect=capture.send_sms), \
          patch('admin_dashboard.send_sms', side_effect=capture.send_sms):
         yield capture

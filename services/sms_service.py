@@ -87,6 +87,7 @@ PUSHED_MESSAGE_TYPES = (
     'daily_summary',
     'onboarding_followup',
     'broadcast',
+    'zip_timezone_ask',
 )
 
 
